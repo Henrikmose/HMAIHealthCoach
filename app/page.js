@@ -39,17 +39,14 @@ function isMealPlanningRequest(text) {
     /what\s+can\s+i\s+eat/i,
     /what\s+do\s+i\s+eat/i,
     /what\s+should\s+i\s+have/i,
-    /what\s+can\s+i\s+have/i,
     /plan\s+my\s+meals/i,
     /meal\s+plan/i,
     /create.*meal/i,
     /make.*meal/i,
     /suggest.*meal/i,
     /suggest.*eat/i,
-    /suggest.*food/i,
     /recommend.*eat/i,
     /recommend.*meal/i,
-    /recommend.*food/i,
     /what.*eat.*game/i,
     /what.*eat.*before/i,
     /what.*eat.*after/i,
@@ -59,10 +56,11 @@ function isMealPlanningRequest(text) {
     /what.*eat.*lunch/i,
     /what.*eat.*breakfast/i,
     /ideal\s+meal/i,
-    /good.*eat/i,
-    /help.*meal/i,
-    /want.*meal\s+plan/i,
     /give.*meal/i,
+    /yes\s+please/i,
+    /yes.*plan/i,
+    /sure.*plan/i,
+    /create.*plan/i,
   ].some((p) => p.test(text));
 }
 
@@ -73,11 +71,9 @@ function isWeightGoalRequest(text) {
     /want.*drop/i,
     /want.*shed/i,
     /trying.*lose/i,
-    /trying.*drop/i,
     /lose.*pounds/i,
     /lose.*lbs/i,
     /drop.*pounds/i,
-    /drop.*lbs/i,
     /lose.*weight/i,
     /gain.*weight/i,
     /bulk.*up/i,
@@ -96,14 +92,12 @@ function extractMealType(text) {
 }
 
 // ========================================
-// MEAL PARSER — robust multi-format
+// MEAL PARSER
 // ========================================
 function parseAllMeals(text) {
   if (!text) return [];
   const meals = [];
   const mealTypes = ["breakfast", "lunch", "dinner", "snack"];
-
-  // Split into lines and process
   const lines = text.split("\n").map((l) => l.trim());
 
   let i = 0;
@@ -111,13 +105,13 @@ function parseAllMeals(text) {
     const line = lines[i];
     const lineLower = line.toLowerCase().trim();
 
-    // Match meal type — the line must START with the meal type word
-    // and optionally have content after (like parentheses) but we only care about the type
     let matchedType = null;
     for (const type of mealTypes) {
-      // Match "Breakfast", "Breakfast (morning)", etc — type word at start of line
-      if (lineLower === type || lineLower.startsWith(type + " ") || lineLower.startsWith(type + "(")) {
-        // Make sure it's NOT a totals line
+      if (
+        lineLower === type ||
+        lineLower.startsWith(type + " ") ||
+        lineLower.startsWith(type + "(")
+      ) {
         if (!lineLower.includes("total") && !lineLower.includes("calories:") && !line.startsWith("-")) {
           matchedType = type;
           break;
@@ -133,11 +127,10 @@ function parseAllMeals(text) {
         const fl = lines[j];
         const fll = fl.toLowerCase().trim();
 
-        // Stop if we hit another meal type or total section
         const isNextMeal = mealTypes.some(t =>
           fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "(")
         );
-        const isTotal = fll.startsWith("total") || fll.includes("📊") || fll.startsWith("this plan");
+        const isTotal = fll.startsWith("total") || fll.includes("📊") || fll.startsWith("this plan") || fll.startsWith("---");
         if (isNextMeal || isTotal) break;
 
         if      (fll.startsWith("- foods:"))    foods    = fl.replace(/^-\s*foods:\s*/i, "").trim();
@@ -164,7 +157,7 @@ function parseAllMeals(text) {
     }
   }
 
-  // Format B: inline fallback
+  // Inline fallback
   if (meals.length === 0) {
     const re = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
     let m;
@@ -189,7 +182,7 @@ async function saveMealViaAPI(table, meal, userId) {
     const data = await res.json();
     if (!data.success) { console.error(`Save failed (${table}):`, data.error); return false; }
     return true;
-  } catch (e) { console.error(`Save exception (${table}):`, e); return false; }
+  } catch (e) { console.error(`Save exception:`, e); return false; }
 }
 
 // ========================================
@@ -219,12 +212,37 @@ export default function HomePage() {
   const [isLoading, setIsLoading]         = useState(false);
   const [activeMealLog, setActiveMealLog] = useState(null);
   const [todayMeals, setTodayMeals]       = useState([]);
-  const [savedPlanIds, setSavedPlanIds]   = useState([]);
+  const [savedPlanIds, setSavedPlanIds]   = useState(() => {
+    // Load from localStorage on init to persist across navigation
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("savedPlanIds");
+      return stored ? JSON.parse(stored) : [];
+    }
+    return [];
+  });
   const [userId, setUserId]               = useState(null);
   const [userName, setUserName]           = useState("");
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
   const messagesEndRef = useRef(null);
   const textareaRef    = useRef(null);
+
+  // Persist savedPlanIds to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("savedPlanIds", JSON.stringify(savedPlanIds));
+    }
+  }, [savedPlanIds]);
+
+  // Clear saved plan IDs at midnight (new day = fresh state)
+  useEffect(() => {
+    const stored = localStorage.getItem("savedPlanIdsDate");
+    const today = getLocalDate();
+    if (stored !== today) {
+      localStorage.setItem("savedPlanIdsDate", today);
+      localStorage.removeItem("savedPlanIds");
+      setSavedPlanIds([]);
+    }
+  }, []);
 
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
@@ -245,7 +263,6 @@ export default function HomePage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history]);
 
-  // Auto-resize textarea
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -352,9 +369,11 @@ export default function HomePage() {
   }
 
   async function handleAddToPlan(meal, msgIdx, targetDate) {
+    const key = `${msgIdx}-${meal.mealType}`;
+    if (savedPlanIds.includes(key)) return; // prevent duplicates
     const uid = userId || localStorage.getItem("user_id");
     const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-    if (saved) setSavedPlanIds((prev) => [...prev, `${msgIdx}-${meal.mealType}`]);
+    if (saved) setSavedPlanIds((prev) => [...prev, key]);
     else alert("Could not save to plan. Please try again.");
   }
 
@@ -484,7 +503,7 @@ export default function HomePage() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ── Input — bigger, auto-resizing ── */}
+      {/* ── Input ── */}
       <div className="px-4 py-3 border-t border-gray-100 bg-white">
         <div className="flex gap-2 items-end">
           <textarea
