@@ -25,7 +25,15 @@ function formatDateLabel(dateStr) {
 
 function sumMeals(meals) {
   return (meals || []).reduce(
-    (t, m) => ({ calories: t.calories + Number(m.calories||0), protein: t.protein + Number(m.protein||0), carbs: t.carbs + Number(m.carbs||0), fat: t.fat + Number(m.fat||0) }),
+    (t, m) => {
+      const s = Number(m.servings || 1);
+      return {
+        calories: t.calories + Number(m.calories||0) * s,
+        protein:  t.protein  + Number(m.protein||0)  * s,
+        carbs:    t.carbs    + Number(m.carbs||0)    * s,
+        fat:      t.fat      + Number(m.fat||0)      * s,
+      };
+    },
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
 }
@@ -38,7 +46,68 @@ function groupByType(meals) {
 }
 
 const MEAL_EMOJI = { breakfast:"🌅", lunch:"☀️", dinner:"🌙", snack:"🍎" };
+const SERVING_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
+// ========================================
+// CONFIRM DIALOG
+// ========================================
+function ConfirmDialog({ message, onConfirm, onCancel }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.4)" }}>
+      <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-xs">
+        <p className="text-sm font-semibold text-gray-800 mb-1">Delete meal?</p>
+        <p className="text-xs text-gray-500 mb-4">{message}</p>
+        <div className="flex gap-2">
+          <button onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">
+            Cancel
+          </button>
+          <button onClick={onConfirm}
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-500 text-white hover:bg-red-600 transition-colors">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// COPY MEAL DIALOG
+// ========================================
+function CopyMealDialog({ meal, currentDate, onCopy, onCancel }) {
+  const today = getLocalDate();
+  const options = [
+    { label: "Today", date: today },
+    { label: "Tomorrow", date: getShiftedDate(today, 1) },
+    { label: "Day after tomorrow", date: getShiftedDate(today, 2) },
+  ].filter(o => o.date !== currentDate); // don't show current date
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.4)" }}>
+      <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-xs">
+        <p className="text-sm font-semibold text-gray-800 mb-1">Copy meal to...</p>
+        <p className="text-xs text-gray-500 mb-3 truncate">{meal.food}</p>
+        <div className="space-y-2 mb-4">
+          {options.map((opt) => (
+            <button key={opt.date} onClick={() => onCopy(opt.date)}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition-colors text-left px-4">
+              📅 {opt.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={onCancel}
+          className="w-full py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ========================================
+// MACRO BAR
+// ========================================
 function MacroBar({ label, value, goal, color }) {
   const pct = goal > 0 ? Math.min(100, Math.round((value/goal)*100)) : 0;
   return (
@@ -54,39 +123,100 @@ function MacroBar({ label, value, goal, color }) {
   );
 }
 
-function MealCard({ meal, onDelete, onMarkEaten, isActual }) {
-  const [busy, setBusy] = useState(false);
-  async function act(fn) { setBusy(true); await fn(); setBusy(false); }
+// ========================================
+// MEAL CARD
+// ========================================
+function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isActual }) {
+  const [servings, setServings]   = useState(Number(meal.servings) || 1);
+  const [busy, setBusy]           = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [showCopy, setShowCopy]   = useState(false);
+
+  const effectiveCal     = Math.round(meal.calories * servings);
+  const effectiveProtein = Math.round(meal.protein  * servings);
+  const effectiveCarbs   = Math.round(meal.carbs    * servings);
+  const effectiveFat     = Math.round(meal.fat      * servings);
+
+  async function handleServingChange(newServings) {
+    setServings(newServings);
+    await onUpdateServings(meal.id, newServings);
+  }
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
-      <div className="flex justify-between items-start gap-2">
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-800 leading-snug">{meal.food}</p>
-          <div className="flex gap-3 mt-1.5 flex-wrap">
-            <span className="text-xs font-medium text-gray-500">🔥 {meal.calories} cal</span>
-            <span className="text-xs font-medium text-blue-500">P {meal.protein}g</span>
-            <span className="text-xs font-medium text-emerald-500">C {meal.carbs}g</span>
-            <span className="text-xs font-medium text-amber-500">F {meal.fat}g</span>
+    <>
+      {showDelete && (
+        <ConfirmDialog
+          message={`"${meal.food}" will be removed from your log.`}
+          onConfirm={async () => { setShowDelete(false); setBusy(true); await onDelete(meal.id); setBusy(false); }}
+          onCancel={() => setShowDelete(false)}
+        />
+      )}
+      {showCopy && (
+        <CopyMealDialog
+          meal={meal}
+          currentDate={meal.date}
+          onCopy={async (targetDate) => { setShowCopy(false); await onCopy(meal, targetDate); }}
+          onCancel={() => setShowCopy(false)}
+        />
+      )}
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
+        {/* Food name and action buttons */}
+        <div className="flex justify-between items-start gap-2 mb-2">
+          <p className="text-sm font-semibold text-gray-800 leading-snug flex-1">{meal.food}</p>
+          <div className="flex gap-1.5 flex-shrink-0">
+            {!isActual && (
+              <button onClick={async () => { setBusy(true); await onMarkEaten(meal); setBusy(false); }} disabled={busy}
+                className="text-xs px-2.5 py-1.5 rounded-xl bg-emerald-500 text-white font-semibold hover:bg-emerald-600 transition-colors disabled:opacity-40 shadow-sm">
+                {busy ? "..." : "✓ Ate"}
+              </button>
+            )}
+            <button onClick={() => setShowCopy(true)} disabled={busy}
+              className="text-xs px-2.5 py-1.5 rounded-xl bg-blue-50 text-blue-500 border border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-40">
+              📋
+            </button>
+            <button onClick={() => setShowDelete(true)} disabled={busy}
+              className="text-xs px-2.5 py-1.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-red-400 transition-colors disabled:opacity-40">
+              ✕
+            </button>
           </div>
         </div>
-        <div className="flex gap-1.5 flex-shrink-0">
-          {!isActual && (
-            <button onClick={() => act(() => onMarkEaten(meal))} disabled={busy}
-              className="text-xs px-3 py-1.5 rounded-xl bg-emerald-500 text-white font-semibold hover:bg-emerald-600 transition-colors disabled:opacity-40 shadow-sm">
-              {busy ? "..." : "✓ Ate"}
-            </button>
+
+        {/* Serving size control */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500">Servings:</span>
+          <div className="flex gap-1 flex-wrap">
+            {SERVING_OPTIONS.map((s) => (
+              <button key={s} onClick={() => handleServingChange(s)}
+                className={`text-xs px-2 py-0.5 rounded-lg border transition-colors ${
+                  servings === s
+                    ? "bg-blue-500 text-white border-blue-500 font-bold"
+                    : "bg-gray-50 text-gray-500 border-gray-200 hover:border-blue-300"
+                }`}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Macros */}
+        <div className="flex gap-3 flex-wrap">
+          <span className="text-xs font-medium text-gray-500">🔥 {effectiveCal} cal</span>
+          <span className="text-xs font-medium text-blue-500">P {effectiveProtein}g</span>
+          <span className="text-xs font-medium text-emerald-500">C {effectiveCarbs}g</span>
+          <span className="text-xs font-medium text-amber-500">F {effectiveFat}g</span>
+          {servings !== 1 && (
+            <span className="text-xs text-gray-400">({servings}x serving)</span>
           )}
-          <button onClick={() => act(() => onDelete(meal.id))} disabled={busy}
-            className="text-xs px-2.5 py-1.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-red-400 transition-colors disabled:opacity-40">
-            {busy ? "..." : "✕"}
-          </button>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
+// ========================================
+// MAIN COMPONENT
+// ========================================
 export default function DashboardPage() {
   const [selectedDate, setSelectedDate] = useState(getLocalDate());
   const [loading, setLoading]           = useState(true);
@@ -95,21 +225,16 @@ export default function DashboardPage() {
   const [goal, setGoal]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
   const [planned, setPlanned]           = useState([]);
   const [actual, setActual]             = useState([]);
+  const [copySuccess, setCopySuccess]   = useState(null);
 
-  // ── On mount: get userId from localStorage ──
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
     if (uname) setUserName(uname);
-    if (uid) {
-      setUserId(uid);
-    }
+    if (uid) setUserId(uid);
   }, []);
 
-  // ── Load data when userId or date changes ──
-  useEffect(() => {
-    if (userId) load(userId, selectedDate);
-  }, [userId, selectedDate]);
+  useEffect(() => { if (userId) load(userId, selectedDate); }, [userId, selectedDate]);
 
   async function load(uid, date) {
     setLoading(true);
@@ -122,7 +247,6 @@ export default function DashboardPage() {
       if (g.data) setGoal(g.data);
       setPlanned(p.data || []);
       setActual(a.data  || []);
-      console.log(`✅ Dashboard loaded: ${p.data?.length||0} planned, ${a.data?.length||0} actual meals`);
     } catch (e) { console.error("Dashboard load error:", e); }
     finally { setLoading(false); }
   }
@@ -137,20 +261,50 @@ export default function DashboardPage() {
     setActual((prev) => prev.filter((m) => m.id !== id));
   }
 
+  async function updateServings(table, id, newServings, isActual) {
+    await supabase.from(table).update({ servings: newServings }).eq("id", id);
+    if (isActual) {
+      setActual((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
+    } else {
+      setPlanned((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
+    }
+  }
+
+  async function copyMeal(meal, targetDate, sourceTable) {
+    const uid = userId || localStorage.getItem("user_id");
+    const targetTable = sourceTable === "planned_meals" ? "planned_meals" : "actual_meals";
+    try {
+      await supabase.from(targetTable).insert([{
+        user_id:   uid,
+        date:      targetDate,
+        meal_type: meal.meal_type,
+        food:      meal.food,
+        calories:  meal.calories,
+        protein:   meal.protein,
+        carbs:     meal.carbs,
+        fat:       meal.fat,
+        servings:  meal.servings || 1,
+        ...(targetTable === "planned_meals" ? { status: "planned", suggested_time: null } : {}),
+      }]);
+      setCopySuccess(`Copied to ${formatDateLabel(targetDate)}!`);
+      setTimeout(() => setCopySuccess(null), 2500);
+    } catch (e) { console.error("Copy meal error:", e); }
+  }
+
   async function markEaten(meal) {
     const uid = userId || localStorage.getItem("user_id");
     try {
-      const { error } = await supabase.from("actual_meals").insert([{
+      await supabase.from("actual_meals").insert([{
         user_id: uid, date: selectedDate, meal_type: meal.meal_type,
         food: meal.food, calories: meal.calories, protein: meal.protein,
         carbs: meal.carbs, fat: meal.fat, servings: meal.servings || 1,
       }]);
-      if (error) { console.error("Mark eaten error:", error); return; }
       await supabase.from("planned_meals").delete().eq("id", meal.id);
       await load(uid, selectedDate);
-    } catch (e) { console.error("Mark eaten exception:", e); }
+    } catch (e) { console.error("Mark eaten error:", e); }
   }
 
+  // Compute totals using servings
   const actualTotals  = sumMeals(actual);
   const plannedTotals = sumMeals(planned);
   const remaining     = {
@@ -164,6 +318,13 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen pb-8 bg-gray-50">
       <HamburgerMenu />
+
+      {/* ── Copy success toast ── */}
+      {copySuccess && (
+        <div className="fixed top-16 left-1/2 transform -translate-x-1/2 z-50 bg-emerald-500 text-white text-sm font-semibold px-4 py-2 rounded-2xl shadow-lg">
+          ✅ {copySuccess}
+        </div>
+      )}
 
       {/* ── Header ── */}
       <div className="px-4 pt-14 pb-4 bg-white border-b border-gray-100">
@@ -246,7 +407,15 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deletePlanned} onMarkEaten={markEaten} isActual={false} />)}
+                  {meals.map((m) => (
+                    <MealCard key={m.id} meal={m}
+                      onDelete={deletePlanned}
+                      onMarkEaten={markEaten}
+                      onUpdateServings={(id, s) => updateServings("planned_meals", id, s, false)}
+                      onCopy={(meal, date) => copyMeal(meal, date, "planned_meals")}
+                      isActual={false}
+                    />
+                  ))}
                 </div>
               ))}
             </div>
@@ -268,7 +437,15 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deleteActual} onMarkEaten={() => {}} isActual={true} />)}
+                  {meals.map((m) => (
+                    <MealCard key={m.id} meal={m}
+                      onDelete={deleteActual}
+                      onMarkEaten={() => {}}
+                      onUpdateServings={(id, s) => updateServings("actual_meals", id, s, true)}
+                      onCopy={(meal, date) => copyMeal(meal, date, "actual_meals")}
+                      isActual={true}
+                    />
+                  ))}
                 </div>
               ))}
             </div>

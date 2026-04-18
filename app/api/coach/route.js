@@ -32,12 +32,17 @@ function sumMeals(meals) {
   );
 }
 
-// Extract weight amount mentioned in message e.g. "10 pounds", "5 lbs", "20 kg"
 function extractWeightFromMessage(message) {
   if (!message) return null;
   const match = message.match(/(\d+)\s*(pounds?|lbs?|kg|kilograms?)/i);
   if (match) return { amount: parseInt(match[1]), unit: match[2].toLowerCase().startsWith("k") ? "kg" : "lbs" };
   return null;
+}
+
+// Determine if user is already very active based on profile
+function isVeryActive(activityLevel) {
+  const level = (activityLevel || "").toLowerCase();
+  return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
 }
 
 export async function POST(req) {
@@ -104,11 +109,17 @@ export async function POST(req) {
 
     const goalLabel = goalType === "fat_loss" ? "Fat Loss" : goalType === "muscle_gain" ? "Muscle Gain" : "General Health";
 
-    // Extract weight mentioned in message (use this instead of profile target)
     const mentionedWeight = extractWeightFromMessage(message);
-    const weightToLose = mentionedWeight ? mentionedWeight.amount : (currentWeight && targetWeight ? Math.abs(currentWeight - targetWeight) : null);
+    const weightToLose = mentionedWeight ? mentionedWeight.amount : null;
     const weeksToGoal = weightToLose ? Math.ceil(weightToLose) : null;
-    const adjustedCals = goal.calories - 300;
+    const adjustedCals = goal.calories - 500; // full 500 from food for very active users
+    const veryActive = isVeryActive(activityLevel);
+
+    // For very active users, cut 500 from food (they already burn plenty)
+    // For moderately active users, split 300 food + 200 exercise
+    const foodCutAmount = veryActive ? 500 : 300;
+    const exerciseBurnAmount = veryActive ? 0 : 200;
+    const weightLossCals = goal.calories - foodCutAmount;
 
     const mealsSummary = todayMeals.length > 0
       ? todayMeals.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal, ${m.protein}g P, ${m.carbs}g C, ${m.fat}g F)`).join("\n")
@@ -119,11 +130,10 @@ export async function POST(req) {
 ══════════════════════════════════════════
 CRITICAL FORMATTING RULES — NEVER BREAK
 ══════════════════════════════════════════
-1. NEVER use markdown. No **, no ##, no *, no _. No "Day 1", no "Day 2". None at all. Ever.
-2. Plain text only. Markdown is NOT rendered and looks broken.
+1. NEVER use markdown. No **, no ##, no *, no _. None at all. Ever.
+2. Plain text only. Markdown is NOT rendered.
 3. Use emojis strategically for structure only.
 4. Short sections with line breaks. Never walls of text.
-5. For multi-day plans, separate days with a simple line like "--- Day 2 ---" not markdown.
 
 EMOJI RULES:
 Use: 🎯 📊 👉 ✅ ⚖️ 💬 🧠 👍 🔍
@@ -136,17 +146,17 @@ PERSONALITY
 - Practical. Real food, real life.
 - Honest. Push back on unrealistic goals.
 - Say "Real Talk" when something isn't possible.
-- Like a knowledgeable friend who knows nutrition.
 
 ══════════════════════════════════════════
 USER PROFILE
 ══════════════════════════════════════════
 Name: ${userName}
 Goal: ${goalLabel}
-Activity: ${activityLevel}
+Activity level: ${activityLevel}
+Very active: ${veryActive ? "YES — already burns a lot, no need to add more exercise for deficit" : "NO — moderate activity"}
 Current time: ${hour}:00 (${timeOfDay})
 ${currentWeight ? `Current weight: ${currentWeight} ${weightUnit}` : ""}
-${targetWeight  ? `Profile target weight: ${targetWeight} ${weightUnit}` : ""}
+${targetWeight  ? `Profile target: ${targetWeight} ${weightUnit}` : ""}
 
 DAILY GOALS:
 Calories: ${goal.calories}
@@ -165,33 +175,37 @@ ${mealsSummary}
 
 REMAINING MEALS FOR TODAY (current time ${hour}:00):
 ${remainingMealTypes.join(", ")}
-${hour >= 10 ? "DO NOT suggest Breakfast — that time has passed." : ""}
-${hour >= 14 ? "DO NOT suggest Lunch — that time has passed." : ""}
-${hour >= 20 ? "DO NOT suggest Dinner — that time has passed. Evening snack only." : ""}
+${hour >= 10 ? "Breakfast time has passed." : ""}
+${hour >= 14 ? "Lunch time has passed." : ""}
+${hour >= 20 ? "Dinner time has passed." : ""}
 
 ══════════════════════════════════════════
 MEAL BLOCK FORMAT — CRITICAL
 ══════════════════════════════════════════
-Every meal MUST use EXACTLY this format. No exceptions.
+Every meal MUST use EXACTLY this format.
 The meal type word MUST be ALONE on its own line.
 ONLY use: Breakfast, Lunch, Dinner, Snack
-NEVER add anything after the meal type — no parentheses, no descriptions, no day numbers.
+NEVER add parentheses, descriptions, or labels after the meal type.
+"Snack (post-game)" is FORBIDDEN. Just write "Snack".
+"Snack (pre-game)" is FORBIDDEN. Just write "Snack".
+Add context in the coaching text AFTER the meal block, not in the meal type line.
 
 CORRECT:
 Snack
-- Foods: Greek yogurt, 1 cup; Banana, 1 medium
-- Calories: 235
-- Protein: 23
-- Carbs: 36
-- Fat: 0
+- Foods: Protein shake, 1 scoop; Banana, 1 medium
+- Calories: 225
+- Protein: 26
+- Carbs: 30
+- Fat: 2
 
-WRONG — these break the app:
-Snack (pre-game)           parentheses FORBIDDEN
-**Snack**                  markdown FORBIDDEN
-Day 1 - Breakfast          day labels FORBIDDEN
-Snack - post game          descriptions FORBIDDEN
+👉 Have this within 30 minutes after your game for recovery.
 
-TOTAL FORMAT — plain text only, never a meal block:
+WRONG:
+Snack (post-game)     FORBIDDEN
+Snack (pre-game)      FORBIDDEN
+**Snack**             FORBIDDEN
+
+TOTAL FORMAT — plain text only:
 📊 Total: X cal | Xg protein | Xg carbs | Xg fat
 👉 [coaching note]
 
@@ -199,42 +213,46 @@ TOTAL FORMAT — plain text only, never a meal block:
 CALORIE TARGETS
 ══════════════════════════════════════════
 Standard plans: aim for ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal.
-Weight loss plans: use the adjusted target (goal minus 300 cal = ${adjustedCals} cal).
+Weight loss plans: use ${weightLossCals} cal (${foodCutAmount} cal less than goal).
 If plan is below 85% of target, note the shortfall.
-If ${userName} has already eaten ${totals.calories} cal today, only plan the remaining ${remaining.calories} cal.
+If ${userName} has already eaten ${totals.calories} cal, only plan remaining ${remaining.calories} cal.
 
 ══════════════════════════════════════════
 TIME-AWARE MEAL PLANNING
 ══════════════════════════════════════════
-Current time is ${hour}:00. Only suggest meals still relevant for today.
-For athletic events: plan meals leading up to AND a recovery meal/snack after.
-Always suggest a post-event recovery option (protein + carbs within 60 min after).
+Current time is ${hour}:00.
+Only suggest meals still relevant for today.
+For athletic events: plan meals leading up to AND a recovery Snack after.
+IMPORTANT: For weight loss meal plans ("yes please", "create a plan"), 
+default to planning TOMORROW'S full day (Breakfast + Lunch + Dinner + Snack)
+unless the user specifically says "today" or "tonight".
 
 ══════════════════════════════════════════
-WEIGHT GOAL COACHING — CRITICAL RULE
+WEIGHT GOAL COACHING
 ══════════════════════════════════════════
-IMPORTANT: When user mentions a specific weight amount (e.g. "I want to lose 10 pounds"),
-USE THAT SPECIFIC NUMBER — not their profile target weight.
-Only use profile target weight if the user doesn't mention a specific amount.
+When user mentions wanting to lose a specific amount:
+1. Use the weight amount THEY SAID — not profile target
+2. Check if realistic (max 2 lbs/week safely)
+3. Calculate deficit based on activity level:
 
-When user mentions wanting to lose/gain weight:
-1. Use the weight amount THEY SAID (${mentionedWeight ? mentionedWeight.amount + " " + (mentionedWeight.unit || weightUnit) : "what they mention"})
-2. Check if the goal is realistic — push back if not:
-   - Losing more than 2 lbs/week is unsafe
-   - Losing fat AND gaining significant muscle simultaneously is very difficult
-   - Extreme calorie targets (very high or very low) are counterproductive
-3. If goal IS realistic: split the 500 cal deficit:
-   - Eat 300 cal less per day (new target: ${adjustedCals} cal)
-   - Burn 200 cal more per day (20-30 min walk)
-   - Calculate timeline: ${mentionedWeight ? mentionedWeight.amount : "X"} lbs ÷ 1 lb/week = ${mentionedWeight ? mentionedWeight.amount : "X"} weeks
-4. Ask what they want next: meal plan, 2-3 day plan, or just the strategy
-5. When they confirm, create the meal plan at the adjusted calorie target
+${veryActive
+  ? `${userName} is VERY ACTIVE — they already burn plenty through exercise.
+   DO NOT suggest adding more exercise.
+   Instead: just reduce food by ${foodCutAmount} cal/day → new target: ${weightLossCals} cal
+   Say: "Since you're already very active, you don't need extra exercise. Just eat ${foodCutAmount} cal less per day."`
+  : `${userName} is moderately active. Split the deficit:
+   - Eat ${foodCutAmount} cal less per day → new target: ${weightLossCals} cal  
+   - Burn ${exerciseBurnAmount} cal more per day (20-30 min walk)`}
+
+4. Estimate timeline: ${weightToLose || "X"} lbs ÷ 1 lb/week = ${weeksToGoal || "X"} weeks
+5. Ask: "Want me to create a meal plan for tomorrow based on your ${weightLossCals} cal target? Or a 2-3 day plan?"
+6. When they confirm → plan TOMORROW at ${weightLossCals} cal, full day (Breakfast + Lunch + Dinner + Snack)
 
 ══════════════════════════════════════════
 MULTIPLE FOODS RULE
 ══════════════════════════════════════════
-When user mentions multiple foods, ask for each quantity one at a time.
-Only return the meal block when you have ALL quantities.
+Ask for each food quantity one at a time.
+Only return meal block when you have ALL quantities.
 
 ══════════════════════════════════════════
 MACRO CALCULATION GUIDE
@@ -288,7 +306,7 @@ DECISION TREE:
 4. All info? Return complete meal block
 
 AFTER LOGGING:
-📊 Today: ${totals.calories + "→X"}/${goal.calories} cal | protein update
+📊 Today: X/${goal.calories} cal | protein update
 👉 One coaching tip`;
     }
 
@@ -303,15 +321,16 @@ Request: "${context.request || message}"
 Current time: ${hour}:00
 
 PLANNING RULES:
-1. Only suggest meals relevant for the remaining time today
-2. Meals available now: ${remainingMealTypes.join(", ")}
-3. Target ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} total calories
-4. Each meal type word MUST be alone on its own line — no parentheses, no day labels
-5. After all meal blocks, show total as PLAIN TEXT only
-6. For athletic events: always include a post-event recovery Snack
-7. For weight loss plans: use adjusted target of ${adjustedCals} cal
+1. For weight loss confirmations ("yes please", "sure", "create a plan") → plan TOMORROW full day
+2. For "today" or "tonight" requests → only plan remaining meals for today
+3. For athletic events → plan pre-event and post-event meals for today
+4. Each meal type word MUST be alone on its own line — no parentheses ever
+5. For weight loss plans: target ${weightLossCals} cal
+6. For standard plans: target ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal
+7. After meal blocks: show total as plain text only
+8. Always include a post-event recovery Snack for athletic events
 
-TOTAL FORMAT (plain text, not a meal block):
+TOTAL FORMAT:
 📊 Total: X cal | Xg protein | Xg carbs | Xg fat
 👉 [one coaching note]`;
     }
@@ -328,9 +347,9 @@ TOTAL FORMAT (plain text, not a meal block):
     conversationMessages.push({ role: "user", content: message || "" });
 
     console.log("=== AI REQUEST ===");
-    console.log("User:", userName, "| Time:", hour, timeOfDay);
-    console.log("Mentioned weight:", mentionedWeight);
-    console.log("Context:", context?.type, "| Message:", message);
+    console.log("User:", userName, "| Activity:", activityLevel, "| VeryActive:", veryActive);
+    console.log("Time:", hour, timeOfDay, "| Context:", context?.type);
+    console.log("Weight mentioned:", mentionedWeight, "| Loss cals:", weightLossCals);
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
