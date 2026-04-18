@@ -1,1 +1,1 @@
-{"name":"v41-starter","version":"1.0.0","scripts":{"dev":"next dev"},"dependencies":{"@supabase/supabase-js":"^2.99.3","next":"^16.2.0","openai":"^6.32.0","react":"^19.2.4","react-dom":"^19.2.4","uuid":"^13.0.0"}}
+{"name":"v41-starter","version":"1.0.0","scripts":{"dev":"next dev"},"dependencies":{"@supabase/supabase-js":"^2.99.3","autoprefixer":"^10.5.0","next":"^16.2.0","openai":"^6.32.0","postcss":"^8.5.10","react":"^19.2.4","react-dom":"^19.2.4","tailwindcss":"^4.2.2","uuid":"^13.0.0"}}
