@@ -1,582 +1,445 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { getLocalDate } from "../../lib/mealPlanParser";
+import HamburgerMenu from "../components/HamburgerMenu";
 
-const DEFAULT_GOAL = { calories: 0, protein: 0, carbs: 0, fat: 0 };
+// ========================================
+// UTILITIES
+// ========================================
+
+function getLocalDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getShiftedDate(dateStr, days) {
+  const date = new Date(dateStr + "T12:00:00");
+  date.setDate(date.getDate() + days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatDate(dateStr) {
+  const today = getLocalDate();
+  const tomorrow = getShiftedDate(today, 1);
+  const yesterday = getShiftedDate(today, -1);
+  if (dateStr === today) return "Today";
+  if (dateStr === tomorrow) return "Tomorrow";
+  if (dateStr === yesterday) return "Yesterday";
+  return new Date(dateStr + "T12:00:00").toLocaleDateString("en-US", {
+    weekday: "short", month: "short", day: "numeric",
+  });
+}
 
 function sumMeals(meals) {
-  return meals.reduce(
-    (totals, meal) => {
-      const servings = Number(meal.servings || 1);
-      totals.calories += Number(meal.calories || 0) * servings;
-      totals.protein += Number(meal.protein || 0) * servings;
-      totals.carbs += Number(meal.carbs || 0) * servings;
-      totals.fat += Number(meal.fat || 0) * servings;
-      return totals;
+  return (meals || []).reduce(
+    (t, meal) => {
+      const s = Number(meal.servings || 1);
+      t.calories += Number(meal.calories || 0) * s;
+      t.protein += Number(meal.protein || 0) * s;
+      t.carbs += Number(meal.carbs || 0) * s;
+      t.fat += Number(meal.fat || 0) * s;
+      return t;
     },
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
 }
 
-function formatMealType(value) {
-  if (!value) return "";
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function groupMealsByType(meals) {
-  const order = ["breakfast", "lunch", "dinner", "snack", "dessert"];
+function groupByMealType(meals) {
+  const order = ["breakfast", "lunch", "dinner", "snack"];
   const grouped = {};
-
   for (const meal of meals) {
-    const key = meal.meal_type || "other";
+    const key = meal.meal_type || "snack";
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(meal);
   }
-
   return Object.entries(grouped).sort((a, b) => {
-    const aIndex = order.indexOf(a[0]);
-    const bIndex = order.indexOf(b[0]);
-    return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
+    return (order.indexOf(a[0]) ?? 99) - (order.indexOf(b[0]) ?? 99);
   });
 }
 
-function TotalsCard({ title, totals }) {
+function capitalize(str) {
+  if (!str) return "";
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// ========================================
+// SUB-COMPONENTS
+// ========================================
+
+function MacroRing({ label, value, goal, color }) {
+  const pct = goal > 0 ? Math.min(100, Math.round((value / goal) * 100)) : 0;
+  const remaining = Math.max(0, goal - value);
   return (
-    <div
-      style={{
-        border: "1px solid #ddd",
-        borderRadius: "14px",
-        padding: "16px",
-        backgroundColor: "#ffffff",
-      }}
-    >
-      <div style={{ fontWeight: "700", fontSize: "18px", marginBottom: "10px" }}>
-        {title}
+    <div className="flex flex-col items-center gap-1">
+      <div className="relative w-14 h-14">
+        <svg className="w-14 h-14 -rotate-90" viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3" />
+          <circle
+            cx="18" cy="18" r="15.9" fill="none"
+            stroke={color} strokeWidth="3"
+            strokeDasharray={`${pct} 100`}
+            strokeLinecap="round"
+          />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-white text-xs font-bold">{pct}%</span>
+        </div>
       </div>
-      <div>Calories: {Math.round(totals.calories)}</div>
-      <div>Protein: {Math.round(totals.protein)}g</div>
-      <div>Carbs: {Math.round(totals.carbs)}g</div>
-      <div>Fat: {Math.round(totals.fat)}g</div>
+      <span className="text-blue-200 text-xs font-medium">{label}</span>
+      <span className="text-white text-xs font-bold">{Math.round(value)}g</span>
+      <span className="text-blue-300 text-xs">{Math.round(remaining)}g left</span>
     </div>
   );
 }
 
-function PlannedMealCard({ meal, onAteThis, onRemove, moving, removing }) {
-  const isAdded = meal.status === "added" || meal.status === "eaten";
+function MealCard({ meal, onDelete, onMarkEaten, isActual }) {
+  const [deleting, setDeleting] = useState(false);
+  const [marking, setMarking] = useState(false);
 
-  return (
-    <div
-      style={{
-        border: "1px solid #ddd",
-        borderRadius: "12px",
-        padding: "12px",
-        backgroundColor: isAdded ? "#ecfdf5" : "#eff6ff",
-        marginBottom: "10px",
-        opacity: isAdded ? 0.8 : 1,
-      }}
-    >
-      <div style={{ marginBottom: "6px" }}>{meal.food}</div>
-
-      <div style={{ fontSize: "14px", color: "#374151", marginBottom: "10px" }}>
-        Calories: {meal.calories} | Protein: {meal.protein}g | Carbs: {meal.carbs}g | Fat: {meal.fat}g | Servings: {meal.servings}
-      </div>
-
-      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-        <button
-          onClick={() => onAteThis(meal)}
-          disabled={moving || isAdded}
-          style={{
-            border: "none",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: moving || isAdded ? "#9ca3af" : "#111827",
-            color: "#fff",
-            cursor: moving || isAdded ? "default" : "pointer",
-            opacity: moving || isAdded ? 0.7 : 1,
-          }}
-        >
-          {isAdded ? "Added to actual" : moving ? "Saving..." : "I ate this"}
-        </button>
-
-        <button
-          onClick={() => onRemove(meal.id)}
-          disabled={removing}
-          style={{
-            border: "none",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: removing ? "#9ca3af" : "#b91c1c",
-            color: "#fff",
-            cursor: removing ? "default" : "pointer",
-            opacity: removing ? 0.7 : 1,
-          }}
-        >
-          {removing ? "Removing..." : "Remove"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ActualMealCard({
-  meal,
-  onRemove,
-  removing,
-  servingDraft,
-  setServingDraft,
-  onSaveServings,
-  updatingServings,
-}) {
-  return (
-    <div
-      style={{
-        border: "1px solid #ddd",
-        borderRadius: "12px",
-        padding: "12px",
-        backgroundColor: "#f9fafb",
-        marginBottom: "10px",
-      }}
-    >
-      <div style={{ marginBottom: "6px" }}>{meal.food}</div>
-
-      <div style={{ fontSize: "14px", color: "#374151", marginBottom: "8px" }}>
-        Base meal: {meal.calories} cal | {meal.protein}g protein | {meal.carbs}g carbs | {meal.fat}g fat
-      </div>
-
-      <div style={{ fontSize: "14px", color: "#111827", marginBottom: "10px", fontWeight: "600" }}>
-        Current servings: {meal.servings}
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-        <input
-          type="number"
-          step="any"
-          min="0"
-          value={servingDraft}
-          onChange={(e) => setServingDraft(e.target.value)}
-          style={{
-            width: "140px",
-            padding: "8px",
-            borderRadius: "8px",
-            border: "1px solid #ccc",
-          }}
-        />
-
-        <button
-          onClick={() => onSaveServings(meal)}
-          disabled={updatingServings}
-          style={{
-            border: "none",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: updatingServings ? "#9ca3af" : "#111827",
-            color: "#fff",
-            opacity: updatingServings ? 0.7 : 1,
-          }}
-        >
-          {updatingServings ? "Saving..." : "Save servings"}
-        </button>
-
-        <button
-          onClick={() => onRemove(meal.id)}
-          disabled={removing}
-          style={{
-            border: "none",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: removing ? "#9ca3af" : "#b91c1c",
-            color: "#fff",
-            opacity: removing ? 0.7 : 1,
-          }}
-        >
-          {removing ? "Removing..." : "Remove"}
-        </button>
-      </div>
-
-      <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px" }}>
-        Servings eaten (1 = planned portion)
-      </div>
-    </div>
-  );
-}
-
-function getShiftedDate(dateString, days) {
-  const [year, month, day] = dateString.split("-").map(Number);
-  const d = new Date(year, month - 1, day);
-  d.setDate(d.getDate() + days);
-
-  const nextYear = d.getFullYear();
-  const nextMonth = String(d.getMonth() + 1).padStart(2, "0");
-  const nextDay = String(d.getDate()).padStart(2, "0");
-
-  return `${nextYear}-${nextMonth}-${nextDay}`;
-}
-
-export default function DashboardPage() {
-  const [plannedMeals, setPlannedMeals] = useState([]);
-  const [actualMeals, setActualMeals] = useState([]);
-  const [goal, setGoal] = useState(DEFAULT_GOAL);
-  const [loading, setLoading] = useState(true);
-  const [movingMealId, setMovingMealId] = useState(null);
-  const [removingMealId, setRemovingMealId] = useState(null);
-  const [removingPlannedMealId, setRemovingPlannedMealId] = useState(null);
-  const [updatingMealId, setUpdatingMealId] = useState(null);
-  const [servingDrafts, setServingDrafts] = useState({});
-  const [selectedDate, setSelectedDate] = useState(getLocalDate());
-
-  async function loadDashboard() {
-    setLoading(true);
-
-    // Get the signed-in user from localStorage (set by sign-in page)
-    const storedUserId = localStorage.getItem("userId") || "de52999b-7269-43bd-b205-c42dc381df5d";
-
-    // Fetch goals from database
-    const { data: goalsData, error: goalsError } = await supabase
-      .from("goals")
-      .select("*")
-      .eq("user_id", storedUserId)
-      .single();
-
-    if (goalsError) {
-      console.log("GOALS LOAD ERROR:", goalsError);
-    } else if (goalsData) {
-      setGoal({
-        calories: goalsData.calories,
-        protein: goalsData.protein,
-        carbs: goalsData.carbs,
-        fat: goalsData.fat,
-      });
-    }
-
-    // Fetch planned meals
-    const { data: plannedData, error: plannedError } = await supabase
-      .from("planned_meals")
-      .select("*")
-      .eq("user_id", storedUserId)
-      .eq("date", selectedDate)
-      .order("created_at", { ascending: true });
-
-    // Fetch actual meals
-    const { data: actualData, error: actualError } = await supabase
-      .from("actual_meals")
-      .select("*")
-      .eq("user_id", storedUserId)
-      .eq("date", selectedDate)
-      .order("created_at", { ascending: true });
-
-    if (plannedError) console.log("PLANNED LOAD ERROR:", plannedError);
-    if (actualError) console.log("ACTUAL LOAD ERROR:", actualError);
-
-    setPlannedMeals(plannedData || []);
-    setActualMeals(actualData || []);
-
-    const drafts = {};
-    for (const meal of actualData || []) {
-      drafts[meal.id] = String(meal.servings || 1);
-    }
-    setServingDrafts(drafts);
-
-    setLoading(false);
+  async function handleDelete() {
+    setDeleting(true);
+    await onDelete(meal.id);
+    setDeleting(false);
   }
 
-  useEffect(() => {
-    loadDashboard();
-  }, [selectedDate]);
-
-  const visiblePlannedMeals = useMemo(() => plannedMeals, [plannedMeals]);
-  const plannedTotals = useMemo(() => sumMeals(visiblePlannedMeals), [visiblePlannedMeals]);
-  const actualTotals = useMemo(() => sumMeals(actualMeals), [actualMeals]);
-
-  const remainingTotals = useMemo(
-    () => ({
-      calories: goal.calories - actualTotals.calories,
-      protein: goal.protein - actualTotals.protein,
-      carbs: goal.carbs - actualTotals.carbs,
-      fat: goal.fat - actualTotals.fat,
-    }),
-    [actualTotals, goal]
-  );
-
-  const groupedPlannedMeals = useMemo(
-    () => groupMealsByType(visiblePlannedMeals),
-    [visiblePlannedMeals]
-  );
-
-  const groupedActualMeals = useMemo(() => groupMealsByType(actualMeals), [actualMeals]);
-
-  const handleAteThis = async (meal) => {
-    try {
-      setMovingMealId(meal.id);
-
-      const res = await fetch("/api/coach", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "eat_meal", mealId: meal.id }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        console.log("EAT MEAL ERROR:", data);
-        alert(data.error || "Could not add meal to actual.");
-        return;
-      }
-
-      await loadDashboard();
-    } catch (error) {
-      console.error("ATE THIS ERROR:", error);
-      alert("Could not save actual meal.");
-    } finally {
-      setMovingMealId(null);
-    }
-  };
-
-  const handleRemoveActual = async (id) => {
-    try {
-      setRemovingMealId(id);
-
-      const { error } = await supabase.from("actual_meals").delete().eq("id", id);
-
-      if (error) {
-        console.log("ACTUAL DELETE ERROR:", error);
-        alert("Could not remove meal. Check console.");
-        return;
-      }
-
-      await loadDashboard();
-    } catch (error) {
-      console.error("REMOVE ERROR:", error);
-      alert("Could not remove meal.");
-    } finally {
-      setRemovingMealId(null);
-    }
-  };
-
-  const handleRemovePlanned = async (id) => {
-    try {
-      setRemovingPlannedMealId(id);
-
-      const { error } = await supabase.from("planned_meals").delete().eq("id", id);
-
-      if (error) {
-        console.log("PLANNED DELETE ERROR:", error);
-        alert("Could not remove planned meal. Check console.");
-        return;
-      }
-
-      await loadDashboard();
-    } catch (error) {
-      console.error("REMOVE PLANNED ERROR:", error);
-      alert("Could not remove planned meal.");
-    } finally {
-      setRemovingPlannedMealId(null);
-    }
-  };
-
-  const handleSaveServings = async (meal) => {
-    try {
-      setUpdatingMealId(meal.id);
-
-      const rawValue = servingDrafts[meal.id];
-      const parsed = parseFloat(rawValue);
-
-      if (!parsed || parsed <= 0) {
-        alert("Servings must be greater than 0");
-        return;
-      }
-
-      const { error } = await supabase
-        .from("actual_meals")
-        .update({ servings: parsed })
-        .eq("id", meal.id);
-
-      if (error) {
-        console.log("ACTUAL UPDATE ERROR:", error);
-        alert("Could not save servings. Check console.");
-        return;
-      }
-
-      await loadDashboard();
-    } catch (error) {
-      console.error("SAVE SERVINGS ERROR:", error);
-      alert("Could not save servings.");
-    } finally {
-      setUpdatingMealId(null);
-    }
-  };
-
-  const goPreviousDay = () => setSelectedDate((prev) => getShiftedDate(prev, -1));
-  const goNextDay = () => setSelectedDate((prev) => getShiftedDate(prev, 1));
-  const goToday = () => setSelectedDate(getLocalDate());
+  async function handleMarkEaten() {
+    setMarking(true);
+    await onMarkEaten(meal);
+    setMarking(false);
+  }
 
   return (
-    <main
-      style={{
-        maxWidth: "1100px",
-        margin: "0 auto",
-        padding: "20px",
-        fontFamily: "Arial, sans-serif",
-      }}
-    >
-      <h1 style={{ fontSize: "32px", marginBottom: "6px" }}>Dashboard</h1>
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
+      <div className="flex justify-between items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-800 leading-snug truncate">{meal.food}</p>
+          <div className="flex gap-2 mt-1 flex-wrap">
+            <span className="text-xs text-gray-500">🔥 {meal.calories} cal</span>
+            <span className="text-xs text-blue-500">P {meal.protein}g</span>
+            <span className="text-xs text-emerald-500">C {meal.carbs}g</span>
+            <span className="text-xs text-amber-500">F {meal.fat}g</span>
+          </div>
+        </div>
+        <div className="flex gap-1 flex-shrink-0">
+          {!isActual && (
+            <button
+              onClick={handleMarkEaten}
+              disabled={marking}
+              className="text-xs px-2 py-1 rounded-lg bg-emerald-50 text-emerald-600 font-medium hover:bg-emerald-100 transition-colors disabled:opacity-40"
+            >
+              {marking ? "..." : "✓ Ate"}
+            </button>
+          )}
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="text-xs px-2 py-1 rounded-lg bg-red-50 text-red-400 hover:bg-red-100 transition-colors disabled:opacity-40"
+          >
+            {deleting ? "..." : "✕"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
+function MealSection({ title, emoji, meals, onDelete, onMarkEaten, isActual }) {
+  if (meals.length === 0) return null;
+  const sectionTotals = sumMeals(meals);
+  return (
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-semibold text-gray-700">{emoji} {title}</span>
+        <span className="text-xs text-gray-400">{Math.round(sectionTotals.calories)} cal</span>
+      </div>
+      {meals.map((meal) => (
+        <MealCard
+          key={meal.id}
+          meal={meal}
+          onDelete={onDelete}
+          onMarkEaten={onMarkEaten}
+          isActual={isActual}
+        />
+      ))}
+    </div>
+  );
+}
+
+const MEAL_EMOJIS = {
+  breakfast: "🌅",
+  lunch: "☀️",
+  dinner: "🌙",
+  snack: "🍎",
+};
+
+// ========================================
+// MAIN COMPONENT
+// ========================================
+
+export default function DashboardPage() {
+  const [selectedDate, setSelectedDate] = useState(getLocalDate());
+  const [loading, setLoading] = useState(true);
+  const [userId, setUserId] = useState(null);
+  const [userName, setUserName] = useState("");
+  const [goal, setGoal] = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
+  const [plannedMeals, setPlannedMeals] = useState([]);
+  const [actualMeals, setActualMeals] = useState([]);
+
+  useEffect(() => {
+    const storedId = localStorage.getItem("user_id");
+    const storedName = localStorage.getItem("user_name");
+    if (storedId) setUserId(storedId);
+    if (storedName) setUserName(storedName);
+    loadDashboard(storedId, selectedDate);
+  }, []);
+
+  useEffect(() => {
+    if (userId) loadDashboard(userId, selectedDate);
+  }, [selectedDate, userId]);
+
+  async function loadDashboard(uid, date) {
+    const activeId = uid || userId;
+    if (!activeId) return;
+    setLoading(true);
+    try {
+      const [goalsRes, plannedRes, actualRes] = await Promise.all([
+        supabase.from("goals").select("*").eq("user_id", activeId).single(),
+        supabase.from("planned_meals").select("*").eq("user_id", activeId).eq("date", date),
+        supabase.from("actual_meals").select("*").eq("user_id", activeId).eq("date", date),
+      ]);
+      if (goalsRes.data) setGoal(goalsRes.data);
+      setPlannedMeals(plannedRes.data || []);
+      setActualMeals(actualRes.data || []);
+    } catch (e) {
+      console.error("Dashboard load error:", e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDeletePlanned(id) {
+    await supabase.from("planned_meals").delete().eq("id", id);
+    setPlannedMeals((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  async function handleDeleteActual(id) {
+    await supabase.from("actual_meals").delete().eq("id", id);
+    setActualMeals((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  async function handleMarkEaten(meal) {
+    const activeId = userId || localStorage.getItem("user_id");
+    try {
+      await supabase.from("actual_meals").insert([{
+        user_id: activeId,
+        date: selectedDate,
+        meal_type: meal.meal_type,
+        food: meal.food,
+        calories: meal.calories,
+        protein: meal.protein,
+        carbs: meal.carbs,
+        fat: meal.fat,
+        servings: meal.servings || 1,
+      }]);
+      await supabase.from("planned_meals").delete().eq("id", meal.id);
+      await loadDashboard(activeId, selectedDate);
+    } catch (e) {
+      console.error("Mark eaten error:", e);
+    }
+  }
+
+  const plannedTotals = sumMeals(plannedMeals);
+  const actualTotals = sumMeals(actualMeals);
+  const remaining = {
+    calories: Math.max(0, goal.calories - actualTotals.calories),
+    protein: Math.max(0, goal.protein - actualTotals.protein),
+    carbs: Math.max(0, goal.carbs - actualTotals.carbs),
+    fat: Math.max(0, goal.fat - actualTotals.fat),
+  };
+
+  const calPct = goal.calories > 0
+    ? Math.min(100, Math.round((actualTotals.calories / goal.calories) * 100))
+    : 0;
+
+  const groupedPlanned = groupByMealType(plannedMeals);
+  const groupedActual = groupByMealType(actualMeals);
+
+  return (
+    <div className="min-h-screen" style={{ background: "#f8f9fb" }}>
+      <HamburgerMenu />
+
+      {/* ── Header ── */}
       <div
+        className="px-4 pt-14 pb-5"
         style={{
-          display: "flex",
-          gap: "10px",
-          alignItems: "center",
-          flexWrap: "wrap",
-          marginBottom: "20px",
+          background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%)",
         }}
       >
-        <button
-          onClick={goPreviousDay}
-          style={{
-            border: "none",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: "#111827",
-            color: "#fff",
-          }}
-        >
-          ← Yesterday
-        </button>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h1 className="text-white font-bold text-lg">Dashboard</h1>
+            {userName && (
+              <p className="text-blue-300 text-xs mt-0.5">{userName}'s nutrition log</p>
+            )}
+          </div>
+          {/* Calorie ring */}
+          <div className="flex flex-col items-center">
+            <div className="relative w-14 h-14">
+              <svg className="w-14 h-14 -rotate-90" viewBox="0 0 36 36">
+                <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="3" />
+                <circle
+                  cx="18" cy="18" r="15.9" fill="none"
+                  stroke="#60a5fa" strokeWidth="3"
+                  strokeDasharray={`${calPct} 100`}
+                  strokeLinecap="round"
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className="text-white text-xs font-bold">{calPct}%</span>
+              </div>
+            </div>
+            <span className="text-blue-300 text-xs mt-1">
+              {Math.round(actualTotals.calories)}/{goal.calories} cal
+            </span>
+          </div>
+        </div>
 
-        <button
-          onClick={goToday}
-          style={{
-            border: "1px solid #ccc",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: "#fff",
-          }}
-        >
-          Today
-        </button>
-
-        <button
-          onClick={goNextDay}
-          style={{
-            border: "none",
-            borderRadius: "10px",
-            padding: "8px 12px",
-            backgroundColor: "#111827",
-            color: "#fff",
-          }}
-        >
-          Tomorrow →
-        </button>
-
-        <div style={{ color: "#6b7280", fontWeight: "600" }}>
-          Viewing: {selectedDate}
+        {/* Macro rings */}
+        <div className="flex justify-around">
+          <MacroRing label="Protein" value={actualTotals.protein} goal={goal.protein} color="#60a5fa" />
+          <MacroRing label="Carbs" value={actualTotals.carbs} goal={goal.carbs} color="#34d399" />
+          <MacroRing label="Fat" value={actualTotals.fat} goal={goal.fat} color="#fbbf24" />
         </div>
       </div>
 
-      {loading ? (
-        <div>Loading dashboard...</div>
-      ) : (
-        <>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: "14px",
-              marginBottom: "24px",
-            }}
-          >
-            <TotalsCard title="Goal" totals={goal} />
-            <TotalsCard title="Planned totals" totals={plannedTotals} />
-            <TotalsCard title="Actual totals" totals={actualTotals} />
-            <TotalsCard title="Remaining to goal" totals={remainingTotals} />
-          </div>
+      {/* ── Date nav ── */}
+      <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 sticky top-0 z-10">
+        <button
+          onClick={() => setSelectedDate((d) => getShiftedDate(d, -1))}
+          className="text-sm font-medium text-gray-600 px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 transition-colors"
+        >
+          ← Prev
+        </button>
+        <div className="flex flex-col items-center">
+          <span className="text-sm font-bold text-gray-800">{formatDate(selectedDate)}</span>
+          {selectedDate !== getLocalDate() && (
+            <button
+              onClick={() => setSelectedDate(getLocalDate())}
+              className="text-xs text-blue-500 mt-0.5"
+            >
+              Back to today
+            </button>
+          )}
+        </div>
+        <button
+          onClick={() => setSelectedDate((d) => getShiftedDate(d, 1))}
+          className="text-sm font-medium text-gray-600 px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 transition-colors"
+        >
+          Next →
+        </button>
+      </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-              gap: "20px",
-            }}
-          >
-            <section>
-              <h2 style={{ fontSize: "22px", marginBottom: "12px" }}>Planned meals</h2>
-
-              {groupedPlannedMeals.length === 0 ? (
+      {/* ── Content ── */}
+      <div className="px-4 py-4">
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="flex gap-1">
+              {[0, 150, 300].map((d) => (
                 <div
-                  style={{
-                    border: "1px solid #ddd",
-                    borderRadius: "12px",
-                    padding: "14px",
-                    backgroundColor: "#fff",
-                  }}
-                >
-                  No planned meals for this date.
+                  key={d}
+                  className="w-2 h-2 rounded-full animate-bounce"
+                  style={{ background: "#60a5fa", animationDelay: `${d}ms` }}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 gap-3 mb-5">
+              {[
+                { label: "🎯 Goal", cal: goal.calories, color: "border-blue-200 bg-blue-50" },
+                { label: "📋 Planned", cal: Math.round(plannedTotals.calories), color: "border-purple-200 bg-purple-50" },
+                { label: "✅ Eaten", cal: Math.round(actualTotals.calories), color: "border-emerald-200 bg-emerald-50" },
+                { label: "⏳ Remaining", cal: Math.round(remaining.calories), color: "border-amber-200 bg-amber-50" },
+              ].map(({ label, cal, color }) => (
+                <div key={label} className={`rounded-2xl border p-3 ${color}`}>
+                  <p className="text-xs text-gray-500 mb-1">{label}</p>
+                  <p className="text-lg font-bold text-gray-800">{cal}</p>
+                  <p className="text-xs text-gray-400">calories</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Planned meals */}
+            <div className="mb-5">
+              <h2 className="text-base font-bold text-gray-800 mb-3">
+                📋 Planned Meals
+                {plannedMeals.length > 0 && (
+                  <span className="ml-2 text-xs font-normal text-gray-400">
+                    {plannedMeals.length} meal{plannedMeals.length !== 1 ? "s" : ""}
+                  </span>
+                )}
+              </h2>
+              {groupedPlanned.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-gray-100 p-5 text-center text-sm text-gray-400">
+                  No planned meals for {formatDate(selectedDate).toLowerCase()}.
+                  <br />Ask your coach to plan your meals!
                 </div>
               ) : (
-                groupedPlannedMeals.map(([mealType, meals]) => (
-                  <div key={mealType} style={{ marginBottom: "18px" }}>
-                    <h3 style={{ fontSize: "18px", marginBottom: "10px" }}>
-                      {formatMealType(mealType)}
-                    </h3>
-
-                    {meals.map((meal) => (
-                      <PlannedMealCard
-                        key={meal.id}
-                        meal={meal}
-                        onAteThis={handleAteThis}
-                        onRemove={handleRemovePlanned}
-                        moving={movingMealId === meal.id}
-                        removing={removingPlannedMealId === meal.id}
-                      />
-                    ))}
-                  </div>
+                groupedPlanned.map(([type, meals]) => (
+                  <MealSection
+                    key={type}
+                    title={capitalize(type)}
+                    emoji={MEAL_EMOJIS[type] || "🍽️"}
+                    meals={meals}
+                    onDelete={handleDeletePlanned}
+                    onMarkEaten={handleMarkEaten}
+                    isActual={false}
+                  />
                 ))
               )}
-            </section>
+            </div>
 
-            <section>
-              <h2 style={{ fontSize: "22px", marginBottom: "12px" }}>Actual meals</h2>
-
-              {groupedActualMeals.length === 0 ? (
-                <div
-                  style={{
-                    border: "1px solid #ddd",
-                    borderRadius: "12px",
-                    padding: "14px",
-                    backgroundColor: "#fff",
-                  }}
-                >
-                  No actual meals logged for this date.
+            {/* Actual meals */}
+            <div>
+              <h2 className="text-base font-bold text-gray-800 mb-3">
+                ✅ Eaten Today
+                {actualMeals.length > 0 && (
+                  <span className="ml-2 text-xs font-normal text-gray-400">
+                    {actualMeals.length} meal{actualMeals.length !== 1 ? "s" : ""}
+                  </span>
+                )}
+              </h2>
+              {groupedActual.length === 0 ? (
+                <div className="bg-white rounded-2xl border border-gray-100 p-5 text-center text-sm text-gray-400">
+                  Nothing logged yet.
+                  <br />Tell your coach what you ate!
                 </div>
               ) : (
-                groupedActualMeals.map(([mealType, meals]) => (
-                  <div key={mealType} style={{ marginBottom: "18px" }}>
-                    <h3 style={{ fontSize: "18px", marginBottom: "10px" }}>
-                      {formatMealType(mealType)}
-                    </h3>
-
-                    {meals.map((meal) => (
-                      <ActualMealCard
-                        key={meal.id}
-                        meal={meal}
-                        onRemove={handleRemoveActual}
-                        removing={removingMealId === meal.id}
-                        servingDraft={servingDrafts[meal.id] ?? String(meal.servings || 1)}
-                        setServingDraft={(value) =>
-                          setServingDrafts((prev) => ({ ...prev, [meal.id]: value }))
-                        }
-                        onSaveServings={handleSaveServings}
-                        updatingServings={updatingMealId === meal.id}
-                      />
-                    ))}
-                  </div>
+                groupedActual.map(([type, meals]) => (
+                  <MealSection
+                    key={type}
+                    title={capitalize(type)}
+                    emoji={MEAL_EMOJIS[type] || "🍽️"}
+                    meals={meals}
+                    onDelete={handleDeleteActual}
+                    onMarkEaten={() => {}}
+                    isActual={true}
+                  />
                 ))
               )}
-            </section>
-          </div>
-        </>
-      )}
-    </main>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
