@@ -41,17 +41,30 @@ function isMealPlanningRequest(text) {
   return [
     /what\s+should\s+i\s+eat/i,
     /what\s+can\s+i\s+eat/i,
+    /what\s+do\s+i\s+eat/i,
+    /what\s+should\s+i\s+have/i,
+    /what\s+can\s+i\s+have/i,
     /plan\s+my\s+meals/i,
     /meal\s+plan/i,
-    /suggest\s+(a\s+)?(meal|food|breakfast|lunch|dinner|snack)/i,
-    /give\s+me\s+(a\s+)?(meal|breakfast|lunch|dinner|plan)/i,
-    /what\s+should\s+i\s+have/i,
-    /create\s+(a\s+)?meal\s+plan/i,
-    /make\s+(a\s+)?meal\s+plan/i,
+    /create.*meal/i,
+    /make.*meal/i,
+    /suggest.*meal/i,
+    /suggest.*eat/i,
+    /suggest.*food/i,
+    /recommend.*eat/i,
+    /recommend.*meal/i,
+    /recommend.*food/i,
+    /what.*eat.*game/i,
+    /what.*eat.*before/i,
+    /what.*eat.*after/i,
+    /what.*eat.*today/i,
+    /what.*eat.*tonight/i,
+    /what.*eat.*dinner/i,
+    /what.*eat.*lunch/i,
+    /what.*eat.*breakfast/i,
     /ideal\s+meal/i,
-    /meal.*today/i,
-    /plan.*tonight/i,
-    /plan.*game/i,
+    /good.*eat/i,
+    /help.*meal/i,
   ].some((p) => p.test(text));
 }
 
@@ -66,7 +79,7 @@ function extractMealType(text) {
 }
 
 // ========================================
-// MEAL PARSER — handles multiple AI formats
+// MEAL PARSER
 // ========================================
 
 function parseAllMeals(text) {
@@ -74,7 +87,7 @@ function parseAllMeals(text) {
   const meals = [];
   const mealTypes = ["breakfast", "lunch", "dinner", "snack"];
 
-  // ── Format A: proper multi-line blocks ──
+  // Format A: proper multi-line blocks
   const lines = text.split("\n").map((l) => l.trim());
   let i = 0;
   while (i < lines.length) {
@@ -102,42 +115,21 @@ function parseAllMeals(text) {
 
   if (meals.length > 0) return meals;
 
-  // ── Format B: inline "Lunch - Foods: X - Calories: N - Protein: N - Carbs: N - Fat: N" ──
-  // More flexible regex that handles spaces around dashes
-  const inlinePattern = new RegExp(
-    `(breakfast|lunch|dinner|snack)\\s*[\\-–]\\s*foods?:\\s*(.*?)\\s*[\\-–]\\s*calories?:\\s*(\\d+)\\s*[\\-–]\\s*protein?:\\s*(\\d+)\\s*[\\-–]\\s*carbs?:\\s*(\\d+)\\s*[\\-–]\\s*fat?:\\s*(\\d+)`,
-    "gi"
-  );
+  // Format B: inline fallback
+  const inlineRe = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
   let m;
-  while ((m = inlinePattern.exec(text)) !== null) {
-    meals.push({
-      mealType: m[1].toLowerCase(),
-      food:     m[2].trim(),
-      calories: Math.round(parseFloat(m[3])),
-      protein:  Math.round(parseFloat(m[4])),
-      carbs:    Math.round(parseFloat(m[5])),
-      fat:      Math.round(parseFloat(m[6])),
-    });
+  while ((m = inlineRe.exec(text)) !== null) {
+    meals.push({ mealType: m[1].toLowerCase(), food: m[2].trim(), calories: Math.round(parseFloat(m[3])), protein: Math.round(parseFloat(m[4])), carbs: Math.round(parseFloat(m[5])), fat: Math.round(parseFloat(m[6])) });
   }
 
   if (meals.length > 0) return meals;
 
-  // ── Format C: find any meal type then extract numbers nearby ──
+  // Format C: loose fallback
   for (const type of mealTypes) {
-    const pattern = new RegExp(
-      `${type}[\\s\\S]{0,50}?foods?:\\s*([^\\n]+?)[\\s\\S]{0,20}?calories?:\\s*(\\d+)[\\s\\S]{0,20}?protein?:\\s*(\\d+)[\\s\\S]{0,20}?carbs?:\\s*(\\d+)[\\s\\S]{0,20}?fat?:\\s*(\\d+)`,
-      "i"
-    );
-    const match = text.match(pattern);
+    const re = new RegExp(`${type}[\\s\\S]{0,50}?foods?:\\s*([^\\n-]+)[\\s\\S]{0,100}?calories?:\\s*(\\d+)[\\s\\S]{0,50}?protein?:\\s*(\\d+)[\\s\\S]{0,50}?carbs?:\\s*(\\d+)[\\s\\S]{0,50}?fat?:\\s*(\\d+)`, "i");
+    const match = text.match(re);
     if (match) {
-      meals.push({
-        mealType: type,
-        food:     match[1].replace(/[-–].*/, "").trim(), // stop at dash
-        calories: Math.round(parseFloat(match[2])),
-        protein:  Math.round(parseFloat(match[3])),
-        carbs:    Math.round(parseFloat(match[4])),
-        fat:      Math.round(parseFloat(match[5])),
-      });
+      meals.push({ mealType: type, food: match[1].replace(/[-–].*/, "").trim(), calories: Math.round(parseFloat(match[2])), protein: Math.round(parseFloat(match[3])), carbs: Math.round(parseFloat(match[4])), fat: Math.round(parseFloat(match[5])) });
       break;
     }
   }
@@ -146,7 +138,7 @@ function parseAllMeals(text) {
 }
 
 // ========================================
-// SAVE VIA SERVER-SIDE ROUTE (bypasses RLS)
+// SAVE VIA SERVER-SIDE ROUTE
 // ========================================
 
 async function saveMealViaAPI(table, meal, userId) {
@@ -157,16 +149,10 @@ async function saveMealViaAPI(table, meal, userId) {
       body: JSON.stringify({ table, meal, userId }),
     });
     const data = await res.json();
-    if (!data.success) {
-      console.error(`❌ Save failed (${table}):`, data.error);
-      return false;
-    }
-    console.log(`✅ Saved to ${table}:`, data);
+    if (!data.success) { console.error(`Save failed (${table}):`, data.error); return false; }
+    console.log(`✅ Saved to ${table}:`, meal);
     return true;
-  } catch (e) {
-    console.error(`❌ Save exception (${table}):`, e);
-    return false;
-  }
+  } catch (e) { console.error(`Save exception (${table}):`, e); return false; }
 }
 
 // ========================================
@@ -226,17 +212,14 @@ export default function HomePage() {
     try {
       const { data } = await supabase.from("goals").select("*").eq("user_id", uid).single();
       if (data) setGoals({ calories: data.calories, protein: data.protein, carbs: data.carbs, fat: data.fat });
-    } catch (e) { console.log("Goals load error:", e); }
+    } catch (e) { console.log("Goals error:", e); }
   }
 
   async function loadTodayMeals(uid) {
     try {
-      const { data } = await supabase
-        .from("actual_meals").select("*")
-        .eq("user_id", uid).eq("date", getLocalDate());
+      const { data } = await supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", getLocalDate());
       setTodayMeals(data || []);
-      console.log(`✅ Loaded ${data?.length || 0} meals for today`);
-    } catch (e) { console.log("Meals load error:", e); }
+    } catch (e) { console.log("Meals error:", e); }
   }
 
   async function loadTodayMessages(uid) {
@@ -256,9 +239,8 @@ export default function HomePage() {
           if (row.response) rebuilt.push({ role: "assistant", content: row.response });
         }
         setHistory(rebuilt);
-        console.log(`✅ Restored ${rebuilt.length} messages from today`);
       }
-    } catch (e) { console.log("Messages load error:", e); }
+    } catch (e) { console.log("Messages error:", e); }
   }
 
   const totals = todayMeals.reduce(
@@ -283,12 +265,7 @@ export default function HomePage() {
       let newActiveMealLog = activeMealLog;
 
       if (isLogMessage(trimmed)) {
-        newActiveMealLog = {
-          type: "food_log",
-          originalMessage: trimmed,
-          mealType: extractMealType(trimmed),
-          conversationStage: "initial",
-        };
+        newActiveMealLog = { type: "food_log", originalMessage: trimmed, mealType: extractMealType(trimmed), conversationStage: "initial" };
         setActiveMealLog(newActiveMealLog);
         context = newActiveMealLog;
       } else if (isMealPlanningRequest(trimmed)) {
@@ -296,11 +273,7 @@ export default function HomePage() {
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed };
       } else if (activeMealLog) {
-        newActiveMealLog = {
-          ...activeMealLog,
-          followUpMessage: trimmed,
-          conversationStage: "followup",
-        };
+        newActiveMealLog = { ...activeMealLog, followUpMessage: trimmed, conversationStage: "followup" };
         setActiveMealLog(newActiveMealLog);
         context = newActiveMealLog;
       }
@@ -308,38 +281,23 @@ export default function HomePage() {
       const res  = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: trimmed,
-          context,
-          history: newHistory.slice(-8).map(m => ({ role: m.role, content: m.content })),
-          userId: uid,
-        }),
+        body: JSON.stringify({ message: trimmed, context, history: newHistory.slice(-8).map(m => ({ role: m.role, content: m.content })), userId: uid }),
       });
 
       const data  = await res.json();
       const reply = data.reply || "Sorry, could not get a response.";
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
-      // ── Save food log via server-side route ──
+      // Auto-save food logs
       if (newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
-        console.log("🔍 Parsed meals:", parsed);
-
         if (parsed.length > 0) {
-          const meal = { ...parsed[0] };
+          const meal = { ...parsed[0], date: getLocalDate() };
           if (!meal.mealType && newActiveMealLog.mealType) meal.mealType = newActiveMealLog.mealType;
-          meal.date = getLocalDate();
-
           const saved = await saveMealViaAPI("actual_meals", meal, uid);
-          if (saved) {
-            setActiveMealLog(null);
-            await loadTodayMeals(uid);
-          }
-        } else {
-          console.log("⏳ No meal block yet — AI still asking follow-up questions");
+          if (saved) { setActiveMealLog(null); await loadTodayMeals(uid); }
         }
       }
-
     } catch (err) {
       console.error("Send error:", err);
       setHistory([...newHistory, { role: "assistant", content: "Something went wrong. Please try again." }]);
@@ -350,10 +308,22 @@ export default function HomePage() {
 
   async function handleAddToPlan(meal, msgIdx, targetDate) {
     const uid = userId || localStorage.getItem("user_id");
-    const mealWithDate = { ...meal, date: targetDate };
-    const saved = await saveMealViaAPI("planned_meals", mealWithDate, uid);
+    const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
     if (saved) setSavedPlanIds((prev) => [...prev, `${msgIdx}-${meal.mealType}`]);
     else alert("Could not save to plan. Please try again.");
+  }
+
+  async function handleAddAllToPlan(meals, msgIdx, targetDate) {
+    const uid = userId || localStorage.getItem("user_id");
+    const newIds = [];
+    for (const meal of meals) {
+      const key = `${msgIdx}-${meal.mealType}`;
+      if (!savedPlanIds.includes(key)) {
+        const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
+        if (saved) newIds.push(key);
+      }
+    }
+    if (newIds.length > 0) setSavedPlanIds((prev) => [...prev, ...newIds]);
   }
 
   function handleKeyDown(e) {
@@ -397,7 +367,12 @@ export default function HomePage() {
             <p className="font-bold text-gray-800 text-lg">Your AI Health Coach</p>
             <p className="text-sm text-gray-400 mt-2 leading-relaxed max-w-xs">Tell me what you ate, ask for a meal plan, or get nutrition advice.</p>
             <div className="mt-5 flex flex-col gap-2 w-full max-w-xs">
-              {["I had 8oz chicken and 1 cup rice for lunch", "Plan my meals for today", "What should I eat for dinner?"].map((s) => (
+              {[
+                "I had 8oz chicken and 1 cup rice for lunch",
+                "Create a meal plan for tomorrow",
+                "What should I eat for dinner?",
+                "I want to drop 10 pounds",
+              ].map((s) => (
                 <button key={s} onClick={() => setMessage(s)}
                   className="text-left text-sm px-4 py-3 rounded-2xl border border-gray-200 bg-white text-gray-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-all shadow-sm">
                   {s}
@@ -413,6 +388,7 @@ export default function HomePage() {
           const triggerText = !isUser && history[idx-1]?.role === "user" ? history[idx-1].content : "";
           const isMealPlan  = isMealPlanningRequest(triggerText);
           const targetDate  = extractTargetDate(triggerText);
+          const allSaved    = meals.length > 0 && meals.every(m => savedPlanIds.includes(`${idx}-${m.mealType}`));
 
           return (
             <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"} items-end gap-2`}>
@@ -424,17 +400,42 @@ export default function HomePage() {
                   style={isUser ? { background: "linear-gradient(135deg,#2563eb,#1d4ed8)" } : {}}>
                   {msg.content}
                 </div>
+
+                {/* Add to plan buttons */}
                 {meals.length > 0 && isMealPlan && (
                   <div className="space-y-2 ml-1">
+                    {/* Add ALL button when multiple meals */}
+                    {meals.length > 1 && (
+                      <button
+                        onClick={() => handleAddAllToPlan(meals, idx, targetDate)}
+                        disabled={allSaved}
+                        className={`w-full text-xs py-2.5 px-4 rounded-xl font-bold transition-all border ${
+                          allSaved
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
+                            : "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600 active:scale-95 shadow-sm"
+                        }`}
+                      >
+                        {allSaved ? "✅ All meals added to plan" : `+ Add all ${meals.length} meals to plan`}
+                      </button>
+                    )}
+
+                    {/* Individual meal buttons */}
                     {meals.map((meal) => {
-                      const key = `${idx}-${meal.mealType}`;
+                      const key     = `${idx}-${meal.mealType}`;
                       const isSaved = savedPlanIds.includes(key);
                       return (
-                        <button key={key} onClick={() => handleAddToPlan(meal, idx, targetDate)} disabled={isSaved}
-                          className={`w-full text-xs py-2.5 px-4 rounded-xl font-semibold transition-all border ${isSaved ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default" : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700 active:scale-95 shadow-sm shadow-blue-200"}`}>
+                        <button key={key}
+                          onClick={() => handleAddToPlan(meal, idx, targetDate)}
+                          disabled={isSaved}
+                          className={`w-full text-xs py-2 px-4 rounded-xl font-medium transition-all border ${
+                            isSaved
+                              ? "bg-emerald-50 text-emerald-600 border-emerald-200 cursor-default"
+                              : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50 active:scale-95"
+                          }`}
+                        >
                           {isSaved
                             ? `✅ ${meal.mealType.charAt(0).toUpperCase()+meal.mealType.slice(1)} added`
-                            : `+ Add ${meal.mealType} to plan · ${meal.calories} cal`}
+                            : `+ Add ${meal.mealType} · ${meal.calories} cal`}
                         </button>
                       );
                     })}
