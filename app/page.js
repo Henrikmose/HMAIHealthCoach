@@ -66,16 +66,16 @@ function extractMealType(text) {
 }
 
 // ========================================
-// MEAL PARSER — handles multiple formats
+// MEAL PARSER — handles multiple AI formats
 // ========================================
 
 function parseAllMeals(text) {
   if (!text) return [];
   const meals = [];
   const mealTypes = ["breakfast", "lunch", "dinner", "snack"];
-  const lines = text.split("\n").map((l) => l.trim());
 
-  // Format A: proper multi-line blocks
+  // ── Format A: proper multi-line blocks ──
+  const lines = text.split("\n").map((l) => l.trim());
   let i = 0;
   while (i < lines.length) {
     const lineLower = lines[i].toLowerCase().trim();
@@ -85,7 +85,7 @@ function parseAllMeals(text) {
       let j = i + 1;
       while (j < lines.length && j < i + 12) {
         const fl = lines[j], fll = fl.toLowerCase();
-        if (fll.startsWith("- foods:"))        foods    = fl.replace(/^-\s*foods:\s*/i, "").trim();
+        if      (fll.startsWith("- foods:"))    foods    = fl.replace(/^-\s*foods:\s*/i, "").trim();
         else if (fll.startsWith("- calories:")) { const m = fl.match(/[\d.]+/); if (m) calories = parseFloat(m[0]); }
         else if (fll.startsWith("- protein:"))  { const m = fl.match(/[\d.]+/); if (m) protein  = parseFloat(m[0]); }
         else if (fll.startsWith("- carbs:"))    { const m = fl.match(/[\d.]+/); if (m) carbs    = parseFloat(m[0]); }
@@ -100,25 +100,73 @@ function parseAllMeals(text) {
     } else { i++; }
   }
 
-  // Format B: inline fallback
-  if (meals.length === 0) {
-    const re = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      meals.push({ mealType: m[1].toLowerCase(), food: m[2].trim(), calories: Math.round(parseFloat(m[3])), protein: Math.round(parseFloat(m[4])), carbs: Math.round(parseFloat(m[5])), fat: Math.round(parseFloat(m[6])) });
-    }
+  if (meals.length > 0) return meals;
+
+  // ── Format B: inline "Lunch - Foods: X - Calories: N - Protein: N - Carbs: N - Fat: N" ──
+  // More flexible regex that handles spaces around dashes
+  const inlinePattern = new RegExp(
+    `(breakfast|lunch|dinner|snack)\\s*[\\-–]\\s*foods?:\\s*(.*?)\\s*[\\-–]\\s*calories?:\\s*(\\d+)\\s*[\\-–]\\s*protein?:\\s*(\\d+)\\s*[\\-–]\\s*carbs?:\\s*(\\d+)\\s*[\\-–]\\s*fat?:\\s*(\\d+)`,
+    "gi"
+  );
+  let m;
+  while ((m = inlinePattern.exec(text)) !== null) {
+    meals.push({
+      mealType: m[1].toLowerCase(),
+      food:     m[2].trim(),
+      calories: Math.round(parseFloat(m[3])),
+      protein:  Math.round(parseFloat(m[4])),
+      carbs:    Math.round(parseFloat(m[5])),
+      fat:      Math.round(parseFloat(m[6])),
+    });
   }
 
-  // Format C: loose fallback
-  if (meals.length === 0) {
-    for (const type of mealTypes) {
-      const re = new RegExp(`${type}[\\s\\S]*?foods?:\\s*([^\\n-]+)[\\s\\S]*?calories?:\\s*(\\d+)[\\s\\S]*?protein?:\\s*(\\d+)[\\s\\S]*?carbs?:\\s*(\\d+)[\\s\\S]*?fat?:\\s*(\\d+)`, "i");
-      const m = text.match(re);
-      if (m) { meals.push({ mealType: type, food: m[1].trim(), calories: Math.round(parseFloat(m[2])), protein: Math.round(parseFloat(m[3])), carbs: Math.round(parseFloat(m[4])), fat: Math.round(parseFloat(m[5])) }); break; }
+  if (meals.length > 0) return meals;
+
+  // ── Format C: find any meal type then extract numbers nearby ──
+  for (const type of mealTypes) {
+    const pattern = new RegExp(
+      `${type}[\\s\\S]{0,50}?foods?:\\s*([^\\n]+?)[\\s\\S]{0,20}?calories?:\\s*(\\d+)[\\s\\S]{0,20}?protein?:\\s*(\\d+)[\\s\\S]{0,20}?carbs?:\\s*(\\d+)[\\s\\S]{0,20}?fat?:\\s*(\\d+)`,
+      "i"
+    );
+    const match = text.match(pattern);
+    if (match) {
+      meals.push({
+        mealType: type,
+        food:     match[1].replace(/[-–].*/, "").trim(), // stop at dash
+        calories: Math.round(parseFloat(match[2])),
+        protein:  Math.round(parseFloat(match[3])),
+        carbs:    Math.round(parseFloat(match[4])),
+        fat:      Math.round(parseFloat(match[5])),
+      });
+      break;
     }
   }
 
   return meals;
+}
+
+// ========================================
+// SAVE VIA SERVER-SIDE ROUTE (bypasses RLS)
+// ========================================
+
+async function saveMealViaAPI(table, meal, userId) {
+  try {
+    const res = await fetch("/api/save-meal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table, meal, userId }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      console.error(`❌ Save failed (${table}):`, data.error);
+      return false;
+    }
+    console.log(`✅ Saved to ${table}:`, data);
+    return true;
+  } catch (e) {
+    console.error(`❌ Save exception (${table}):`, e);
+    return false;
+  }
 }
 
 // ========================================
@@ -155,22 +203,18 @@ export default function HomePage() {
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
   const messagesEndRef = useRef(null);
 
-  // ── On mount: get userId then load all data ──
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
     if (uname) setUserName(uname);
-    if (uid) {
-      setUserId(uid);
-    }
+    if (uid) setUserId(uid);
   }, []);
 
-  // ── Load everything once userId is set ──
   useEffect(() => {
     if (userId) {
       loadGoals(userId);
       loadTodayMeals(userId);
-      loadTodayMessages(userId); // ← restores chat history
+      loadTodayMessages(userId);
     }
   }, [userId]);
 
@@ -178,7 +222,6 @@ export default function HomePage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history]);
 
-  // ── Load goals from Supabase ──
   async function loadGoals(uid) {
     try {
       const { data } = await supabase.from("goals").select("*").eq("user_id", uid).single();
@@ -186,38 +229,30 @@ export default function HomePage() {
     } catch (e) { console.log("Goals load error:", e); }
   }
 
-  // ── Load today's actual meals ──
   async function loadTodayMeals(uid) {
     try {
       const { data } = await supabase
         .from("actual_meals").select("*")
-        .eq("user_id", uid).eq("date", getLocalDate())
-        .order("created_at", { ascending: true });
+        .eq("user_id", uid).eq("date", getLocalDate());
       setTodayMeals(data || []);
+      console.log(`✅ Loaded ${data?.length || 0} meals for today`);
     } catch (e) { console.log("Meals load error:", e); }
   }
 
-  // ── Load today's chat history from ai_messages ──
   async function loadTodayMessages(uid) {
     try {
       const today = getLocalDate();
-      const startOfDay = `${today}T00:00:00.000Z`;
-      const endOfDay   = `${today}T23:59:59.999Z`;
-
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from("ai_messages").select("*")
         .eq("user_id", uid)
-        .gte("created_at", startOfDay)
-        .lte("created_at", endOfDay)
+        .gte("created_at", `${today}T00:00:00.000Z`)
+        .lte("created_at", `${today}T23:59:59.999Z`)
         .order("created_at", { ascending: true });
 
-      if (error) { console.log("Messages load error:", error); return; }
-
       if (data && data.length > 0) {
-        // Rebuild history array from saved messages
         const rebuilt = [];
         for (const row of data) {
-          if (row.message) rebuilt.push({ role: "user",      content: row.message });
+          if (row.message)  rebuilt.push({ role: "user",      content: row.message });
           if (row.response) rebuilt.push({ role: "assistant", content: row.response });
         }
         setHistory(rebuilt);
@@ -226,58 +261,11 @@ export default function HomePage() {
     } catch (e) { console.log("Messages load error:", e); }
   }
 
-  // ── Compute totals from today's meals ──
   const totals = todayMeals.reduce(
     (t, m) => ({ calories: t.calories + Number(m.calories||0), protein: t.protein + Number(m.protein||0), carbs: t.carbs + Number(m.carbs||0), fat: t.fat + Number(m.fat||0) }),
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
 
-  // ── Save actual meal to Supabase ──
-  async function saveActualMeal(meal, date) {
-    const uid = userId || localStorage.getItem("user_id");
-    if (!uid) { console.error("❌ No userId — cannot save actual meal"); return false; }
-    try {
-      const { error } = await supabase.from("actual_meals").insert([{
-        user_id:   uid,
-        date:      date || getLocalDate(),
-        meal_type: meal.mealType || "snack",
-        food:      meal.food,
-        calories:  meal.calories,
-        protein:   meal.protein,
-        carbs:     meal.carbs,
-        fat:       meal.fat,
-        servings:  1,
-      }]);
-      if (error) { console.error("❌ Save actual meal error:", error); return false; }
-      console.log("✅ Saved to actual_meals:", meal);
-      return true;
-    } catch (e) { console.error("❌ Save actual meal exception:", e); return false; }
-  }
-
-  // ── Save planned meal to Supabase ──
-  async function savePlannedMeal(meal, date) {
-    const uid = userId || localStorage.getItem("user_id");
-    if (!uid) { console.error("❌ No userId — cannot save planned meal"); return false; }
-    try {
-      const { error } = await supabase.from("planned_meals").insert([{
-        user_id:        uid,
-        date:           date || getLocalDate(),
-        meal_type:      meal.mealType || "snack",
-        food:           meal.food,
-        calories:       meal.calories,
-        protein:        meal.protein,
-        carbs:          meal.carbs,
-        fat:            meal.fat,
-        suggested_time: null,
-        status:         "planned",
-      }]);
-      if (error) { console.error("❌ Save planned meal error:", error); return false; }
-      console.log("✅ Saved to planned_meals:", meal);
-      return true;
-    } catch (e) { console.error("❌ Save planned meal exception:", e); return false; }
-  }
-
-  // ── Main send handler ──
   async function handleSend() {
     const trimmed = message.trim();
     if (!trimmed || isLoading) return;
@@ -308,7 +296,6 @@ export default function HomePage() {
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed };
       } else if (activeMealLog) {
-        // Follow-up answer (e.g. "8oz" or "1 cup")
         newActiveMealLog = {
           ...activeMealLog,
           followUpMessage: trimmed,
@@ -331,26 +318,25 @@ export default function HomePage() {
 
       const data  = await res.json();
       const reply = data.reply || "Sorry, could not get a response.";
-
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
-      // ── Try to save food log ──
+      // ── Save food log via server-side route ──
       if (newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
-        console.log("🔍 Parsed meals from reply:", parsed);
+        console.log("🔍 Parsed meals:", parsed);
 
         if (parsed.length > 0) {
-          // AI returned a complete meal block — save it
           const meal = { ...parsed[0] };
           if (!meal.mealType && newActiveMealLog.mealType) meal.mealType = newActiveMealLog.mealType;
-          const saved = await saveActualMeal(meal, getLocalDate());
+          meal.date = getLocalDate();
+
+          const saved = await saveMealViaAPI("actual_meals", meal, uid);
           if (saved) {
             setActiveMealLog(null);
             await loadTodayMeals(uid);
           }
         } else {
-          // No meal block yet — AI is still asking follow-up questions
-          console.log("⏳ AI asking follow-up — keeping activeMealLog active");
+          console.log("⏳ No meal block yet — AI still asking follow-up questions");
         }
       }
 
@@ -363,7 +349,9 @@ export default function HomePage() {
   }
 
   async function handleAddToPlan(meal, msgIdx, targetDate) {
-    const saved = await savePlannedMeal(meal, targetDate);
+    const uid = userId || localStorage.getItem("user_id");
+    const mealWithDate = { ...meal, date: targetDate };
+    const saved = await saveMealViaAPI("planned_meals", mealWithDate, uid);
     if (saved) setSavedPlanIds((prev) => [...prev, `${msgIdx}-${meal.mealType}`]);
     else alert("Could not save to plan. Please try again.");
   }
@@ -420,8 +408,8 @@ export default function HomePage() {
         )}
 
         {history.map((msg, idx) => {
-          const isUser  = msg.role === "user";
-          const meals   = !isUser ? parseAllMeals(msg.content) : [];
+          const isUser      = msg.role === "user";
+          const meals       = !isUser ? parseAllMeals(msg.content) : [];
           const triggerText = !isUser && history[idx-1]?.role === "user" ? history[idx-1].content : "";
           const isMealPlan  = isMealPlanningRequest(triggerText);
           const targetDate  = extractTargetDate(triggerText);
@@ -444,7 +432,9 @@ export default function HomePage() {
                       return (
                         <button key={key} onClick={() => handleAddToPlan(meal, idx, targetDate)} disabled={isSaved}
                           className={`w-full text-xs py-2.5 px-4 rounded-xl font-semibold transition-all border ${isSaved ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default" : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700 active:scale-95 shadow-sm shadow-blue-200"}`}>
-                          {isSaved ? `✅ ${meal.mealType.charAt(0).toUpperCase()+meal.mealType.slice(1)} added` : `+ Add ${meal.mealType} to plan · ${meal.calories} cal`}
+                          {isSaved
+                            ? `✅ ${meal.mealType.charAt(0).toUpperCase()+meal.mealType.slice(1)} added`
+                            : `+ Add ${meal.mealType} to plan · ${meal.calories} cal`}
                         </button>
                       );
                     })}
