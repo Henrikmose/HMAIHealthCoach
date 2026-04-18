@@ -96,27 +96,33 @@ export default function DashboardPage() {
   const [planned, setPlanned]           = useState([]);
   const [actual, setActual]             = useState([]);
 
+  // ── On mount: get userId from localStorage ──
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
-    if (uid)   setUserId(uid);
     if (uname) setUserName(uname);
-    if (uid)   load(uid, getLocalDate());
+    if (uid) {
+      setUserId(uid);
+    }
   }, []);
 
-  useEffect(() => { if (userId) load(userId, selectedDate); }, [selectedDate, userId]);
+  // ── Load data when userId or date changes ──
+  useEffect(() => {
+    if (userId) load(userId, selectedDate);
+  }, [userId, selectedDate]);
 
   async function load(uid, date) {
     setLoading(true);
     try {
       const [g, p, a] = await Promise.all([
         supabase.from("goals").select("*").eq("user_id", uid).single(),
-        supabase.from("planned_meals").select("*").eq("user_id", uid).eq("date", date),
-        supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", date),
+        supabase.from("planned_meals").select("*").eq("user_id", uid).eq("date", date).order("created_at", { ascending: true }),
+        supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", date).order("created_at", { ascending: true }),
       ]);
       if (g.data) setGoal(g.data);
       setPlanned(p.data || []);
       setActual(a.data  || []);
+      console.log(`✅ Dashboard loaded: ${p.data?.length||0} planned, ${a.data?.length||0} actual meals`);
     } catch (e) { console.error("Dashboard load error:", e); }
     finally { setLoading(false); }
   }
@@ -134,14 +140,15 @@ export default function DashboardPage() {
   async function markEaten(meal) {
     const uid = userId || localStorage.getItem("user_id");
     try {
-      await supabase.from("actual_meals").insert([{
+      const { error } = await supabase.from("actual_meals").insert([{
         user_id: uid, date: selectedDate, meal_type: meal.meal_type,
         food: meal.food, calories: meal.calories, protein: meal.protein,
         carbs: meal.carbs, fat: meal.fat, servings: meal.servings || 1,
       }]);
+      if (error) { console.error("Mark eaten error:", error); return; }
       await supabase.from("planned_meals").delete().eq("id", meal.id);
       await load(uid, selectedDate);
-    } catch (e) { console.error("Mark eaten error:", e); }
+    } catch (e) { console.error("Mark eaten exception:", e); }
   }
 
   const actualTotals  = sumMeals(actual);
@@ -172,8 +179,6 @@ export default function DashboardPage() {
             <p className="text-xs text-blue-400">cal eaten · {calPct}%</p>
           </div>
         </div>
-
-        {/* Macro bars */}
         <div className="flex gap-4">
           <MacroBar label="Protein" value={actualTotals.protein} goal={goal.protein} color="#3b82f6" />
           <MacroBar label="Carbs"   value={actualTotals.carbs}   goal={goal.carbs}   color="#10b981" />
@@ -190,9 +195,7 @@ export default function DashboardPage() {
         <div className="text-center">
           <p className="text-sm font-bold text-gray-900">{formatDateLabel(selectedDate)}</p>
           {selectedDate !== getLocalDate() && (
-            <button onClick={() => setSelectedDate(getLocalDate())} className="text-xs text-blue-500 font-medium">
-              Back to today
-            </button>
+            <button onClick={() => setSelectedDate(getLocalDate())} className="text-xs text-blue-500 font-medium">Back to today</button>
           )}
         </div>
         <button onClick={() => setSelectedDate((d) => getShiftedDate(d, 1))}
@@ -213,10 +216,10 @@ export default function DashboardPage() {
             {/* Summary cards */}
             <div className="grid grid-cols-2 gap-3 mb-6">
               {[
-                { label: "Daily Goal",  val: goal.calories,                      icon: "🎯", bg: "bg-blue-50",   border: "border-blue-100",   text: "text-blue-700",   sub: "text-blue-400"   },
-                { label: "Eaten",       val: Math.round(actualTotals.calories),  icon: "✅", bg: "bg-emerald-50",border: "border-emerald-100", text: "text-emerald-700",sub: "text-emerald-400"},
-                { label: "Planned",     val: Math.round(plannedTotals.calories), icon: "📋", bg: "bg-purple-50", border: "border-purple-100",  text: "text-purple-700", sub: "text-purple-400" },
-                { label: "Remaining",   val: Math.round(remaining.calories),     icon: "⏳", bg: "bg-amber-50",  border: "border-amber-100",   text: "text-amber-700",  sub: "text-amber-400"  },
+                { label:"Daily Goal",  val: goal.calories,                      icon:"🎯", bg:"bg-blue-50",    border:"border-blue-100",   text:"text-blue-700",    sub:"text-blue-400"    },
+                { label:"Eaten",       val: Math.round(actualTotals.calories),  icon:"✅", bg:"bg-emerald-50", border:"border-emerald-100", text:"text-emerald-700", sub:"text-emerald-400" },
+                { label:"Planned",     val: Math.round(plannedTotals.calories), icon:"📋", bg:"bg-purple-50",  border:"border-purple-100",  text:"text-purple-700",  sub:"text-purple-400"  },
+                { label:"Remaining",   val: Math.round(remaining.calories),     icon:"⏳", bg:"bg-amber-50",   border:"border-amber-100",   text:"text-amber-700",   sub:"text-amber-400"   },
               ].map(({ label, val, icon, bg, border, text, sub }) => (
                 <div key={label} className={`rounded-2xl p-3 border ${bg} ${border}`}>
                   <p className={`text-xs font-semibold mb-1 ${sub}`}>{icon} {label}</p>
@@ -230,9 +233,7 @@ export default function DashboardPage() {
             <div className="mb-6">
               <div className="flex items-center gap-2 mb-3">
                 <h2 className="text-base font-bold text-gray-900">📋 Planned Meals</h2>
-                {planned.length > 0 && (
-                  <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{planned.length}</span>
-                )}
+                {planned.length > 0 && <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{planned.length}</span>}
               </div>
               {groupByType(planned).length === 0 ? (
                 <div className="bg-white rounded-2xl border border-gray-100 p-5 text-center shadow-sm">
@@ -254,9 +255,7 @@ export default function DashboardPage() {
             <div>
               <div className="flex items-center gap-2 mb-3">
                 <h2 className="text-base font-bold text-gray-900">✅ Eaten</h2>
-                {actual.length > 0 && (
-                  <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{actual.length}</span>
-                )}
+                {actual.length > 0 && <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{actual.length}</span>}
               </div>
               {groupByType(actual).length === 0 ? (
                 <div className="bg-white rounded-2xl border border-gray-100 p-5 text-center shadow-sm">
