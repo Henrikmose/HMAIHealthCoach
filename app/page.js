@@ -151,7 +151,7 @@ function parseAllMeals(text) {
 
 async function saveMealViaAPI(table, meal, userId) {
   try {
-    const res = await fetch("/api/save-meal", {
+    const res = await fetch("/api/save-meals", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ table, meal, userId }),
