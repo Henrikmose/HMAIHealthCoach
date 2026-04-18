@@ -50,7 +50,6 @@ function isMealPlanningRequest(text) {
     /make\s+(a\s+)?meal\s+plan/i,
     /ideal\s+meal/i,
     /meal.*today/i,
-    /plan.*today/i,
     /plan.*tonight/i,
     /plan.*game/i,
   ].some((p) => p.test(text));
@@ -67,7 +66,7 @@ function extractMealType(text) {
 }
 
 // ========================================
-// MEAL PARSER — multi-format support
+// MEAL PARSER — handles multiple formats
 // ========================================
 
 function parseAllMeals(text) {
@@ -81,27 +80,21 @@ function parseAllMeals(text) {
   while (i < lines.length) {
     const lineLower = lines[i].toLowerCase().trim();
     const matchedType = mealTypes.find((t) => lineLower === t);
-
     if (matchedType) {
       let foods = null, calories = null, protein = null, carbs = null, fat = null;
       let j = i + 1;
       while (j < lines.length && j < i + 12) {
-        const fl = lines[j];
-        const fll = fl.toLowerCase();
-        if (fll.startsWith("- foods:"))       { foods    = fl.replace(/^-\s*foods:\s*/i, "").trim(); }
-        else if (fll.startsWith("- calories:")){ const m = fl.match(/[\d.]+/); if (m) calories = parseFloat(m[0]); }
-        else if (fll.startsWith("- protein:")) { const m = fl.match(/[\d.]+/); if (m) protein  = parseFloat(m[0]); }
-        else if (fll.startsWith("- carbs:"))   { const m = fl.match(/[\d.]+/); if (m) carbs    = parseFloat(m[0]); }
-        else if (fll.startsWith("- fat:"))     { const m = fl.match(/[\d.]+/); if (m) fat      = parseFloat(m[0]); }
+        const fl = lines[j], fll = fl.toLowerCase();
+        if (fll.startsWith("- foods:"))        foods    = fl.replace(/^-\s*foods:\s*/i, "").trim();
+        else if (fll.startsWith("- calories:")) { const m = fl.match(/[\d.]+/); if (m) calories = parseFloat(m[0]); }
+        else if (fll.startsWith("- protein:"))  { const m = fl.match(/[\d.]+/); if (m) protein  = parseFloat(m[0]); }
+        else if (fll.startsWith("- carbs:"))    { const m = fl.match(/[\d.]+/); if (m) carbs    = parseFloat(m[0]); }
+        else if (fll.startsWith("- fat:"))      { const m = fl.match(/[\d.]+/); if (m) fat      = parseFloat(m[0]); }
         else if (mealTypes.some((t) => fll === t)) break;
         j++;
       }
       if (foods && calories !== null) {
-        meals.push({
-          mealType: matchedType, food: foods,
-          calories: Math.round(calories), protein: Math.round(protein||0),
-          carbs: Math.round(carbs||0), fat: Math.round(fat||0),
-        });
+        meals.push({ mealType: matchedType, food: foods, calories: Math.round(calories), protein: Math.round(protein||0), carbs: Math.round(carbs||0), fat: Math.round(fat||0) });
       }
       i = j;
     } else { i++; }
@@ -109,14 +102,10 @@ function parseAllMeals(text) {
 
   // Format B: inline fallback
   if (meals.length === 0) {
-    const inlineRe = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
+    const re = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
     let m;
-    while ((m = inlineRe.exec(text)) !== null) {
-      meals.push({
-        mealType: m[1].toLowerCase(), food: m[2].trim(),
-        calories: Math.round(parseFloat(m[3])), protein: Math.round(parseFloat(m[4])),
-        carbs: Math.round(parseFloat(m[5])), fat: Math.round(parseFloat(m[6])),
-      });
+    while ((m = re.exec(text)) !== null) {
+      meals.push({ mealType: m[1].toLowerCase(), food: m[2].trim(), calories: Math.round(parseFloat(m[3])), protein: Math.round(parseFloat(m[4])), carbs: Math.round(parseFloat(m[5])), fat: Math.round(parseFloat(m[6])) });
     }
   }
 
@@ -125,10 +114,7 @@ function parseAllMeals(text) {
     for (const type of mealTypes) {
       const re = new RegExp(`${type}[\\s\\S]*?foods?:\\s*([^\\n-]+)[\\s\\S]*?calories?:\\s*(\\d+)[\\s\\S]*?protein?:\\s*(\\d+)[\\s\\S]*?carbs?:\\s*(\\d+)[\\s\\S]*?fat?:\\s*(\\d+)`, "i");
       const m = text.match(re);
-      if (m) {
-        meals.push({ mealType: type, food: m[1].trim(), calories: Math.round(parseFloat(m[2])), protein: Math.round(parseFloat(m[3])), carbs: Math.round(parseFloat(m[4])), fat: Math.round(parseFloat(m[5])) });
-        break;
-      }
+      if (m) { meals.push({ mealType: type, food: m[1].trim(), calories: Math.round(parseFloat(m[2])), protein: Math.round(parseFloat(m[3])), carbs: Math.round(parseFloat(m[4])), fat: Math.round(parseFloat(m[5])) }); break; }
     }
   }
 
@@ -169,70 +155,129 @@ export default function HomePage() {
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
   const messagesEndRef = useRef(null);
 
+  // ── On mount: get userId then load all data ──
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
-    if (uid)   setUserId(uid);
     if (uname) setUserName(uname);
-    if (uid)   { loadTodayMeals(uid); loadGoals(uid); }
+    if (uid) {
+      setUserId(uid);
+    }
   }, []);
+
+  // ── Load everything once userId is set ──
+  useEffect(() => {
+    if (userId) {
+      loadGoals(userId);
+      loadTodayMeals(userId);
+      loadTodayMessages(userId); // ← restores chat history
+    }
+  }, [userId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history]);
 
+  // ── Load goals from Supabase ──
   async function loadGoals(uid) {
     try {
       const { data } = await supabase.from("goals").select("*").eq("user_id", uid).single();
       if (data) setGoals({ calories: data.calories, protein: data.protein, carbs: data.carbs, fat: data.fat });
-    } catch (e) { console.log("Goals error:", e); }
+    } catch (e) { console.log("Goals load error:", e); }
   }
 
+  // ── Load today's actual meals ──
   async function loadTodayMeals(uid) {
     try {
-      const { data } = await supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", getLocalDate());
+      const { data } = await supabase
+        .from("actual_meals").select("*")
+        .eq("user_id", uid).eq("date", getLocalDate())
+        .order("created_at", { ascending: true });
       setTodayMeals(data || []);
-    } catch (e) { console.log("Meals error:", e); }
+    } catch (e) { console.log("Meals load error:", e); }
   }
 
+  // ── Load today's chat history from ai_messages ──
+  async function loadTodayMessages(uid) {
+    try {
+      const today = getLocalDate();
+      const startOfDay = `${today}T00:00:00.000Z`;
+      const endOfDay   = `${today}T23:59:59.999Z`;
+
+      const { data, error } = await supabase
+        .from("ai_messages").select("*")
+        .eq("user_id", uid)
+        .gte("created_at", startOfDay)
+        .lte("created_at", endOfDay)
+        .order("created_at", { ascending: true });
+
+      if (error) { console.log("Messages load error:", error); return; }
+
+      if (data && data.length > 0) {
+        // Rebuild history array from saved messages
+        const rebuilt = [];
+        for (const row of data) {
+          if (row.message) rebuilt.push({ role: "user",      content: row.message });
+          if (row.response) rebuilt.push({ role: "assistant", content: row.response });
+        }
+        setHistory(rebuilt);
+        console.log(`✅ Restored ${rebuilt.length} messages from today`);
+      }
+    } catch (e) { console.log("Messages load error:", e); }
+  }
+
+  // ── Compute totals from today's meals ──
   const totals = todayMeals.reduce(
     (t, m) => ({ calories: t.calories + Number(m.calories||0), protein: t.protein + Number(m.protein||0), carbs: t.carbs + Number(m.carbs||0), fat: t.fat + Number(m.fat||0) }),
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
 
+  // ── Save actual meal to Supabase ──
   async function saveActualMeal(meal, date) {
     const uid = userId || localStorage.getItem("user_id");
-    if (!uid) { console.error("No userId — cannot save meal"); return false; }
+    if (!uid) { console.error("❌ No userId — cannot save actual meal"); return false; }
     try {
       const { error } = await supabase.from("actual_meals").insert([{
-        user_id: uid, date: date || getLocalDate(),
+        user_id:   uid,
+        date:      date || getLocalDate(),
         meal_type: meal.mealType || "snack",
-        food: meal.food, calories: meal.calories,
-        protein: meal.protein, carbs: meal.carbs, fat: meal.fat, servings: 1,
+        food:      meal.food,
+        calories:  meal.calories,
+        protein:   meal.protein,
+        carbs:     meal.carbs,
+        fat:       meal.fat,
+        servings:  1,
       }]);
-      if (error) { console.error("Save actual error:", error); return false; }
-      console.log("✅ Meal saved to actual_meals:", meal);
+      if (error) { console.error("❌ Save actual meal error:", error); return false; }
+      console.log("✅ Saved to actual_meals:", meal);
       return true;
-    } catch (e) { console.error("Save actual exception:", e); return false; }
+    } catch (e) { console.error("❌ Save actual meal exception:", e); return false; }
   }
 
+  // ── Save planned meal to Supabase ──
   async function savePlannedMeal(meal, date) {
     const uid = userId || localStorage.getItem("user_id");
-    if (!uid) { console.error("No userId — cannot save planned meal"); return false; }
+    if (!uid) { console.error("❌ No userId — cannot save planned meal"); return false; }
     try {
       const { error } = await supabase.from("planned_meals").insert([{
-        user_id: uid, date: date || getLocalDate(),
-        meal_type: meal.mealType || "snack",
-        food: meal.food, calories: meal.calories,
-        protein: meal.protein, carbs: meal.carbs, fat: meal.fat,
-        suggested_time: null, status: "planned",
+        user_id:        uid,
+        date:           date || getLocalDate(),
+        meal_type:      meal.mealType || "snack",
+        food:           meal.food,
+        calories:       meal.calories,
+        protein:        meal.protein,
+        carbs:          meal.carbs,
+        fat:            meal.fat,
+        suggested_time: null,
+        status:         "planned",
       }]);
-      if (error) { console.error("Save planned error:", error); return false; }
-      console.log("✅ Meal saved to planned_meals:", meal);
+      if (error) { console.error("❌ Save planned meal error:", error); return false; }
+      console.log("✅ Saved to planned_meals:", meal);
       return true;
-    } catch (e) { console.error("Save planned exception:", e); return false; }
+    } catch (e) { console.error("❌ Save planned meal exception:", e); return false; }
   }
 
+  // ── Main send handler ──
   async function handleSend() {
     const trimmed = message.trim();
     if (!trimmed || isLoading) return;
@@ -263,6 +308,7 @@ export default function HomePage() {
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed };
       } else if (activeMealLog) {
+        // Follow-up answer (e.g. "8oz" or "1 cup")
         newActiveMealLog = {
           ...activeMealLog,
           followUpMessage: trimmed,
@@ -272,22 +318,29 @@ export default function HomePage() {
         context = newActiveMealLog;
       }
 
-      const res   = await fetch("/api/coach", {
+      const res  = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, context, history: history.slice(-8), userId: uid }),
+        body: JSON.stringify({
+          message: trimmed,
+          context,
+          history: newHistory.slice(-8).map(m => ({ role: m.role, content: m.content })),
+          userId: uid,
+        }),
       });
+
       const data  = await res.json();
       const reply = data.reply || "Sorry, could not get a response.";
 
-      const updatedHistory = [...newHistory, { role: "assistant", content: reply }];
-      setHistory(updatedHistory);
+      setHistory([...newHistory, { role: "assistant", content: reply }]);
 
-      // ── Auto-save food logs ──
+      // ── Try to save food log ──
       if (newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
-        console.log("Parsed meals:", parsed);
+        console.log("🔍 Parsed meals from reply:", parsed);
+
         if (parsed.length > 0) {
+          // AI returned a complete meal block — save it
           const meal = { ...parsed[0] };
           if (!meal.mealType && newActiveMealLog.mealType) meal.mealType = newActiveMealLog.mealType;
           const saved = await saveActualMeal(meal, getLocalDate());
@@ -296,10 +349,11 @@ export default function HomePage() {
             await loadTodayMeals(uid);
           }
         } else {
-          // AI asked a follow-up question — keep activeMealLog active
-          console.log("No meal block yet — waiting for more info");
+          // No meal block yet — AI is still asking follow-up questions
+          console.log("⏳ AI asking follow-up — keeping activeMealLog active");
         }
       }
+
     } catch (err) {
       console.error("Send error:", err);
       setHistory([...newHistory, { role: "assistant", content: "Something went wrong. Please try again." }]);
@@ -331,7 +385,6 @@ export default function HomePage() {
             <h1 className="text-xl font-bold text-gray-900">AI Coach</h1>
             {userName && <p className="text-sm text-gray-400 mt-0.5">Hey {userName} 👋</p>}
           </div>
-          {/* Calorie pill */}
           <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-2xl px-3 py-2">
             <div className="text-right">
               <p className="text-sm font-bold text-blue-700 leading-tight">{totals.calories} <span className="font-normal text-blue-400">/ {goals.calories}</span></p>
@@ -339,8 +392,6 @@ export default function HomePage() {
             </div>
           </div>
         </div>
-
-        {/* Macro bars */}
         {todayMeals.length > 0 && (
           <div className="flex gap-4">
             <MacroBar label="Protein" value={totals.protein} goal={goals.protein} color="#3b82f6" />
@@ -354,19 +405,11 @@ export default function HomePage() {
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 bg-gray-50">
         {history.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center px-4 pb-16">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 bg-blue-600 shadow-lg shadow-blue-200">
-              🧠
-            </div>
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 bg-blue-600 shadow-lg shadow-blue-200">🧠</div>
             <p className="font-bold text-gray-800 text-lg">Your AI Health Coach</p>
-            <p className="text-sm text-gray-400 mt-2 leading-relaxed max-w-xs">
-              Tell me what you ate, ask for a meal plan, or get personalized nutrition advice.
-            </p>
+            <p className="text-sm text-gray-400 mt-2 leading-relaxed max-w-xs">Tell me what you ate, ask for a meal plan, or get nutrition advice.</p>
             <div className="mt-5 flex flex-col gap-2 w-full max-w-xs">
-              {[
-                "I had 8oz chicken and 1 cup rice for lunch",
-                "Plan my meals for today",
-                "What should I eat for dinner?",
-              ].map((s) => (
+              {["I had 8oz chicken and 1 cup rice for lunch", "Plan my meals for today", "What should I eat for dinner?"].map((s) => (
                 <button key={s} onClick={() => setMessage(s)}
                   className="text-left text-sm px-4 py-3 rounded-2xl border border-gray-200 bg-white text-gray-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-all shadow-sm">
                   {s}
@@ -377,10 +420,8 @@ export default function HomePage() {
         )}
 
         {history.map((msg, idx) => {
-          const isUser = msg.role === "user";
-          const meals  = !isUser ? parseAllMeals(msg.content) : [];
-
-          // Show "Add to plan" buttons for ANY meal plan response (today or future)
+          const isUser  = msg.role === "user";
+          const meals   = !isUser ? parseAllMeals(msg.content) : [];
           const triggerText = !isUser && history[idx-1]?.role === "user" ? history[idx-1].content : "";
           const isMealPlan  = isMealPlanningRequest(triggerText);
           const targetDate  = extractTargetDate(triggerText);
@@ -388,41 +429,22 @@ export default function HomePage() {
           return (
             <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"} items-end gap-2`}>
               {!isUser && (
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 mb-1 bg-blue-600 shadow-sm shadow-blue-200">
-                  🧠
-                </div>
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 mb-1 bg-blue-600 shadow-sm shadow-blue-200">🧠</div>
               )}
               <div className="max-w-[82%] flex flex-col gap-2">
-                <div
-                  className={`rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
-                    isUser
-                      ? "text-white rounded-br-sm shadow-sm"
-                      : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm shadow-sm"
-                  }`}
-                  style={isUser ? { background: "linear-gradient(135deg,#2563eb,#1d4ed8)" } : {}}
-                >
+                <div className={`rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${isUser ? "text-white rounded-br-sm shadow-sm" : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm shadow-sm"}`}
+                  style={isUser ? { background: "linear-gradient(135deg,#2563eb,#1d4ed8)" } : {}}>
                   {msg.content}
                 </div>
-
-                {/* Add to plan buttons — show for any meal plan response */}
                 {meals.length > 0 && isMealPlan && (
                   <div className="space-y-2 ml-1">
                     {meals.map((meal) => {
-                      const key     = `${idx}-${meal.mealType}`;
+                      const key = `${idx}-${meal.mealType}`;
                       const isSaved = savedPlanIds.includes(key);
                       return (
-                        <button key={key}
-                          onClick={() => handleAddToPlan(meal, idx, targetDate)}
-                          disabled={isSaved}
-                          className={`w-full text-xs py-2.5 px-4 rounded-xl font-semibold transition-all border ${
-                            isSaved
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
-                              : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700 active:scale-95 shadow-sm shadow-blue-200"
-                          }`}
-                        >
-                          {isSaved
-                            ? `✅ ${meal.mealType.charAt(0).toUpperCase()+meal.mealType.slice(1)} added to plan`
-                            : `+ Add ${meal.mealType} to plan · ${meal.calories} cal`}
+                        <button key={key} onClick={() => handleAddToPlan(meal, idx, targetDate)} disabled={isSaved}
+                          className={`w-full text-xs py-2.5 px-4 rounded-xl font-semibold transition-all border ${isSaved ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default" : "bg-blue-600 text-white border-blue-600 hover:bg-blue-700 active:scale-95 shadow-sm shadow-blue-200"}`}>
+                          {isSaved ? `✅ ${meal.mealType.charAt(0).toUpperCase()+meal.mealType.slice(1)} added` : `+ Add ${meal.mealType} to plan · ${meal.calories} cal`}
                         </button>
                       );
                     })}
@@ -438,9 +460,7 @@ export default function HomePage() {
             <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 bg-blue-600 shadow-sm shadow-blue-200">🧠</div>
             <div className="bg-white border border-gray-100 shadow-sm rounded-2xl rounded-bl-sm px-4 py-3">
               <div className="flex gap-1 items-center">
-                {[0,150,300].map((d) => (
-                  <div key={d} className="w-2 h-2 rounded-full animate-bounce bg-blue-400" style={{ animationDelay: `${d}ms` }} />
-                ))}
+                {[0,150,300].map((d) => <div key={d} className="w-2 h-2 rounded-full animate-bounce bg-blue-400" style={{ animationDelay:`${d}ms` }} />)}
               </div>
             </div>
           </div>
@@ -460,12 +480,9 @@ export default function HomePage() {
             className="flex-1 resize-none rounded-2xl px-4 py-3 text-sm focus:outline-none border transition-all bg-gray-50"
             style={{ minHeight: "46px", maxHeight: "120px", borderColor: message ? "#3b82f6" : "#e5e7eb" }}
           />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !message.trim()}
+          <button onClick={handleSend} disabled={isLoading || !message.trim()}
             className="rounded-2xl px-5 text-sm font-bold text-white transition-all active:scale-95 disabled:opacity-40 flex-shrink-0 shadow-sm shadow-blue-200"
-            style={{ minHeight: "46px", background: "linear-gradient(135deg,#2563eb,#1d4ed8)" }}
-          >
+            style={{ minHeight: "46px", background: "linear-gradient(135deg,#2563eb,#1d4ed8)" }}>
             Send
           </button>
         </div>
