@@ -39,10 +39,21 @@ function extractWeightFromMessage(message) {
   return null;
 }
 
-// Determine if user is already very active based on profile
 function isVeryActive(activityLevel) {
   const level = (activityLevel || "").toLowerCase();
   return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
+}
+
+// Extract event time from message e.g. "game at 9pm", "match at 7:30"
+function extractEventHour(message) {
+  if (!message) return null;
+  const match = message.match(/at\s+(\d+)(?::(\d+))?\s*(am|pm)?/i);
+  if (!match) return null;
+  let h = parseInt(match[1]);
+  const ampm = (match[3] || "").toLowerCase();
+  if (ampm === "pm" && h < 12) h += 12;
+  if (ampm === "am" && h === 12) h = 0;
+  return h;
 }
 
 export async function POST(req) {
@@ -108,18 +119,17 @@ export async function POST(req) {
     remainingMealTypes.push("Snack");
 
     const goalLabel = goalType === "fat_loss" ? "Fat Loss" : goalType === "muscle_gain" ? "Muscle Gain" : "General Health";
-
     const mentionedWeight = extractWeightFromMessage(message);
     const weightToLose = mentionedWeight ? mentionedWeight.amount : null;
     const weeksToGoal = weightToLose ? Math.ceil(weightToLose) : null;
-    const adjustedCals = goal.calories - 500; // full 500 from food for very active users
     const veryActive = isVeryActive(activityLevel);
-
-    // For very active users, cut 500 from food (they already burn plenty)
-    // For moderately active users, split 300 food + 200 exercise
     const foodCutAmount = veryActive ? 500 : 300;
-    const exerciseBurnAmount = veryActive ? 0 : 200;
     const weightLossCals = goal.calories - foodCutAmount;
+
+    // Extract event time from message or recent history
+    const allMessages = [...history.map(h => h.content || ""), message || ""].join(" ");
+    const eventHour = extractEventHour(allMessages);
+    const hoursUntilEvent = eventHour ? eventHour - hour : null;
 
     const mealsSummary = todayMeals.length > 0
       ? todayMeals.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal, ${m.protein}g P, ${m.carbs}g C, ${m.fat}g F)`).join("\n")
@@ -145,7 +155,7 @@ PERSONALITY
 - Confident and direct. Clear answers first.
 - Practical. Real food, real life.
 - Honest. Push back on unrealistic goals.
-- Say "Real Talk" when something isn't possible.
+- Say "Real Talk" when needed.
 
 ══════════════════════════════════════════
 USER PROFILE
@@ -153,10 +163,11 @@ USER PROFILE
 Name: ${userName}
 Goal: ${goalLabel}
 Activity level: ${activityLevel}
-Very active: ${veryActive ? "YES — already burns a lot, no need to add more exercise for deficit" : "NO — moderate activity"}
+Very active: ${veryActive ? "YES" : "NO"}
 Current time: ${hour}:00 (${timeOfDay})
 ${currentWeight ? `Current weight: ${currentWeight} ${weightUnit}` : ""}
 ${targetWeight  ? `Profile target: ${targetWeight} ${weightUnit}` : ""}
+${eventHour ? `Event detected at: ${eventHour}:00 (in ~${hoursUntilEvent} hours)` : ""}
 
 DAILY GOALS:
 Calories: ${goal.calories}
@@ -173,7 +184,7 @@ Fat:      ${totals.fat}/${goal.fat}g (${remaining.fat}g remaining)
 MEALS EATEN TODAY:
 ${mealsSummary}
 
-REMAINING MEALS FOR TODAY (current time ${hour}:00):
+REMAINING MEALS TODAY (${hour}:00):
 ${remainingMealTypes.join(", ")}
 ${hour >= 10 ? "Breakfast time has passed." : ""}
 ${hour >= 14 ? "Lunch time has passed." : ""}
@@ -185,74 +196,88 @@ MEAL BLOCK FORMAT — CRITICAL
 Every meal MUST use EXACTLY this format.
 The meal type word MUST be ALONE on its own line.
 ONLY use: Breakfast, Lunch, Dinner, Snack
-NEVER add parentheses, descriptions, or labels after the meal type.
+NEVER add parentheses or descriptions after the meal type.
 "Snack (post-game)" is FORBIDDEN. Just write "Snack".
-"Snack (pre-game)" is FORBIDDEN. Just write "Snack".
-Add context in the coaching text AFTER the meal block, not in the meal type line.
+Add context AFTER the meal block in plain text.
 
 CORRECT:
 Snack
-- Foods: Protein shake, 1 scoop; Banana, 1 medium
-- Calories: 225
-- Protein: 26
-- Carbs: 30
-- Fat: 2
+- Foods: Banana, 1 medium; Rice cakes, 2
+- Calories: 155
+- Protein: 2
+- Carbs: 38
+- Fat: 0
 
-👉 Have this within 30 minutes after your game for recovery.
+👉 Eat this 1-2 hours before your game for quick energy.
 
 WRONG:
-Snack (post-game)     FORBIDDEN
-Snack (pre-game)      FORBIDDEN
-**Snack**             FORBIDDEN
+Snack (pre-game)     FORBIDDEN
+Snack (post-game)    FORBIDDEN
+**Snack**            FORBIDDEN
 
 TOTAL FORMAT — plain text only:
 📊 Total: X cal | Xg protein | Xg carbs | Xg fat
 👉 [coaching note]
 
 ══════════════════════════════════════════
-CALORIE TARGETS
+ATHLETIC EVENT MEAL GUIDELINES — CRITICAL
 ══════════════════════════════════════════
-Standard plans: aim for ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal.
-Weight loss plans: use ${weightLossCals} cal (${foodCutAmount} cal less than goal).
-If plan is below 85% of target, note the shortfall.
-If ${userName} has already eaten ${totals.calories} cal, only plan remaining ${remaining.calories} cal.
+${eventHour ? `Event detected at ${eventHour}:00. Current time: ${hour}:00. Hours until event: ${hoursUntilEvent}.` : ""}
+
+PRE-GAME MEALS (2-3 hours before event):
+- HIGH carbs for energy (rice, pasta, bread, banana, oatmeal)
+- MODERATE protein
+- LOW fat (fat slows digestion — avoid)
+- LOW fiber (avoid bloating)
+- Keep it light and easily digestible
+- Target: 300-500 cal max
+- Example: Rice cakes + banana + small protein shake
+
+${hoursUntilEvent !== null && hoursUntilEvent <= 2 ? `URGENT: Only ${hoursUntilEvent} hours until the game.
+The pre-game meal should be very light — just quick carbs.
+NO heavy meals. NO high fat. NO high protein now.
+Suggest: banana, rice cakes, sports drink, small fruit.` : ""}
+
+POST-GAME MEALS (within 30-60 min after event):
+- HIGH protein for muscle recovery (shake, chicken, Greek yogurt)
+- MODERATE-HIGH carbs to replenish glycogen
+- Can be a heavier, more satisfying meal
+- Target: 400-600 cal
+- Example: Protein shake + banana, or chicken + rice
+
+NEVER suggest a heavy high-fat, high-protein meal RIGHT BEFORE a game.
+Save the heavy recovery meal for AFTER the game.
 
 ══════════════════════════════════════════
-TIME-AWARE MEAL PLANNING
+CALORIE TARGETS
 ══════════════════════════════════════════
-Current time is ${hour}:00.
-Only suggest meals still relevant for today.
-For athletic events: plan meals leading up to AND a recovery Snack after.
-IMPORTANT: For weight loss meal plans ("yes please", "create a plan"), 
-default to planning TOMORROW'S full day (Breakfast + Lunch + Dinner + Snack)
-unless the user specifically says "today" or "tonight".
+Standard plans: ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal.
+Weight loss plans: ${weightLossCals} cal.
+If below 85% of target, note the shortfall.
+
+══════════════════════════════════════════
+TIME-AWARE PLANNING
+══════════════════════════════════════════
+Only suggest meals relevant for remaining time today.
+For weight loss confirmations → plan TOMORROW full day.
+For "today/tonight" requests → only remaining meals today.
 
 ══════════════════════════════════════════
 WEIGHT GOAL COACHING
 ══════════════════════════════════════════
-When user mentions wanting to lose a specific amount:
-1. Use the weight amount THEY SAID — not profile target
-2. Check if realistic (max 2 lbs/week safely)
-3. Calculate deficit based on activity level:
-
+Use the weight amount THEY SAID — not profile target.
 ${veryActive
-  ? `${userName} is VERY ACTIVE — they already burn plenty through exercise.
-   DO NOT suggest adding more exercise.
-   Instead: just reduce food by ${foodCutAmount} cal/day → new target: ${weightLossCals} cal
-   Say: "Since you're already very active, you don't need extra exercise. Just eat ${foodCutAmount} cal less per day."`
-  : `${userName} is moderately active. Split the deficit:
-   - Eat ${foodCutAmount} cal less per day → new target: ${weightLossCals} cal  
-   - Burn ${exerciseBurnAmount} cal more per day (20-30 min walk)`}
-
-4. Estimate timeline: ${weightToLose || "X"} lbs ÷ 1 lb/week = ${weeksToGoal || "X"} weeks
-5. Ask: "Want me to create a meal plan for tomorrow based on your ${weightLossCals} cal target? Or a 2-3 day plan?"
-6. When they confirm → plan TOMORROW at ${weightLossCals} cal, full day (Breakfast + Lunch + Dinner + Snack)
+  ? `${userName} is very active — just eat ${foodCutAmount} cal less. No extra exercise needed.`
+  : `Split deficit: eat ${foodCutAmount} cal less + burn 200 cal more (20-30 min walk).`}
+Target: ${weightLossCals} cal/day.
+Timeline: ${weightToLose || "X"} lbs ÷ 1/week = ${weeksToGoal || "X"} weeks.
+Ask: "Want a meal plan for tomorrow at ${weightLossCals} cal? Or a 2-3 day plan?"
+When confirmed → plan TOMORROW full day at ${weightLossCals} cal.
 
 ══════════════════════════════════════════
 MULTIPLE FOODS RULE
 ══════════════════════════════════════════
-Ask for each food quantity one at a time.
-Only return meal block when you have ALL quantities.
+Ask for each quantity one at a time. Only return meal block when ALL quantities are known.
 
 ══════════════════════════════════════════
 MACRO CALCULATION GUIDE
@@ -282,10 +307,11 @@ Olive oil:           1 tbsp = 120 cal, 0g P, 0g C, 14g F
 Avocado:             1 medium = 240 cal, 3g P, 13g C, 22g F
 Cottage cheese:      1 cup = 200 cal, 28g P, 8g C, 4g F
 Quinoa cooked:       1 cup = 222 cal, 8g P, 39g C, 4g F
+Rice cakes:          1 cake = 35 cal, 1g P, 7g C, 0g F
+Sports drink:        1 cup = 50 cal, 0g P, 14g C, 0g F
 
 UNITS: Always use US units — oz, cups, tbsp, tsp, slices, pieces`;
 
-    // ── Food logging mode ──
     if (context && context.type === "food_log") {
       systemMessage += `
 
@@ -293,24 +319,18 @@ UNITS: Always use US units — oz, cups, tbsp, tsp, slices, pieces`;
 FOOD LOGGING MODE
 ══════════════════════════════════════════
 ${userName} is logging food they already ate.
+- Original: "${context.originalMessage}"
+${context.mealType ? `- Meal type: ${context.mealType}` : ""}
+${context.followUpMessage ? `- Follow-up: "${context.followUpMessage}"` : ""}
 
-Context:
-- Original message: "${context.originalMessage}"
-${context.mealType ? `- Meal type: ${context.mealType}` : "- Meal type: unknown"}
-${context.followUpMessage ? `- Follow-up answer: "${context.followUpMessage}"` : ""}
-
-DECISION TREE:
-1. Multiple foods? Ask about each quantity one at a time
-2. Single food + quantity? Return meal block immediately
-3. Single food, no quantity? Ask for quantity only
+1. Multiple foods? Ask quantities one at a time
+2. Have food + quantity? Return meal block immediately
+3. No quantity? Ask for it only
 4. All info? Return complete meal block
 
-AFTER LOGGING:
-📊 Today: X/${goal.calories} cal | protein update
-👉 One coaching tip`;
+After logging: show updated totals + one coaching tip`;
     }
 
-    // ── Meal planning mode ──
     if (context && context.type === "meal_planning") {
       systemMessage += `
 
@@ -319,37 +339,29 @@ MEAL PLANNING MODE
 ══════════════════════════════════════════
 Request: "${context.request || message}"
 Current time: ${hour}:00
+${eventHour ? `Event at: ${eventHour}:00 (${hoursUntilEvent} hours away)` : ""}
 
-PLANNING RULES:
-1. For weight loss confirmations ("yes please", "sure", "create a plan") → plan TOMORROW full day
-2. For "today" or "tonight" requests → only plan remaining meals for today
-3. For athletic events → plan pre-event and post-event meals for today
-4. Each meal type word MUST be alone on its own line — no parentheses ever
-5. For weight loss plans: target ${weightLossCals} cal
-6. For standard plans: target ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal
-7. After meal blocks: show total as plain text only
-8. Always include a post-event recovery Snack for athletic events
-
-TOTAL FORMAT:
-📊 Total: X cal | Xg protein | Xg carbs | Xg fat
-👉 [one coaching note]`;
+RULES:
+1. Weight loss confirmations → plan TOMORROW full day
+2. "Today/tonight" → only remaining meals for today
+3. Athletic events → light pre-game + heavier post-game recovery
+4. Each meal type word alone on its own line — no parentheses
+5. After meal blocks: plain text total only
+6. Pre-game meal MUST be light (high carb, low fat, low protein)
+7. Post-game recovery MUST include protein + carbs`;
     }
 
-    // ── Build conversation ──
     const conversationMessages = [{ role: "system", content: systemMessage }];
     if (history && history.length > 0) {
       for (const msg of history.slice(-8)) {
-        if (msg.role && msg.content) {
-          conversationMessages.push({ role: msg.role, content: msg.content });
-        }
+        if (msg.role && msg.content) conversationMessages.push({ role: msg.role, content: msg.content });
       }
     }
     conversationMessages.push({ role: "user", content: message || "" });
 
     console.log("=== AI REQUEST ===");
-    console.log("User:", userName, "| Activity:", activityLevel, "| VeryActive:", veryActive);
-    console.log("Time:", hour, timeOfDay, "| Context:", context?.type);
-    console.log("Weight mentioned:", mentionedWeight, "| Loss cals:", weightLossCals);
+    console.log("User:", userName, "| Time:", hour, "| Event hour:", eventHour, "| Hours until:", hoursUntilEvent);
+    console.log("Context:", context?.type, "| Message:", message);
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
@@ -358,16 +370,14 @@ TOTAL FORMAT:
     });
 
     const reply = completion.choices[0].message.content;
-    console.log("=== AI RESPONSE ===\n", reply);
+    console.log("=== RESPONSE ===\n", reply);
 
     try {
       await supabase.from("ai_messages").insert([{
-        user_id: activeUserId,
-        message: message || "",
-        response: reply,
+        user_id: activeUserId, message: message || "", response: reply,
         created_at: new Date().toISOString(),
       }]);
-    } catch (e) { console.log("Could not save message:", e); }
+    } catch (e) { console.log("Save error:", e); }
 
     return Response.json({ reply });
 

@@ -107,11 +107,7 @@ function parseAllMeals(text) {
 
     let matchedType = null;
     for (const type of mealTypes) {
-      if (
-        lineLower === type ||
-        lineLower.startsWith(type + " ") ||
-        lineLower.startsWith(type + "(")
-      ) {
+      if (lineLower === type || lineLower.startsWith(type + " ") || lineLower.startsWith(type + "(")) {
         if (!lineLower.includes("total") && !lineLower.includes("calories:") && !line.startsWith("-")) {
           matchedType = type;
           break;
@@ -124,12 +120,8 @@ function parseAllMeals(text) {
       let j = i + 1;
 
       while (j < lines.length && j < i + 15) {
-        const fl = lines[j];
-        const fll = fl.toLowerCase().trim();
-
-        const isNextMeal = mealTypes.some(t =>
-          fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "(")
-        );
+        const fl = lines[j], fll = fl.toLowerCase().trim();
+        const isNextMeal = mealTypes.some(t => fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "("));
         const isTotal = fll.startsWith("total") || fll.includes("📊") || fll.startsWith("this plan") || fll.startsWith("---");
         if (isNextMeal || isTotal) break;
 
@@ -142,19 +134,10 @@ function parseAllMeals(text) {
       }
 
       if (foods && calories !== null) {
-        meals.push({
-          mealType: matchedType,
-          food: foods,
-          calories: Math.round(calories),
-          protein:  Math.round(protein || 0),
-          carbs:    Math.round(carbs   || 0),
-          fat:      Math.round(fat     || 0),
-        });
+        meals.push({ mealType: matchedType, food: foods, calories: Math.round(calories), protein: Math.round(protein||0), carbs: Math.round(carbs||0), fat: Math.round(fat||0) });
       }
       i = j;
-    } else {
-      i++;
-    }
+    } else { i++; }
   }
 
   // Inline fallback
@@ -169,8 +152,15 @@ function parseAllMeals(text) {
   return meals;
 }
 
+// Generate a unique key for a meal based on its content
+// This prevents false "already added" when same meal type appears in different conversations
+function getMealKey(msgIdx, meal) {
+  const foodKey = meal.food.substring(0, 20).replace(/\s/g, "_");
+  return `${msgIdx}-${meal.mealType}-${meal.calories}-${foodKey}`;
+}
+
 // ========================================
-// SAVE VIA SERVER ROUTE
+// SAVE VIA SERVER
 // ========================================
 async function saveMealViaAPI(table, meal, userId) {
   try {
@@ -212,11 +202,14 @@ export default function HomePage() {
   const [isLoading, setIsLoading]         = useState(false);
   const [activeMealLog, setActiveMealLog] = useState(null);
   const [todayMeals, setTodayMeals]       = useState([]);
-  const [savedPlanIds, setSavedPlanIds]   = useState(() => {
-    // Load from localStorage on init to persist across navigation
+  const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
     if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("savedPlanIds");
-      return stored ? JSON.parse(stored) : [];
+      const today = getLocalDate();
+      const storedDate = localStorage.getItem("savedPlanKeysDate");
+      if (storedDate === today) {
+        const stored = localStorage.getItem("savedPlanKeys");
+        return stored ? JSON.parse(stored) : [];
+      }
     }
     return [];
   });
@@ -226,23 +219,14 @@ export default function HomePage() {
   const messagesEndRef = useRef(null);
   const textareaRef    = useRef(null);
 
-  // Persist savedPlanIds to localStorage whenever it changes
+  // Persist savedPlanKeys to localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
-      localStorage.setItem("savedPlanIds", JSON.stringify(savedPlanIds));
+      const today = getLocalDate();
+      localStorage.setItem("savedPlanKeysDate", today);
+      localStorage.setItem("savedPlanKeys", JSON.stringify(savedPlanKeys));
     }
-  }, [savedPlanIds]);
-
-  // Clear saved plan IDs at midnight (new day = fresh state)
-  useEffect(() => {
-    const stored = localStorage.getItem("savedPlanIdsDate");
-    const today = getLocalDate();
-    if (stored !== today) {
-      localStorage.setItem("savedPlanIdsDate", today);
-      localStorage.removeItem("savedPlanIds");
-      setSavedPlanIds([]);
-    }
-  }, []);
+  }, [savedPlanKeys]);
 
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
@@ -252,16 +236,10 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (userId) {
-      loadGoals(userId);
-      loadTodayMeals(userId);
-      loadTodayMessages(userId);
-    }
+    if (userId) { loadGoals(userId); loadTodayMeals(userId); loadTodayMessages(userId); }
   }, [userId]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [history]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -288,8 +266,7 @@ export default function HomePage() {
     try {
       const today = getLocalDate();
       const { data } = await supabase
-        .from("ai_messages").select("*")
-        .eq("user_id", uid)
+        .from("ai_messages").select("*").eq("user_id", uid)
         .gte("created_at", `${today}T00:00:00.000Z`)
         .lte("created_at", `${today}T23:59:59.999Z`)
         .order("created_at", { ascending: true });
@@ -350,7 +327,6 @@ export default function HomePage() {
       const reply = data.reply || "Sorry, could not get a response.";
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
-      // Auto-save food logs
       if (newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
         if (parsed.length > 0) {
@@ -369,25 +345,25 @@ export default function HomePage() {
   }
 
   async function handleAddToPlan(meal, msgIdx, targetDate) {
-    const key = `${msgIdx}-${meal.mealType}`;
-    if (savedPlanIds.includes(key)) return; // prevent duplicates
+    const key = getMealKey(msgIdx, meal);
+    if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
     const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-    if (saved) setSavedPlanIds((prev) => [...prev, key]);
+    if (saved) setSavedPlanKeys((prev) => [...prev, key]);
     else alert("Could not save to plan. Please try again.");
   }
 
   async function handleAddAllToPlan(meals, msgIdx, targetDate) {
     const uid = userId || localStorage.getItem("user_id");
-    const newIds = [];
+    const newKeys = [];
     for (const meal of meals) {
-      const key = `${msgIdx}-${meal.mealType}`;
-      if (!savedPlanIds.includes(key)) {
+      const key = getMealKey(msgIdx, meal);
+      if (!savedPlanKeys.includes(key)) {
         const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-        if (saved) newIds.push(key);
+        if (saved) newKeys.push(key);
       }
     }
-    if (newIds.length > 0) setSavedPlanIds((prev) => [...prev, ...newIds]);
+    if (newKeys.length > 0) setSavedPlanKeys((prev) => [...prev, ...newKeys]);
   }
 
   function handleKeyDown(e) {
@@ -431,12 +407,7 @@ export default function HomePage() {
             <p className="font-bold text-gray-800 text-lg">Your AI Health Coach</p>
             <p className="text-sm text-gray-400 mt-2 leading-relaxed max-w-xs">Tell me what you ate, ask for a meal plan, or get nutrition advice.</p>
             <div className="mt-5 flex flex-col gap-2 w-full max-w-xs">
-              {[
-                "I had 8oz chicken and 1 cup rice for lunch",
-                "Create a meal plan for tomorrow",
-                "What should I eat for dinner?",
-                "I want to drop 10 pounds",
-              ].map((s) => (
+              {["I had 8oz chicken and 1 cup rice for lunch", "Create a meal plan for tomorrow", "What should I eat for dinner?", "I want to drop 10 pounds"].map((s) => (
                 <button key={s} onClick={() => setMessage(s)}
                   className="text-left text-sm px-4 py-3 rounded-2xl border border-gray-200 bg-white text-gray-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-all shadow-sm">
                   {s}
@@ -452,7 +423,7 @@ export default function HomePage() {
           const triggerText = !isUser && history[idx-1]?.role === "user" ? history[idx-1].content : "";
           const showButtons = meals.length > 0 && (isMealPlanningRequest(triggerText) || isWeightGoalRequest(triggerText));
           const targetDate  = extractTargetDate(triggerText);
-          const allSaved    = meals.length > 0 && meals.every(m => savedPlanIds.includes(`${idx}-${m.mealType}`));
+          const allSaved    = meals.length > 0 && meals.every(m => savedPlanKeys.includes(getMealKey(idx, m)));
 
           return (
             <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"} items-end gap-2`}>
@@ -474,8 +445,8 @@ export default function HomePage() {
                       </button>
                     )}
                     {meals.map((meal) => {
-                      const key = `${idx}-${meal.mealType}`;
-                      const isSaved = savedPlanIds.includes(key);
+                      const key = getMealKey(idx, meal);
+                      const isSaved = savedPlanKeys.includes(key);
                       return (
                         <button key={key} onClick={() => handleAddToPlan(meal, idx, targetDate)} disabled={isSaved}
                           className={`w-full text-xs py-2 px-4 rounded-xl font-medium transition-all border ${isSaved ? "bg-emerald-50 text-emerald-600 border-emerald-200 cursor-default" : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50 active:scale-95"}`}>

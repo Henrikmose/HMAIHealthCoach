@@ -46,7 +46,6 @@ function groupByType(meals) {
 }
 
 const MEAL_EMOJI = { breakfast:"🌅", lunch:"☀️", dinner:"🌙", snack:"🍎" };
-const SERVING_OPTIONS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
 // ========================================
 // CONFIRM DIALOG
@@ -73,29 +72,51 @@ function ConfirmDialog({ message, onConfirm, onCancel }) {
 }
 
 // ========================================
-// COPY MEAL DIALOG
+// COPY MEAL DIALOG — with date picker
 // ========================================
 function CopyMealDialog({ meal, currentDate, onCopy, onCancel }) {
   const today = getLocalDate();
-  const options = [
-    { label: "Today", date: today },
+  const [customDate, setCustomDate] = useState("");
+
+  const quickOptions = [
     { label: "Tomorrow", date: getShiftedDate(today, 1) },
     { label: "Day after tomorrow", date: getShiftedDate(today, 2) },
-  ].filter(o => o.date !== currentDate); // don't show current date
+  ].filter(o => o.date !== currentDate);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.4)" }}>
       <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-xs">
         <p className="text-sm font-semibold text-gray-800 mb-1">Copy meal to...</p>
         <p className="text-xs text-gray-500 mb-3 truncate">{meal.food}</p>
-        <div className="space-y-2 mb-4">
-          {options.map((opt) => (
+
+        {/* Quick options */}
+        <div className="space-y-2 mb-3">
+          {quickOptions.map((opt) => (
             <button key={opt.date} onClick={() => onCopy(opt.date)}
               className="w-full py-2.5 rounded-xl text-sm font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition-colors text-left px-4">
               📅 {opt.label}
             </button>
           ))}
         </div>
+
+        {/* Date picker */}
+        <div className="border border-gray-200 rounded-xl p-3 mb-3">
+          <p className="text-xs text-gray-500 mb-1.5">Pick a specific date:</p>
+          <input
+            type="date"
+            value={customDate}
+            min={getShiftedDate(today, 1)}
+            onChange={(e) => setCustomDate(e.target.value)}
+            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-400"
+          />
+          {customDate && (
+            <button onClick={() => onCopy(customDate)}
+              className="w-full mt-2 py-2 rounded-xl text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+              Copy to {formatDateLabel(customDate)}
+            </button>
+          )}
+        </div>
+
         <button onClick={onCancel}
           className="w-full py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">
           Cancel
@@ -127,19 +148,25 @@ function MacroBar({ label, value, goal, color }) {
 // MEAL CARD
 // ========================================
 function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isActual }) {
-  const [servings, setServings]   = useState(Number(meal.servings) || 1);
-  const [busy, setBusy]           = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
-  const [showCopy, setShowCopy]   = useState(false);
+  const [servings, setServings]       = useState(Number(meal.servings) || 1);
+  const [servingInput, setServingInput] = useState(String(Number(meal.servings) || 1));
+  const [busy, setBusy]               = useState(false);
+  const [showDelete, setShowDelete]   = useState(false);
+  const [showCopy, setShowCopy]       = useState(false);
 
   const effectiveCal     = Math.round(meal.calories * servings);
   const effectiveProtein = Math.round(meal.protein  * servings);
   const effectiveCarbs   = Math.round(meal.carbs    * servings);
   const effectiveFat     = Math.round(meal.fat      * servings);
 
-  async function handleServingChange(newServings) {
-    setServings(newServings);
-    await onUpdateServings(meal.id, newServings);
+  async function handleServingBlur() {
+    const val = parseFloat(servingInput);
+    if (!isNaN(val) && val > 0 && val !== servings) {
+      setServings(val);
+      await onUpdateServings(meal.id, val);
+    } else {
+      setServingInput(String(servings)); // reset if invalid
+    }
   }
 
   return (
@@ -182,21 +209,21 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
           </div>
         </div>
 
-        {/* Serving size control */}
+        {/* Serving size — text input */}
         <div className="flex items-center gap-2 mb-2">
           <span className="text-xs text-gray-500">Servings:</span>
-          <div className="flex gap-1 flex-wrap">
-            {SERVING_OPTIONS.map((s) => (
-              <button key={s} onClick={() => handleServingChange(s)}
-                className={`text-xs px-2 py-0.5 rounded-lg border transition-colors ${
-                  servings === s
-                    ? "bg-blue-500 text-white border-blue-500 font-bold"
-                    : "bg-gray-50 text-gray-500 border-gray-200 hover:border-blue-300"
-                }`}>
-                {s}
-              </button>
-            ))}
-          </div>
+          <input
+            type="number"
+            value={servingInput}
+            onChange={(e) => setServingInput(e.target.value)}
+            onBlur={handleServingBlur}
+            min="0.1"
+            step="0.25"
+            className="w-16 text-sm text-center border border-gray-200 rounded-xl px-2 py-1 focus:outline-none focus:border-blue-400"
+          />
+          {servings !== 1 && (
+            <span className="text-xs text-gray-400">({servings}x)</span>
+          )}
         </div>
 
         {/* Macros */}
@@ -205,9 +232,6 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
           <span className="text-xs font-medium text-blue-500">P {effectiveProtein}g</span>
           <span className="text-xs font-medium text-emerald-500">C {effectiveCarbs}g</span>
           <span className="text-xs font-medium text-amber-500">F {effectiveFat}g</span>
-          {servings !== 1 && (
-            <span className="text-xs text-gray-400">({servings}x serving)</span>
-          )}
         </div>
       </div>
     </>
@@ -261,9 +285,9 @@ export default function DashboardPage() {
     setActual((prev) => prev.filter((m) => m.id !== id));
   }
 
-  async function updateServings(table, id, newServings, isActual) {
+  async function updateServings(table, id, newServings, isActualMeal) {
     await supabase.from(table).update({ servings: newServings }).eq("id", id);
-    if (isActual) {
+    if (isActualMeal) {
       setActual((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
     } else {
       setPlanned((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
@@ -304,7 +328,6 @@ export default function DashboardPage() {
     } catch (e) { console.error("Mark eaten error:", e); }
   }
 
-  // Compute totals using servings
   const actualTotals  = sumMeals(actual);
   const plannedTotals = sumMeals(planned);
   const remaining     = {
