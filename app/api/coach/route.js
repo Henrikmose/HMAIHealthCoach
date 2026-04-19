@@ -64,30 +64,31 @@ function detectEventType(text) {
   if (/bbq|barbecue|cookout|potluck|picnic/.test(lower)) return "social_food";
   if (/long day|work event|conference|meeting|presentation|interview|all.?day/.test(lower)) return "work";
   if (/travel|flight|airport|long drive|road trip/.test(lower)) return "travel";
-  if (/blood pressure|heart|cholesterol|diabetes|low.?sodium/.test(lower)) return "health_condition";
   return "general";
 }
 
-// What the AI should ask/say based on time and what's logged
+// Detect if user is going to a restaurant or someone's home for a meal
+function isRestaurantOrPartyMeal(text) {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return /dinner party|dinner date|restaurant|going out|eating out|party|wedding|birthday|someone('s| else| is).*cook|friend.*cook|family.*cook|steak dinner|sushi|italian|chinese|mexican|thai|indian|at a (restaurant|bar|pub|place)/.test(lower);
+}
+
 function getUnloggedMealPrompt(hour, nothingLogged) {
   if (!nothingLogged) return null;
   if (hour >= 7  && hour < 11) return "It's morning and nothing is logged yet. Ask: 'Have you had breakfast yet? If so, what did you have? I want to make sure I account for it before planning your day.'";
-  if (hour >= 11 && hour < 14) return "It's late morning / lunchtime and nothing is logged. Ask: 'Before I plan your meals, what have you eaten so far today? Even a rough idea helps me give you accurate advice.'";
-  if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't have any food logged for you today. What have you eaten so far? Knowing this is important before I suggest anything for the rest of the day.'";
-  if (hour >= 18 && hour < 21) return "It's evening and nothing is logged. Say: 'I don't see anything logged today. What did you eat earlier? I want to make sure I factor that in before suggesting anything for tonight.'";
-  if (hour >= 21) return "It's late and nothing is logged. Say: 'Nothing is logged for today — what did you eat? It's still worth tracking so we can learn from today and plan better tomorrow.'";
+  if (hour >= 11 && hour < 14) return "It's late morning/lunchtime and nothing is logged. Ask: 'Before I plan your meals, what have you eaten so far today? Even a rough idea helps me give you accurate advice.'";
+  if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't have any food logged for today. What have you eaten so far? Knowing this is important before I suggest anything for the rest of the day.'";
+  if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see anything logged today. What did you eat earlier? I want to factor that in before suggesting anything for tonight.'";
   return null;
 }
 
 export async function POST(req) {
   try {
     const body = await req.json();
-    // localHour and localDate now come FROM THE BROWSER — always accurate regardless of timezone
     const { message, context, history = [], userId, localHour, localDate: clientDate } = body;
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
-
-    // Use browser-provided time — fall back to server time only if not provided
     const hour = typeof localHour === "number" ? localHour : new Date().getHours();
     const today = getLocalDate(clientDate);
 
@@ -138,12 +139,12 @@ export async function POST(req) {
     const nothingEatenYet = todayMeals.length === 0;
     const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
 
-    // Event detection
     const allText = [...history.map(h => h.content || ""), message || ""].join(" ");
     const eventHour = extractEventHour(allText);
     const eventType = detectEventType(allText);
     const hoursUntilEvent = eventHour !== null ? eventHour - hour : null;
     const hasEventToday = eventHour !== null && hoursUntilEvent !== null && hoursUntilEvent > 0 && hoursUntilEvent < 24;
+    const hasRestaurantMeal = isRestaurantOrPartyMeal(allText);
 
     const goalLabel = {
       fat_loss: "Fat Loss", muscle_gain: "Muscle Gain", maintain: "Maintain Weight",
@@ -168,56 +169,52 @@ export async function POST(req) {
       if (["sport", "workout", "endurance"].includes(eventType)) {
         eventStrategy = `
 PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour}:00, ${hoursUntilEvent}h away):
-Plan the FULL remaining day around this event:
+Plan the FULL remaining day around this event.
 ${hoursUntilEvent > 4 ? "- Normal meal now with good protein and carbs" : ""}
-${hoursUntilEvent > 2 ? "- Pre-event meal 2-3 hours before: HIGH carbs, LOW fat, MODERATE protein (300-500 cal). Easy to digest." : ""}
-${hoursUntilEvent <= 2 ? "- URGENT: Event is very soon. Quick carbs only — banana, rice cakes, sports drink. NO heavy food." : ""}
-- Post-event recovery within 30-60 min after: HIGH protein + carbs (protein shake + banana, or chicken + rice)
-- Hydration reminder throughout the day
-- Never suggest high-fat or heavy meals within 2 hours of any physical event`;
-      } else if (eventType === "social_dining") {
+${hoursUntilEvent > 2 ? "- Pre-event Snack 2-3 hours before: HIGH carbs, LOW fat, easy to digest (300-400 cal)" : ""}
+${hoursUntilEvent <= 2 ? "- URGENT: Only quick carbs now — banana, rice cakes. NO heavy food." : ""}
+- Post-event recovery Snack within 30-60 min after: HIGH protein + carbs
+- You CAN suggest multiple Snacks for this scenario (pre-event + post-event)
+- Add timing context AFTER each meal block in plain text`;
+      } else if (eventType === "social_dining" || hasRestaurantMeal) {
         eventStrategy = `
-SOCIAL DINING STRATEGY (dinner/event at ${eventHour}:00, ${hoursUntilEvent}h away):
-- Eat LIGHT all day — lean protein + vegetables, low calorie
-- Keep daytime meals together under 900 cal
-- Small protein snack 30-60 min before event to avoid arriving starving
-- Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event itself
-- If alcohol likely: each drink = 100-150 cal — factor this in
-- Day total should still hit calorie goal when event meal is included`;
-      } else if (eventType === "social_drinks") {
-        eventStrategy = `
-SOCIAL DRINKS STRATEGY (${eventHour}:00, ${hoursUntilEvent}h away):
-- Eat a solid protein-rich meal BEFORE going out (reduces alcohol absorption)
-- Normal balanced meals during the day
-- Each drink = ~100-150 cal (beer ~150, wine ~120, spirits ~100)
-- Remind them to hydrate well during the day`;
+SOCIAL DINING / RESTAURANT STRATEGY:
+${hasRestaurantMeal ? `
+IMPORTANT: The user is eating at a restaurant or someone's home.
+DO NOT suggest specific dishes for that meal — you don't know the menu.
+Instead:
+1. Plan all meals BEFORE the event (breakfast, lunch, snack)
+2. For the dinner/event itself, say something like:
+   "For the dinner itself — since I don't know the menu, here's what to look for:
+   - Lean protein: grilled or baked over fried
+   - Skip heavy cream sauces
+   - Go easy on bread and appetizers
+   - Watch portion sizes on starches
+   When you're there, you can take a photo of the menu and I'll help you pick the best option."
+3. DO NOT create a meal block for the restaurant meal
+4. Budget calories for the event in your coaching text only` : ""}
+- Keep daytime meals light — lean protein + vegetables
+- Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event
+- Small protein snack 30-60 min before so they don't arrive starving`;
       } else if (eventType === "work") {
         eventStrategy = `
 LONG WORK DAY STRATEGY:
-- Steady energy focus — avoid sugar spikes and crashes
+- Steady energy, avoid sugar crashes
 - Breakfast: complex carbs + protein
-- Lunch: balanced, avoid heavy/fatty meals (cause afternoon fatigue)
-- Afternoon snack: light focus food (apple + peanut butter, Greek yogurt)
-- Never skip meals — hunger kills focus`;
-      } else if (eventType === "travel") {
-        eventStrategy = `
-TRAVEL DAY STRATEGY:
-- Pack portable protein-rich snacks (nuts, protein bars, jerky)
-- Avoid high-sodium airport food (causes bloating)
-- Hydrate extra — travel is dehydrating
-- Keep meals simple and easy to digest`;
+- Lunch: balanced, not too heavy
+- Afternoon Snack: light focus food`;
       }
     }
 
     let systemMessage = `You are ${userName}'s personal AI nutrition coach, health advisor, and supportive friend.
 
-This app serves ALL types of people — elite athletes, casual gym-goers, busy professionals, people managing health conditions like high blood pressure or diabetes, parents, seniors, and anyone wanting to live healthier. Your coaching must adapt completely to WHO the person is and WHAT their day looks like.
+This app serves ALL types of people — athletes, gym-goers, busy professionals, people managing health conditions, parents, seniors, and anyone wanting to live healthier. Adapt completely to WHO the person is and WHAT their day looks like.
 
 ══════════════════════════════════════════
 CRITICAL FORMATTING RULES
 ══════════════════════════════════════════
 1. NEVER use markdown. No **, no ##, no *, no _. None at all.
-2. Plain text only — markdown is not rendered and looks broken.
+2. Plain text only — markdown is not rendered.
 3. Emojis for structure only, not decoration.
 4. Short sections with line breaks. Never walls of text.
 
@@ -230,7 +227,6 @@ PERSONALITY
 ══════════════════════════════════════════
 - Like a knowledgeable friend who truly knows nutrition
 - Confident and direct — clear answers, not vague suggestions
-- Adaptable — a 65-year-old managing blood pressure gets different advice than a 25-year-old athlete
 - Honest — push back on unrealistic goals, say "Real Talk" when needed
 - Proactive — notice things, ask smart questions, offer insights
 
@@ -244,7 +240,7 @@ Very Active: ${veryActive ? "YES" : "NO"}
 ${currentWeight  ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
 ${targetWeight   ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
 ${healthConditions ? `Health Notes: ${healthConditions}` : ""}
-Local Time: ${hour}:00 (${timeOfDay}) — THIS IS THE USER'S ACTUAL LOCAL TIME
+Local Time: ${hour}:00 (${timeOfDay})
 
 DAILY TARGETS:
 Calories: ${goal.calories} | Protein: ${goal.protein}g | Carbs: ${goal.carbs}g | Fat: ${goal.fat}g
@@ -259,69 +255,76 @@ MEALS LOGGED TODAY:
 ${mealsSummary}
 
 ${hasEventToday ? `📅 EVENT TODAY: ${eventType} at ${eventHour}:00 (${hoursUntilEvent} hours from now)` : ""}
+${hasRestaurantMeal ? "🍽️ RESTAURANT/PARTY MEAL DETECTED" : ""}
 
 ══════════════════════════════════════════
-CRITICAL RULE — ASK BEFORE ASSUMING
+CRITICAL: ASK BEFORE ASSUMING
 ══════════════════════════════════════════
 ${nothingEatenYet ? `
 NOTHING IS LOGGED TODAY and it's ${hour}:00.
-
 NEVER assume the user hasn't eaten just because nothing is logged.
-People forget to log. New users especially don't log everything yet.
-
 ${unloggedPrompt || ""}
+Before giving meal suggestions or planning the day, ALWAYS ask what they've eaten.
+EXCEPTION: General nutrition questions can be answered without asking.
+` : `Today's logged meals are shown above. Use this data for all coaching.`}
 
-BEFORE giving meal suggestions or planning the day, ALWAYS ask what they've eaten so far.
-This is non-negotiable — coaching without knowing what was eaten is guessing, not coaching.
-
-EXCEPTION: If the user is explicitly asking a general nutrition question (not a meal plan or food suggestion),
-you can answer without asking. But if they want a meal plan, day plan, or food suggestion — ASK FIRST.
-` : `
-Today's logged meals are shown above. Use this data for all coaching.
-`}
-
-${hasEventToday ? eventStrategy : ""}
+${hasEventToday || hasRestaurantMeal ? eventStrategy : ""}
 
 ══════════════════════════════════════════
-TIME-AWARE PLANNING
+RESTAURANT / PARTY MEALS — CRITICAL RULE
 ══════════════════════════════════════════
-Current local time: ${hour}:00
-Only suggest meals relevant for the remaining time today:
-${hour < 10  ? "Breakfast, Lunch, Snack, Dinner all available" : ""}
-${hour >= 10 && hour < 14 ? "Breakfast time has passed. Available: Lunch, Snack, Dinner" : ""}
-${hour >= 14 && hour < 17 ? "Available: Snack, Dinner" : ""}
-${hour >= 17 && hour < 20 ? "Available: Dinner, Snack" : ""}
-${hour >= 20 ? "Available: Snack only" : ""}
-
-For weight loss confirmations ("yes please", "create a plan") → plan TOMORROW full day.
-For "today/tonight" requests → only remaining meals today.
-For event days → build the FULL day around the event with proper timing.
+When the user is eating at a restaurant, dinner party, or someone else's home:
+- DO NOT create a meal block for that meal — you don't know the menu
+- DO NOT guess specific dishes
+- Instead plan all meals BEFORE the event
+- For the event meal, give general guidance in plain text:
+  "For the dinner itself — I don't know the exact menu, so here's what to look for:
+  - Lean protein options (grilled over fried)
+  - Light on heavy sauces and cream-based dishes
+  - Go easy on bread, appetizers, and alcohol
+  - Watch portion sizes
+  When you're there, you can take a photo of the menu and I'll help you pick the best option for your goals."
+- Budget remaining calories in your text, not in a meal block
 
 ══════════════════════════════════════════
 MEAL BLOCK FORMAT — CRITICAL
 ══════════════════════════════════════════
-Every meal MUST use EXACTLY this format. No exceptions.
+Every meal MUST use EXACTLY this format.
 The meal type word MUST be ALONE on its own line.
-ONLY use: Breakfast, Lunch, Dinner, Snack
-NEVER add parentheses, descriptions, or labels after the meal type word.
 
-CORRECT:
-Lunch
-- Foods: Grilled chicken, 6oz; Brown rice, 1 cup; Broccoli, 1 cup
-- Calories: 615
-- Protein: 54
-- Carbs: 65
-- Fat: 7
+ALLOWED MEAL TYPES: Breakfast, Lunch, Dinner, Snack
 
-👉 Add timing or context notes here in plain text AFTER the block.
+SNACK RULE — VERY IMPORTANT:
+- You CAN suggest MULTIPLE Snacks in one plan
+- Each Snack gets its own separate block
+- Add timing context AFTER the block in plain text
+- NEVER suggest 2 Breakfasts, 2 Lunches, or 2 Dinners
+
+CORRECT (multiple snacks):
+Snack
+- Foods: Banana, 1 medium; Rice cakes, 2
+- Calories: 175
+- Protein: 3
+- Carbs: 42
+- Fat: 0
+
+👉 Have this 2 hours before your game for quick energy.
+
+Snack
+- Foods: Protein shake, 1 scoop; Milk whole, 1 cup
+- Calories: 270
+- Protein: 33
+- Carbs: 12
+- Fat: 8
+
+👉 Have this within 30 minutes after your game for recovery.
 
 WRONG:
-Lunch (pre-game)      FORBIDDEN
-**Lunch**             FORBIDDEN
-Snack (recovery)      FORBIDDEN
-Snack (post-game)     FORBIDDEN
+Snack (pre-game)     FORBIDDEN — no parentheses
+Snack (post-game)    FORBIDDEN — no parentheses
+**Snack**            FORBIDDEN — no markdown
 
-TOTAL FORMAT — plain text only, never a meal block:
+TOTAL FORMAT — plain text only:
 📊 Total: X cal | Xg protein | Xg carbs | Xg fat
 👉 [one coaching note]
 
@@ -330,31 +333,21 @@ CALORIE TARGETS
 ══════════════════════════════════════════
 Standard plans: ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal.
 Weight loss plans: ${weightLossCals} cal.
-Social event days: distribute so event meal is accounted for in daily total.
-If plan is below 85% of target, flag the gap.
+Social event days: distribute so event meal is included in budget.
+If plan is below 85% of target, flag the shortfall.
 If ${userName} has eaten ${totals.calories} cal already, only plan remaining ${remaining.calories} cal.
 
 ══════════════════════════════════════════
-HEALTH CONDITION COACHING
+TIME-AWARE PLANNING
 ══════════════════════════════════════════
-Adapt to any health context the user mentions:
-
-Blood pressure / heart health:
-- Low sodium (under 1500mg/day), high potassium (banana, sweet potato, spinach)
-- Heart-healthy fats (olive oil, avocado, salmon), DASH diet principles
-
-Diabetes / blood sugar:
-- Low glycemic index, pair carbs with protein, consistent meal timing
-- Avoid sugary drinks and refined carbs
-
-High cholesterol:
-- Low saturated fat, high fiber (oats, legumes), plant sterols
-
-Anti-inflammatory:
-- Omega-3 rich foods, colorful vegetables, minimize processed foods
-
-Energy / fatigue:
-- Complex carbs for sustained energy, iron-rich foods, avoid sugar crashes
+Current local time: ${hour}:00
+Only suggest meals for remaining time today:
+${hour < 10  ? "All meals available: Breakfast, Lunch, Snack, Dinner" : ""}
+${hour >= 10 && hour < 14 ? "Breakfast time has passed. Available: Lunch, Snack, Dinner" : ""}
+${hour >= 14 && hour < 17 ? "Available: Snack, Dinner" : ""}
+${hour >= 17 && hour < 20 ? "Available: Dinner, Snack" : ""}
+${hour >= 20 ? "Available: Snack only" : ""}
+Weight loss confirmations → plan TOMORROW full day.
 
 ══════════════════════════════════════════
 WEIGHT GOAL COACHING
@@ -362,10 +355,10 @@ WEIGHT GOAL COACHING
 Use weight amount THEY SAID — not profile target.
 Push back if unrealistic (max 2 lbs/week safely).
 ${veryActive
-  ? `${userName} is very active — just reduce food by ${foodCutAmount} cal. New target: ${weightLossCals} cal.`
-  : `Split deficit: eat ${foodCutAmount} cal less + burn 200 more (20-30 min walk). New target: ${weightLossCals} cal.`}
+  ? `Very active — just reduce food by ${foodCutAmount} cal. New target: ${weightLossCals} cal.`
+  : `Split: eat ${foodCutAmount} cal less + burn 200 more (20-30 min walk). New target: ${weightLossCals} cal.`}
 ${weightToLose ? `Timeline: ${weightToLose} lbs ÷ 1/week = ${weeksToGoal} weeks.` : ""}
-Ask: "Want a full meal plan for tomorrow at ${weightLossCals} cal? Or a 2-3 day plan?"
+Ask: "Want a meal plan for tomorrow at ${weightLossCals} cal? Or a 2-3 day plan?"
 When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.
 
 ══════════════════════════════════════════
@@ -409,6 +402,7 @@ Lentils cooked:    1 cup = 230 cal, 18g P, 40g C, 1g F
 Rice cakes:        1 cake = 35 cal, 1g P, 7g C, 0g F
 Cheddar cheese:    1oz = 113 cal, 7g P, 0g C, 9g F
 Walnuts:           1oz = 185 cal, 4g P, 4g C, 18g F
+Hummus:            2 tbsp = 70 cal, 2g P, 6g C, 4g F
 
 UNITS: Always use US units — oz, cups, tbsp, tsp, slices, pieces`;
 
@@ -439,22 +433,24 @@ Request: "${context.request || message}"
 Local time: ${hour}:00
 Nothing logged: ${nothingEatenYet}
 ${hasEventToday ? `Event: ${eventType} at ${eventHour}:00 (${hoursUntilEvent}h away)` : "No event detected"}
+${hasRestaurantMeal ? "Restaurant/party meal detected — DO NOT create meal block for that meal" : ""}
 
 ${nothingEatenYet ? `
-IMPORTANT: Nothing is logged. Before creating a meal plan, ask what they've eaten today.
-Do NOT skip this step. A meal plan without knowing current intake is inaccurate.
-Exception: if they explicitly said they haven't eaten anything ("I haven't eaten yet", "starting fresh"), proceed with planning from scratch.
+IMPORTANT: Nothing logged. Ask what they've eaten today before creating a plan.
+Exception: if they said "I haven't eaten yet" or "starting fresh", proceed.
 ` : ""}
 
-When planning:
-- Build around any event detected
-- Each meal type word alone on its own line
-- Plain text total after all meal blocks
-- Weight loss confirmations → plan TOMORROW
-- Apply event strategy if event detected`;
+SNACK RULES FOR THIS PLAN:
+- For athletic events: suggest TWO Snacks (pre-event + post-event recovery)
+- For normal days: one Snack is fine
+- Each Snack gets its own separate block with timing context after it
+- NEVER suggest 2 Breakfasts, 2 Lunches, or 2 Dinners
+
+For weight loss confirmations → plan TOMORROW.
+Each meal type alone on its own line — no parentheses.
+Plain text total after all meal blocks.`;
     }
 
-    // Build conversation
     const conversationMessages = [{ role: "system", content: systemMessage }];
     if (history?.length > 0) {
       for (const msg of history.slice(-10)) {
@@ -463,9 +459,7 @@ When planning:
     }
     conversationMessages.push({ role: "user", content: message || "" });
 
-    console.log(`=== AI REQUEST | ${userName} | ${hour}:00 local | ${today} ===`);
-    console.log(`Nothing eaten: ${nothingEatenYet} | Event: ${eventType} at ${eventHour} (${hoursUntilEvent}h)`);
-    console.log(`Context: ${context?.type} | Msg: ${message}`);
+    console.log(`=== AI | ${userName} | ${hour}:00 | Event: ${eventType} | Restaurant: ${hasRestaurantMeal}`);
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
