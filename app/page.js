@@ -61,6 +61,9 @@ function isMealPlanningRequest(text) {
     /yes.*plan/i,
     /sure.*plan/i,
     /create.*plan/i,
+    /plan.*today/i,
+    /plan.*tonight/i,
+    /plan.*game/i,
   ].some((p) => p.test(text));
 }
 
@@ -107,7 +110,11 @@ function parseAllMeals(text) {
 
     let matchedType = null;
     for (const type of mealTypes) {
-      if (lineLower === type || lineLower.startsWith(type + " ") || lineLower.startsWith(type + "(")) {
+      if (
+        lineLower === type ||
+        lineLower.startsWith(type + " ") ||
+        lineLower.startsWith(type + "(")
+      ) {
         if (!lineLower.includes("total") && !lineLower.includes("calories:") && !line.startsWith("-")) {
           matchedType = type;
           break;
@@ -120,8 +127,12 @@ function parseAllMeals(text) {
       let j = i + 1;
 
       while (j < lines.length && j < i + 15) {
-        const fl = lines[j], fll = fl.toLowerCase().trim();
-        const isNextMeal = mealTypes.some(t => fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "("));
+        const fl = lines[j];
+        const fll = fl.toLowerCase().trim();
+
+        const isNextMeal = mealTypes.some(t =>
+          fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "(")
+        );
         const isTotal = fll.startsWith("total") || fll.includes("📊") || fll.startsWith("this plan") || fll.startsWith("---");
         if (isNextMeal || isTotal) break;
 
@@ -134,10 +145,19 @@ function parseAllMeals(text) {
       }
 
       if (foods && calories !== null) {
-        meals.push({ mealType: matchedType, food: foods, calories: Math.round(calories), protein: Math.round(protein||0), carbs: Math.round(carbs||0), fat: Math.round(fat||0) });
+        meals.push({
+          mealType: matchedType,
+          food: foods,
+          calories: Math.round(calories),
+          protein:  Math.round(protein || 0),
+          carbs:    Math.round(carbs   || 0),
+          fat:      Math.round(fat     || 0),
+        });
       }
       i = j;
-    } else { i++; }
+    } else {
+      i++;
+    }
   }
 
   // Inline fallback
@@ -152,15 +172,14 @@ function parseAllMeals(text) {
   return meals;
 }
 
-// Generate a unique key for a meal based on its content
-// This prevents false "already added" when same meal type appears in different conversations
+// Content-based key to prevent false "already added"
 function getMealKey(msgIdx, meal) {
   const foodKey = meal.food.substring(0, 20).replace(/\s/g, "_");
   return `${msgIdx}-${meal.mealType}-${meal.calories}-${foodKey}`;
 }
 
 // ========================================
-// SAVE VIA SERVER
+// SAVE VIA SERVER ROUTE
 // ========================================
 async function saveMealViaAPI(table, meal, userId) {
   try {
@@ -219,11 +238,10 @@ export default function HomePage() {
   const messagesEndRef = useRef(null);
   const textareaRef    = useRef(null);
 
-  // Persist savedPlanKeys to localStorage
+  // Persist savedPlanKeys
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const today = getLocalDate();
-      localStorage.setItem("savedPlanKeysDate", today);
+      localStorage.setItem("savedPlanKeysDate", getLocalDate());
       localStorage.setItem("savedPlanKeys", JSON.stringify(savedPlanKeys));
     }
   }, [savedPlanKeys]);
@@ -236,7 +254,11 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    if (userId) { loadGoals(userId); loadTodayMeals(userId); loadTodayMessages(userId); }
+    if (userId) {
+      loadGoals(userId);
+      loadTodayMeals(userId);
+      loadTodayMessages(userId);
+    }
   }, [userId]);
 
   useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [history]);
@@ -266,7 +288,8 @@ export default function HomePage() {
     try {
       const today = getLocalDate();
       const { data } = await supabase
-        .from("ai_messages").select("*").eq("user_id", uid)
+        .from("ai_messages").select("*")
+        .eq("user_id", uid)
         .gte("created_at", `${today}T00:00:00.000Z`)
         .lte("created_at", `${today}T23:59:59.999Z`)
         .order("created_at", { ascending: true });
@@ -317,16 +340,25 @@ export default function HomePage() {
         context = newActiveMealLog;
       }
 
-      const res  = await fetch("/api/coach", {
+      const res = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: trimmed, context, history: newHistory.slice(-8).map(m => ({ role: m.role, content: m.content })), userId: uid }),
+        body: JSON.stringify({
+          message: trimmed,
+          context,
+          history: newHistory.slice(-8).map(m => ({ role: m.role, content: m.content })),
+          userId: uid,
+          // ✅ Send browser's local time — always accurate regardless of server timezone
+          localHour: new Date().getHours(),
+          localDate: getLocalDate(),
+        }),
       });
 
       const data  = await res.json();
       const reply = data.reply || "Sorry, could not get a response.";
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
+      // Auto-save food logs
       if (newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
         if (parsed.length > 0) {
@@ -407,7 +439,12 @@ export default function HomePage() {
             <p className="font-bold text-gray-800 text-lg">Your AI Health Coach</p>
             <p className="text-sm text-gray-400 mt-2 leading-relaxed max-w-xs">Tell me what you ate, ask for a meal plan, or get nutrition advice.</p>
             <div className="mt-5 flex flex-col gap-2 w-full max-w-xs">
-              {["I had 8oz chicken and 1 cup rice for lunch", "Create a meal plan for tomorrow", "What should I eat for dinner?", "I want to drop 10 pounds"].map((s) => (
+              {[
+                "I had 8oz chicken and 1 cup rice for lunch",
+                "Create a meal plan for tomorrow",
+                "What should I eat for dinner?",
+                "I want to drop 10 pounds",
+              ].map((s) => (
                 <button key={s} onClick={() => setMessage(s)}
                   className="text-left text-sm px-4 py-3 rounded-2xl border border-gray-200 bg-white text-gray-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-all shadow-sm">
                   {s}
