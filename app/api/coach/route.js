@@ -718,7 +718,30 @@ Hummus:            2 tbsp = 70 cal, 2g P, 6g C, 4g F
 UNITS: Always use US units — oz, cups, tbsp, tsp, slices, pieces`;
 
     if (context?.type === "food_log") {
-      systemMessage += `
+
+if (contextType === "food_log") {
+  
+  // Smart duplicate meal detection - converts duplicates to snacks
+  if (contextData.mealType) {
+    let finalMealType = contextData.mealType;
+    
+    // Check if user already logged this meal type today
+    const existingMealOfSameType = todayMeals.find(meal => 
+      meal.meal_type.toLowerCase() === contextData.mealType.toLowerCase()
+    );
+    
+    if (existingMealOfSameType && contextData.mealType !== 'snack') {
+      finalMealType = 'snack';
+      // Add context to system prompt about the meal type change
+      systemMessage += `\n\nIMPORTANT DUPLICATE MEAL HANDLING: The user already logged ${contextData.mealType} today, so log this as a SNACK instead. Tell the user: "I see you already logged ${contextData.mealType} today. I'll add this as a snack instead."`;
+    }
+    
+    // Update the contextData to use the final meal type
+    contextData.mealType = finalMealType;
+  }
+  
+  systemMessage += `
+
 
 ══════════════════════════════════════════
 FOOD LOGGING MODE
