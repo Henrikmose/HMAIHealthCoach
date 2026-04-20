@@ -158,13 +158,38 @@ export async function POST(req) {
     const foodCutAmount = veryActive ? 500 : 300;
     const weightLossCals = goal.calories - foodCutAmount;
 
+    // Only show weight loss deficit coaching if user is explicitly asking about losing weight
+    const allLower = (message || "").toLowerCase();
+    const isWeightLossConversation = weightToLose !== null ||
+      /lose weight|losing weight|lose \d|drop \d|cut calories|deficit|slim down/.test(allLower);
+
     const mealsSummary = todayMeals.length > 0
       ? todayMeals.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal, ${m.protein}g P, ${m.carbs}g C, ${m.fat}g F)`).join("\n")
       : "Nothing logged yet today";
 
-    // Build event strategy
+    // Build event strategy — restaurant triggers independently of today/tomorrow
     let eventStrategy = "";
-    if (hasEventToday && eventType) {
+
+    if (hasRestaurantMeal) {
+      eventStrategy = `
+RESTAURANT / UNKNOWN MENU STRATEGY — MANDATORY:
+The user is eating at a restaurant, dinner party, or someone's home.
+You DO NOT know the menu. You CANNOT guess what they will eat.
+
+RULES — NO EXCEPTIONS:
+1. Create meal blocks ONLY for meals BEFORE the event (Breakfast, Lunch, Snack)
+2. Do NOT create a Dinner block. Not even an estimate. Not steak, not anything.
+3. After the pre-event meal blocks, write this in plain text:
+   "For the dinner itself — I don't know the exact menu, so here's what to look for:
+   - Go for grilled or baked protein over fried
+   - Skip heavy cream sauces and rich sides
+   - Go easy on bread and appetizers
+   - Watch portion sizes on starches
+   When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
+4. Tell them how many calories they have budgeted for the event in plain text only
+5. Keep pre-event meals light — lean protein + vegetables
+6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event`;
+    } else if (hasEventToday && eventType) {
       if (["sport", "workout", "endurance"].includes(eventType)) {
         eventStrategy = `
 PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour}:00, ${hoursUntilEvent}h away):
@@ -175,26 +200,6 @@ ${hoursUntilEvent <= 2 ? "- URGENT: Only quick carbs now — banana, rice cakes.
 - Post-event recovery Snack within 30-60 min after: HIGH protein + carbs
 - You CAN suggest multiple Snacks for this scenario (pre-event + post-event)
 - Add timing context AFTER each meal block in plain text`;
-      } else if (eventType === "social_dining" || hasRestaurantMeal) {
-        eventStrategy = `
-SOCIAL DINING / RESTAURANT STRATEGY:
-${hasRestaurantMeal ? `
-IMPORTANT: The user is eating at a restaurant or someone's home.
-DO NOT suggest specific dishes for that meal — you don't know the menu.
-Instead:
-1. Plan all meals BEFORE the event (breakfast, lunch, snack)
-2. For the dinner/event itself, say something like:
-   "For the dinner itself — since I don't know the menu, here's what to look for:
-   - Lean protein: grilled or baked over fried
-   - Skip heavy cream sauces
-   - Go easy on bread and appetizers
-   - Watch portion sizes on starches
-   When you're there, you can take a photo of the menu and I'll help you pick the best option."
-3. DO NOT create a meal block for the restaurant meal
-4. Budget calories for the event in your coaching text only` : ""}
-- Keep daytime meals light — lean protein + vegetables
-- Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event
-- Small protein snack 30-60 min before so they don't arrive starving`;
       } else if (eventType === "work") {
         eventStrategy = `
 LONG WORK DAY STRATEGY:
@@ -363,8 +368,8 @@ TOTAL FORMAT — plain text only:
 ══════════════════════════════════════════
 CALORIE TARGETS FOR MEAL PLANS
 ══════════════════════════════════════════
-Standard plans: ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal.
-Weight loss plans: ${weightLossCals} cal.
+Standard plans: ${Math.round(goal.calories * 0.92)}-${goal.calories} cal.
+${isWeightLossConversation ? `Weight loss plan: ${weightLossCals} cal.` : ""}
 Social event days: distribute so event meal is included in budget.
 If plan is below 85% of target, flag the shortfall.
 If ${userName} has eaten ${totals.calories} cal already, only plan remaining ${remaining.calories} cal.
@@ -384,14 +389,14 @@ Weight loss confirmations → plan TOMORROW full day.
 ══════════════════════════════════════════
 WEIGHT GOAL COACHING
 ══════════════════════════════════════════
-Use weight amount THEY SAID — not profile target.
+${isWeightLossConversation ? `Use weight amount THEY SAID — not profile target.
 Push back if unrealistic (max 2 lbs/week safely).
 ${veryActive
   ? `Very active — just reduce food by ${foodCutAmount} cal. New target: ${weightLossCals} cal.`
   : `Split: eat ${foodCutAmount} cal less + burn 200 more (20-30 min walk). New target: ${weightLossCals} cal.`}
 ${weightToLose ? `Timeline: ${weightToLose} lbs ÷ 1/week = ${weeksToGoal} weeks.` : ""}
 Ask: "Want a meal plan for tomorrow at ${weightLossCals} cal? Or a 2-3 day plan?"
-When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.
+When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.` : `If user asks about losing weight or mentions lbs to lose, THEN calculate a deficit plan. Otherwise use ${goal.calories} cal for all plans.`}
 
 ══════════════════════════════════════════
 MULTI-FOOD LOGGING
