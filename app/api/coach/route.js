@@ -550,12 +550,15 @@ If ${userName} has eaten ${totals.calories} cal already, only plan remaining ${r
 TIME-AWARE PLANNING
 ══════════════════════════════════════════
 Current local time: ${hour}:00
-Only suggest meals for remaining time today:
+CRITICAL: Only suggest meals for remaining time today.
+
 ${hour < 10  ? "All meals available: Breakfast, Lunch, Snack, Dinner" : ""}
-${hour >= 10 && hour < 14 ? "Breakfast time has passed. Available: Lunch, Snack, Dinner" : ""}
-${hour >= 14 && hour < 17 ? "Available: Snack, Dinner" : ""}
-${hour >= 17 && hour < 20 ? "Available: Dinner, Snack" : ""}
-${hour >= 20 ? "Available: Snack only" : ""}
+${hour >= 10 && hour < 14 ? "Breakfast time has passed. Available: Lunch, Snack, Dinner. DO NOT suggest Breakfast." : ""}
+${hour >= 14 && hour < 17 ? "Breakfast and Lunch time have passed. Available: Snack, Dinner. DO NOT suggest Breakfast or Lunch." : ""}
+${hour >= 17 && hour < 20 ? "Available: Dinner, Snack only. DO NOT suggest Breakfast, Lunch, or afternoon Snacks." : ""}
+${hour >= 20 ? "Available: Snack only. DO NOT suggest any full meals." : ""}
+
+If it's 6pm or later and user has a dinner event, suggest only light pre-dinner snack if anything.
 Weight loss confirmations → plan TOMORROW full day.
 
 ══════════════════════════════════════════
@@ -632,6 +635,8 @@ These all count as quantities already provided:
 - Fractions: "half an avocado", "half a banana", "1/2 cup"
 - Portions: "a slice", "one slice", "a piece", "a medium", "a large"
 - Descriptive: "a handful", "a small bowl"
+- Complete items: "a whole avocado", "whole banana", "entire apple"
+- When macros provided: "protein shake - 150 cal, 30g protein" = complete info
 
 DECISION TREE:
 Step 1: Does the original message contain ALL foods WITH quantities (using any of the above)?
@@ -644,6 +649,8 @@ Step 2 (after follow-up): Do you now have quantities for ALL foods?
 
 EXAMPLES:
 "I had a slice of toast, half an avocado, and 2 eggs" → ALL quantities present → LOG IMMEDIATELY
+"I had a whole avocado and 3 eggs" → ALL quantities present → LOG IMMEDIATELY  
+"I had a protein shake - 150 cal, 30g protein" → Complete info → LOG IMMEDIATELY
 "I had chicken and rice" → NO quantities → ask "How much chicken did you have?"
 "I had 6oz chicken" → quantity present for chicken only → log chicken immediately
 
