@@ -25,15 +25,7 @@ function formatDateLabel(dateStr) {
 
 function sumMeals(meals) {
   return (meals || []).reduce(
-    (t, m) => {
-      const s = Number(m.servings || 1);
-      return {
-        calories: t.calories + Number(m.calories||0) * s,
-        protein:  t.protein  + Number(m.protein||0)  * s,
-        carbs:    t.carbs    + Number(m.carbs||0)    * s,
-        fat:      t.fat      + Number(m.fat||0)      * s,
-      };
-    },
+    (t, m) => ({ calories: t.calories + Number(m.calories||0), protein: t.protein + Number(m.protein||0), carbs: t.carbs + Number(m.carbs||0), fat: t.fat + Number(m.fat||0) }),
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
 }
@@ -47,88 +39,6 @@ function groupByType(meals) {
 
 const MEAL_EMOJI = { breakfast:"🌅", lunch:"☀️", dinner:"🌙", snack:"🍎" };
 
-// ========================================
-// CONFIRM DIALOG
-// ========================================
-function ConfirmDialog({ message, onConfirm, onCancel }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.4)" }}>
-      <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-xs">
-        <p className="text-sm font-semibold text-gray-800 mb-1">Delete meal?</p>
-        <p className="text-xs text-gray-500 mb-4">{message}</p>
-        <div className="flex gap-2">
-          <button onClick={onCancel}
-            className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">
-            Cancel
-          </button>
-          <button onClick={onConfirm}
-            className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-500 text-white hover:bg-red-600 transition-colors">
-            Delete
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ========================================
-// COPY MEAL DIALOG — with date picker
-// ========================================
-function CopyMealDialog({ meal, currentDate, onCopy, onCancel }) {
-  const today = getLocalDate();
-  const [customDate, setCustomDate] = useState("");
-
-  const quickOptions = [
-    { label: "Tomorrow", date: getShiftedDate(today, 1) },
-    { label: "Day after tomorrow", date: getShiftedDate(today, 2) },
-  ].filter(o => o.date !== currentDate);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center px-6" style={{ background: "rgba(0,0,0,0.4)" }}>
-      <div className="bg-white rounded-2xl shadow-xl p-5 w-full max-w-xs">
-        <p className="text-sm font-semibold text-gray-800 mb-1">Copy meal to...</p>
-        <p className="text-xs text-gray-500 mb-3 truncate">{meal.food}</p>
-
-        {/* Quick options */}
-        <div className="space-y-2 mb-3">
-          {quickOptions.map((opt) => (
-            <button key={opt.date} onClick={() => onCopy(opt.date)}
-              className="w-full py-2.5 rounded-xl text-sm font-semibold bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition-colors text-left px-4">
-              📅 {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Date picker */}
-        <div className="border border-gray-200 rounded-xl p-3 mb-3">
-          <p className="text-xs text-gray-500 mb-1.5">Pick a specific date:</p>
-          <input
-            type="date"
-            value={customDate}
-            min={getShiftedDate(today, 1)}
-            onChange={(e) => setCustomDate(e.target.value)}
-            className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2 focus:outline-none focus:border-blue-400"
-          />
-          {customDate && (
-            <button onClick={() => onCopy(customDate)}
-              className="w-full mt-2 py-2 rounded-xl text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors">
-              Copy to {formatDateLabel(customDate)}
-            </button>
-          )}
-        </div>
-
-        <button onClick={onCancel}
-          className="w-full py-2.5 rounded-xl text-sm font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors">
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ========================================
-// MACRO BAR
-// ========================================
 function MacroBar({ label, value, goal, color }) {
   const pct = goal > 0 ? Math.min(100, Math.round((value/goal)*100)) : 0;
   return (
@@ -144,103 +54,39 @@ function MacroBar({ label, value, goal, color }) {
   );
 }
 
-// ========================================
-// MEAL CARD
-// ========================================
-function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isActual }) {
-  const [servings, setServings]       = useState(Number(meal.servings) || 1);
-  const [servingInput, setServingInput] = useState(String(Number(meal.servings) || 1));
-  const [busy, setBusy]               = useState(false);
-  const [showDelete, setShowDelete]   = useState(false);
-  const [showCopy, setShowCopy]       = useState(false);
-
-  const effectiveCal     = Math.round(meal.calories * servings);
-  const effectiveProtein = Math.round(meal.protein  * servings);
-  const effectiveCarbs   = Math.round(meal.carbs    * servings);
-  const effectiveFat     = Math.round(meal.fat      * servings);
-
-  async function handleServingBlur() {
-    const val = parseFloat(servingInput);
-    if (!isNaN(val) && val > 0 && val !== servings) {
-      setServings(val);
-      await onUpdateServings(meal.id, val);
-    } else {
-      setServingInput(String(servings)); // reset if invalid
-    }
-  }
+function MealCard({ meal, onDelete, onMarkEaten, isActual }) {
+  const [busy, setBusy] = useState(false);
+  async function act(fn) { setBusy(true); await fn(); setBusy(false); }
 
   return (
-    <>
-      {showDelete && (
-        <ConfirmDialog
-          message={`"${meal.food}" will be removed from your log.`}
-          onConfirm={async () => { setShowDelete(false); setBusy(true); await onDelete(meal.id); setBusy(false); }}
-          onCancel={() => setShowDelete(false)}
-        />
-      )}
-      {showCopy && (
-        <CopyMealDialog
-          meal={meal}
-          currentDate={meal.date}
-          onCopy={async (targetDate) => { setShowCopy(false); await onCopy(meal, targetDate); }}
-          onCancel={() => setShowCopy(false)}
-        />
-      )}
-
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
-        {/* Food name and action buttons */}
-        <div className="flex justify-between items-start gap-2 mb-2">
-          <p className="text-sm font-semibold text-gray-800 leading-snug flex-1">{meal.food}</p>
-          <div className="flex gap-1.5 flex-shrink-0">
-            {!isActual && (
-              <button onClick={async () => { setBusy(true); await onMarkEaten(meal); setBusy(false); }} disabled={busy}
-                className="text-xs px-2.5 py-1.5 rounded-xl bg-emerald-500 text-white font-semibold hover:bg-emerald-600 transition-colors disabled:opacity-40 shadow-sm">
-                {busy ? "..." : "✓ Ate"}
-              </button>
-            )}
-            <button onClick={() => setShowCopy(true)} disabled={busy}
-              className="text-xs px-2.5 py-1.5 rounded-xl bg-blue-50 text-blue-500 border border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-40">
-              📋
-            </button>
-            <button onClick={() => setShowDelete(true)} disabled={busy}
-              className="text-xs px-2.5 py-1.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-red-400 transition-colors disabled:opacity-40">
-              ✕
-            </button>
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
+      <div className="flex justify-between items-start gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-800 leading-snug">{meal.food}</p>
+          <div className="flex gap-3 mt-1.5 flex-wrap">
+            <span className="text-xs font-medium text-gray-500">🔥 {meal.calories} cal</span>
+            <span className="text-xs font-medium text-blue-500">P {meal.protein}g</span>
+            <span className="text-xs font-medium text-emerald-500">C {meal.carbs}g</span>
+            <span className="text-xs font-medium text-amber-500">F {meal.fat}g</span>
           </div>
         </div>
-
-        {/* Serving size — text input */}
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs text-gray-500">Servings:</span>
-          <input
-            type="number"
-            value={servingInput}
-            onChange={(e) => setServingInput(e.target.value)}
-            onBlur={handleServingBlur}
-            min="0.1"
-            step="0.25"
-            className="w-16 text-sm text-center border border-gray-200 rounded-xl px-2 py-1 focus:outline-none focus:border-blue-400"
-          />
-          {servings !== 1 && (
-            <span className="text-xs text-gray-400">({servings}x)</span>
+        <div className="flex gap-1.5 flex-shrink-0">
+          {!isActual && (
+            <button onClick={() => act(() => onMarkEaten(meal))} disabled={busy}
+              className="text-xs px-3 py-1.5 rounded-xl bg-emerald-500 text-white font-semibold hover:bg-emerald-600 transition-colors disabled:opacity-40 shadow-sm">
+              {busy ? "..." : "✓ Ate"}
+            </button>
           )}
-        </div>
-
-        {/* Macros */}
-        <div className="flex gap-3 flex-wrap">
-          <span className="text-xs font-medium text-gray-500">🔥 {effectiveCal} cal</span>
-          <span className="text-xs font-medium text-blue-500">P {effectiveProtein}g</span>
-          <span className="text-xs font-medium text-emerald-500">C {effectiveCarbs}g</span>
-          <span className="text-xs font-medium text-amber-500">F {effectiveFat}g</span>
+          <button onClick={() => act(() => onDelete(meal.id))} disabled={busy}
+            className="text-xs px-2.5 py-1.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-red-400 transition-colors disabled:opacity-40">
+            {busy ? "..." : "✕"}
+          </button>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
-// ========================================
-// MAIN COMPONENT
-// ========================================
 export default function DashboardPage() {
   const [selectedDate, setSelectedDate] = useState(getLocalDate());
   const [loading, setLoading]           = useState(true);
@@ -249,7 +95,6 @@ export default function DashboardPage() {
   const [goal, setGoal]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
   const [planned, setPlanned]           = useState([]);
   const [actual, setActual]             = useState([]);
-  const [copySuccess, setCopySuccess]   = useState(null);
 
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
@@ -258,7 +103,9 @@ export default function DashboardPage() {
     if (uid) setUserId(uid);
   }, []);
 
-  useEffect(() => { if (userId) load(userId, selectedDate); }, [userId, selectedDate]);
+  useEffect(() => {
+    if (userId) load(userId, selectedDate);
+  }, [userId, selectedDate]);
 
   async function load(uid, date) {
     setLoading(true);
@@ -271,6 +118,7 @@ export default function DashboardPage() {
       if (g.data) setGoal(g.data);
       setPlanned(p.data || []);
       setActual(a.data  || []);
+      console.log(`✅ Dashboard loaded: ${p.data?.length||0} planned, ${a.data?.length||0} actual meals`);
     } catch (e) { console.error("Dashboard load error:", e); }
     finally { setLoading(false); }
   }
@@ -285,69 +133,35 @@ export default function DashboardPage() {
     setActual((prev) => prev.filter((m) => m.id !== id));
   }
 
-  async function updateServings(table, id, newServings, isActualMeal) {
-    await supabase.from(table).update({ servings: newServings }).eq("id", id);
-    if (isActualMeal) {
-      setActual((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
-    } else {
-      setPlanned((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
-    }
-  }
-
-  async function copyMeal(meal, targetDate, sourceTable) {
-    const uid = userId || localStorage.getItem("user_id");
-    const targetTable = sourceTable === "planned_meals" ? "planned_meals" : "actual_meals";
-    try {
-      await supabase.from(targetTable).insert([{
-        user_id:   uid,
-        date:      targetDate,
-        meal_type: meal.meal_type,
-        food:      meal.food,
-        calories:  meal.calories,
-        protein:   meal.protein,
-        carbs:     meal.carbs,
-        fat:       meal.fat,
-        servings:  meal.servings || 1,
-        ...(targetTable === "planned_meals" ? { status: "planned", suggested_time: null } : {}),
-      }]);
-      setCopySuccess(`Copied to ${formatDateLabel(targetDate)}!`);
-      setTimeout(() => setCopySuccess(null), 2500);
-    } catch (e) { console.error("Copy meal error:", e); }
-  }
-
   async function markEaten(meal) {
     const uid = userId || localStorage.getItem("user_id");
     try {
-      await supabase.from("actual_meals").insert([{
+      const { error } = await supabase.from("actual_meals").insert([{
         user_id: uid, date: selectedDate, meal_type: meal.meal_type,
         food: meal.food, calories: meal.calories, protein: meal.protein,
         carbs: meal.carbs, fat: meal.fat, servings: meal.servings || 1,
       }]);
+      if (error) { console.error("Mark eaten error:", error); return; }
       await supabase.from("planned_meals").delete().eq("id", meal.id);
       await load(uid, selectedDate);
-    } catch (e) { console.error("Mark eaten error:", e); }
+    } catch (e) { console.error("Mark eaten exception:", e); }
   }
 
   const actualTotals  = sumMeals(actual);
   const plannedTotals = sumMeals(planned);
-  const remaining     = {
-    calories: Math.max(0, goal.calories - actualTotals.calories),
-    protein:  Math.max(0, goal.protein  - actualTotals.protein),
-    carbs:    Math.max(0, goal.carbs    - actualTotals.carbs),
-    fat:      Math.max(0, goal.fat      - actualTotals.fat),
+
+  // FIX: Remaining = Goal - Eaten - Planned (accounts for what's coming up)
+  const remaining = {
+    calories: Math.max(0, goal.calories - actualTotals.calories - plannedTotals.calories),
+    protein:  Math.max(0, goal.protein  - actualTotals.protein  - plannedTotals.protein),
+    carbs:    Math.max(0, goal.carbs    - actualTotals.carbs    - plannedTotals.carbs),
+    fat:      Math.max(0, goal.fat      - actualTotals.fat      - plannedTotals.fat),
   };
   const calPct = goal.calories > 0 ? Math.min(100, Math.round((actualTotals.calories/goal.calories)*100)) : 0;
 
   return (
     <div className="min-h-screen pb-8 bg-gray-50">
       <HamburgerMenu />
-
-      {/* ── Copy success toast ── */}
-      {copySuccess && (
-        <div className="fixed top-16 left-1/2 transform -translate-x-1/2 z-50 bg-emerald-500 text-white text-sm font-semibold px-4 py-2 rounded-2xl shadow-lg">
-          ✅ {copySuccess}
-        </div>
-      )}
 
       {/* ── Header ── */}
       <div className="px-4 pt-14 pb-4 bg-white border-b border-gray-100">
@@ -430,15 +244,7 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => (
-                    <MealCard key={m.id} meal={m}
-                      onDelete={deletePlanned}
-                      onMarkEaten={markEaten}
-                      onUpdateServings={(id, s) => updateServings("planned_meals", id, s, false)}
-                      onCopy={(meal, date) => copyMeal(meal, date, "planned_meals")}
-                      isActual={false}
-                    />
-                  ))}
+                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deletePlanned} onMarkEaten={markEaten} isActual={false} />)}
                 </div>
               ))}
             </div>
@@ -460,15 +266,7 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => (
-                    <MealCard key={m.id} meal={m}
-                      onDelete={deleteActual}
-                      onMarkEaten={() => {}}
-                      onUpdateServings={(id, s) => updateServings("actual_meals", id, s, true)}
-                      onCopy={(meal, date) => copyMeal(meal, date, "actual_meals")}
-                      isActual={true}
-                    />
-                  ))}
+                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deleteActual} onMarkEaten={() => {}} isActual={true} />)}
                 </div>
               ))}
             </div>
