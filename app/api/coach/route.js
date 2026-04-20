@@ -227,9 +227,14 @@ MEAL TIMELINE RULES:
     const nextEvent = idx < events.length - 1 ? events[idx + 1] : null;
 
     if (isPhysicalEvent(event.type)) {
+      // Smart pre-event timing based on workout hour
+      const preEventAdvice = event.hour < 8 
+        ? "30 minutes before: light pre-event Snack (banana, coffee) — don't wake up early to eat"
+        : "2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal)";
+      
       strategy += `
 ${event.type.toUpperCase()} at ${event.hour}:00 (${event.label}):
-- 2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal)
+- ${preEventAdvice}
 - Within 1 hour after: recovery meal — HIGH protein + carbs
 ${nextEvent && isSocialEvent(nextEvent.type) ? `- NOTE: Social event follows at ${nextEvent.hour}:00 — keep recovery snack SMALL, save room for dinner` : ""}
 `;
@@ -275,10 +280,10 @@ function isRestaurantOrPartyMeal(text) {
 
 function getUnloggedMealPrompt(hour, nothingLogged) {
   if (!nothingLogged) return null;
-  if (hour >= 7 && hour < 11) return "It's morning and nothing is logged yet. Ask: 'Have you had breakfast yet today?'";
-  if (hour >= 11 && hour < 14) return "It's late morning/lunchtime and nothing is logged. Ask: 'I don't have anything logged yet — did you have breakfast? What about lunch?'";
-  if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't have any meals logged yet — have you eaten today?'";
-  if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see anything logged today — have you not had a chance to log, or is today a lighter eating day?'";
+  if (hour >= 7 && hour < 11) return "It's morning and nothing is logged yet. Before I plan your day — have you had breakfast yet?";
+  if (hour >= 11 && hour < 14) return "Before I plan your meals — have you eaten anything today? Breakfast, lunch, or snacks?";
+  if (hour >= 14 && hour < 18) return "Before I plan your meals — what have you eaten today so far?";
+  if (hour >= 18) return "I don't see anything logged today — what have you had to eat, or is today a lighter eating day?";
   return null;
 }
 
@@ -332,9 +337,19 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat - totals.fat),
     };
 
+    // Determine if user is planning tomorrow vs today based on events
+    const planningTomorrow = events.some(e => e.isTomorrow);
+    const planningToday = events.some(e => !e.isTomorrow);
+    
+    // For cross-day events, prioritize tomorrow planning if tomorrow events exist
+    const focusOnTomorrow = planningTomorrow && (events.filter(e => e.isTomorrow).length >= events.filter(e => !e.isTomorrow).length);
+
     const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
     const nothingEatenYet = todayMeals.length === 0;
     const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
+    
+    // Skip asking about today's meals if user is planning tomorrow
+    const shouldAskAboutTodaysMeals = nothingEatenYet && !planningTomorrow;
 
     // Use only the CURRENT message for event detection to avoid stale history picking up old events.
     // Fall back to recent history only if current message has no events.
@@ -535,12 +550,15 @@ ${missingEventTimes && !hasAnyEvent ? "⚠️ EVENTS MENTIONED BUT NO TIMES PROV
 ══════════════════════════════════════════
 CRITICAL: ASK BEFORE ASSUMING
 ══════════════════════════════════════════
-${nothingEatenYet ? `
+${shouldAskAboutTodaysMeals ? `
 NOTHING IS LOGGED TODAY and it's ${hour}:00.
 NEVER assume the user hasn't eaten just because nothing is logged.
 ${unloggedPrompt || ""}
 Before giving meal suggestions or planning the day, ALWAYS ask what they've eaten.
 EXCEPTION: General nutrition questions can be answered without asking.
+` : planningTomorrow ? `
+PLANNING TOMORROW — Today's intake doesn't matter for tomorrow's meal plan.
+Plan tomorrow's full day around tomorrow's events.
 ` : `Today's logged meals are shown above. Use this data for all coaching.`}
 
 ${eventStrategy}
