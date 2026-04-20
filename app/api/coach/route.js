@@ -67,7 +67,6 @@ function detectEventType(text) {
   return "general";
 }
 
-// Detect if user is going to a restaurant or someone's home for a meal
 function isRestaurantOrPartyMeal(text) {
   if (!text) return false;
   const lower = text.toLowerCase();
@@ -242,8 +241,23 @@ ${targetWeight   ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
 ${healthConditions ? `Health Notes: ${healthConditions}` : ""}
 Local Time: ${hour}:00 (${timeOfDay})
 
-DAILY TARGETS:
+DAILY TARGETS — SET BY USER, DO NOT CHANGE:
 Calories: ${goal.calories} | Protein: ${goal.protein}g | Carbs: ${goal.carbs}g | Fat: ${goal.fat}g
+
+══════════════════════════════════════════
+CRITICAL CALORIE RULE — READ THIS CAREFULLY
+══════════════════════════════════════════
+${userName}'s daily calorie target is ${goal.calories}. This number was SET BY THE USER in their profile.
+
+You MUST use ${goal.calories} as the daily calorie goal in ALL coaching and meal plans.
+Do NOT calculate a different number based on their goal type.
+Do NOT apply your own deficit to arrive at a different target.
+Do NOT say "for fat loss you should eat X" if X is different from ${goal.calories}.
+
+The ${goal.calories} target ALREADY reflects their goals — it is the number they want to eat each day.
+
+When telling the user how many calories they have left, ALWAYS calculate from ${goal.calories}.
+Example: if ${userName} has eaten ${totals.calories} cal, they have ${remaining.calories} cal remaining — not any other number.
 
 TODAY'S INTAKE (${today}):
 Calories: ${totals.calories}/${goal.calories} (${remaining.calories} remaining)
@@ -269,6 +283,19 @@ EXCEPTION: General nutrition questions can be answered without asking.
 ` : `Today's logged meals are shown above. Use this data for all coaching.`}
 
 ${hasEventToday || hasRestaurantMeal ? eventStrategy : ""}
+
+══════════════════════════════════════════
+AMBIGUOUS MESSAGE RULE
+══════════════════════════════════════════
+If the user's message doesn't clearly fit food logging, meal planning, or a nutrition question, ask:
+"Were you looking to log a meal, get a meal plan, or ask me a nutrition question?"
+
+Do NOT give a generic response. Do NOT guess. Just ask that single clarifying question.
+
+Examples of ambiguous messages that should trigger this:
+- "hey" / "hi" / "hello" (unless it's a greeting at the start)
+- "what do you think?" (with no context)
+- Short messages with no nutrition intent
 
 ══════════════════════════════════════════
 RESTAURANT / PARTY MEALS — CRITICAL RULE
@@ -329,7 +356,7 @@ TOTAL FORMAT — plain text only:
 👉 [one coaching note]
 
 ══════════════════════════════════════════
-CALORIE TARGETS
+CALORIE TARGETS FOR MEAL PLANS
 ══════════════════════════════════════════
 Standard plans: ${Math.round(goal.calories * 0.92)}-${Math.round(goal.calories * 0.95)} cal.
 Weight loss plans: ${weightLossCals} cal.
@@ -459,7 +486,7 @@ Plain text total after all meal blocks.`;
     }
     conversationMessages.push({ role: "user", content: message || "" });
 
-    console.log(`=== AI | ${userName} | ${hour}:00 | Event: ${eventType} | Restaurant: ${hasRestaurantMeal}`);
+    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Event: ${eventType} | Restaurant: ${hasRestaurantMeal}`);
 
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
