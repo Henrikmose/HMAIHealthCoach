@@ -250,6 +250,9 @@ CRITICAL CALORIE RULE — READ THIS CAREFULLY
 ${userName}'s daily calorie target is ${goal.calories}. This number was SET BY THE USER in their profile.
 
 You MUST use ${goal.calories} as the daily calorie goal in ALL coaching and meal plans.
+Do NOT say "your new target for fat loss is 2300" or any invented number.
+Do NOT use ${weightLossCals} as the plan target unless user explicitly asks to lose weight TODAY.
+If user says "stay within my macros" or "plan my meals" → use ${goal.calories}. Full stop.
 Do NOT calculate a different number based on their goal type.
 Do NOT apply your own deficit to arrive at a different target.
 Do NOT say "for fat loss you should eat X" if X is different from ${goal.calories}.
@@ -302,16 +305,18 @@ RESTAURANT / PARTY MEALS — CRITICAL RULE
 ══════════════════════════════════════════
 When the user is eating at a restaurant, dinner party, or someone else's home:
 - DO NOT create a meal block for that meal — you don't know the menu
-- DO NOT guess specific dishes
-- Instead plan all meals BEFORE the event
-- For the event meal, give general guidance in plain text:
-  "For the dinner itself — I don't know the exact menu, so here's what to look for:
-  - Lean protein options (grilled over fried)
-  - Light on heavy sauces and cream-based dishes
-  - Go easy on bread, appetizers, and alcohol
+- DO NOT create a Dinner block for the restaurant/event meal. EVER. Not even an estimate.
+- DO NOT guess specific dishes (not "Steak, 8oz" or anything like that)
+- "Steak dinner", "dinner party", "restaurant" = UNKNOWN MENU = NO MEAL BLOCK
+- Instead: plan only Breakfast, Lunch, Snack blocks (meals BEFORE the event)
+- After the meal blocks, add plain text guidance like:
+  "For the steak dinner itself — I don't know the exact menu, so here's what to look for:
+  - Lean protein: grilled or baked over fried
+  - Light on heavy sauces and sides
+  - Go easy on bread and alcohol
   - Watch portion sizes
-  When you're there, you can take a photo of the menu and I'll help you pick the best option for your goals."
-- Budget remaining calories in your text, not in a meal block
+  When you're there, take a photo of the menu and I'll help you choose."
+- Say how many calories remain for the event in plain text only — no meal block
 
 ══════════════════════════════════════════
 MEAL BLOCK FORMAT — CRITICAL
@@ -444,10 +449,30 @@ Original: "${context.originalMessage}"
 ${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
-1. Multiple foods? Ask quantity of each one at a time
-2. Single food + quantity? Return meal block immediately
-3. Missing quantity? Ask only for that
-4. All info? Return meal block + updated totals + one coaching tip`;
+QUANTITY DETECTION — READ THIS FIRST:
+These all count as quantities already provided:
+- Numbers: "2 eggs", "6oz chicken", "1 cup rice"
+- Fractions: "half an avocado", "half a banana", "1/2 cup"
+- Portions: "a slice", "one slice", "a piece", "a medium", "a large"
+- Descriptive: "a handful", "a small bowl"
+
+DECISION TREE:
+Step 1: Does the original message contain ALL foods WITH quantities (using any of the above)?
+→ YES: Calculate macros immediately and return meal block. Do NOT ask anything.
+→ NO: Ask for the FIRST missing quantity only. Nothing else.
+
+Step 2 (after follow-up): Do you now have quantities for ALL foods?
+→ YES: Return the complete meal block with all foods combined.
+→ NO: Ask for the next missing quantity.
+
+EXAMPLES:
+"I had a slice of toast, half an avocado, and 2 eggs" → ALL quantities present → LOG IMMEDIATELY
+"I had chicken and rice" → NO quantities → ask "How much chicken did you have?"
+"I had 6oz chicken" → quantity present for chicken only → log chicken immediately
+
+AFTER LOGGING — always show:
+📊 Updated totals line
+👉 One coaching tip`;
     }
 
     if (context?.type === "meal_planning") {
@@ -460,7 +485,7 @@ Request: "${context.request || message}"
 Local time: ${hour}:00
 Nothing logged: ${nothingEatenYet}
 ${hasEventToday ? `Event: ${eventType} at ${eventHour}:00 (${hoursUntilEvent}h away)` : "No event detected"}
-${hasRestaurantMeal ? "Restaurant/party meal detected — DO NOT create meal block for that meal" : ""}
+${hasRestaurantMeal ? "RESTAURANT/PARTY MEAL DETECTED — DO NOT create a Dinner block. Plan ONLY meals before the event (Breakfast, Lunch, Snack). The dinner itself is unknown — give plain text guidance only." : ""}
 
 ${nothingEatenYet ? `
 IMPORTANT: Nothing logged. Ask what they've eaten today before creating a plan.
