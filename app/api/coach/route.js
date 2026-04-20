@@ -143,6 +143,9 @@ export async function POST(req) {
     const eventType = detectEventType(allText);
     const hoursUntilEvent = eventHour !== null ? eventHour - hour : null;
     const hasEventToday = eventHour !== null && hoursUntilEvent !== null && hoursUntilEvent > 0 && hoursUntilEvent < 24;
+    // Also detect "tomorrow" events for sport/endurance planning
+    const hasTomorrowEvent = allText.toLowerCase().includes("tomorrow") && eventType && ["sport", "workout", "endurance"].includes(eventType);
+    const hasAnyPhysicalEvent = hasEventToday || hasTomorrowEvent;
     const hasRestaurantMeal = isRestaurantOrPartyMeal(allText);
 
     const goalLabel = {
@@ -189,17 +192,25 @@ RULES — NO EXCEPTIONS:
 4. Tell them how many calories they have budgeted for the event in plain text only
 5. Keep pre-event meals light — lean protein + vegetables
 6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event`;
-    } else if (hasEventToday && eventType) {
+    } else if ((hasEventToday || hasTomorrowEvent) && eventType) {
       if (["sport", "workout", "endurance"].includes(eventType)) {
         eventStrategy = `
-PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour}:00, ${hoursUntilEvent}h away):
-Plan the FULL remaining day around this event.
-${hoursUntilEvent > 4 ? "- Normal meal now with good protein and carbs" : ""}
-${hoursUntilEvent > 2 ? "- Pre-event Snack 2-3 hours before: HIGH carbs, LOW fat, easy to digest (300-400 cal)" : ""}
-${hoursUntilEvent <= 2 ? "- URGENT: Only quick carbs now — banana, rice cakes. NO heavy food." : ""}
-- Post-event recovery Snack within 30-60 min after: HIGH protein + carbs
-- You CAN suggest multiple Snacks for this scenario (pre-event + post-event)
-- Add timing context AFTER each meal block in plain text`;
+PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour !== null ? eventHour + ":00" : "scheduled time"}, ${hoursUntilEvent !== null ? hoursUntilEvent + "h away" : ""}):
+
+CALORIE RULE FOR SPORT/RACE DAY: Aim for 85-95% of the ${goal.calories} calorie target (${Math.round(goal.calories * 0.85)}-${Math.round(goal.calories * 0.95)} cal minimum). Athletes need solid fuel. Never plan below 80% (${Math.round(goal.calories * 0.8)} cal) on a race or game day unless user explicitly asks for a deficit.
+
+MEAL STRUCTURE FOR THE FULL DAY:
+1. Breakfast: balanced, good carbs + protein (up at ${hour}:00 so plan accordingly)
+2. Lunch: high carbs, moderate protein, low fat — fuel loading
+3. Pre-event Snack (2-3 hours before event): HIGH carbs, LOW fat, easy to digest (300-400 cal) — banana, rice cakes, oatmeal
+4. Post-event Dinner (within 1-2 hours after): HIGH protein + carbs for recovery — this is MANDATORY, do not skip it
+5. Optional late Snack if still under calorie goal
+
+IMPORTANT:
+- You MUST include a Dinner block for post-race/game recovery
+- Total across all meals should reach ${goal.calories} cal
+- Add timing notes AFTER each meal block in plain text
+- You CAN use two Snack blocks (pre-event + post-event if needed)`;
       } else if (eventType === "work") {
         eventStrategy = `
 LONG WORK DAY STRATEGY:
@@ -290,7 +301,7 @@ Before giving meal suggestions or planning the day, ALWAYS ask what they've eate
 EXCEPTION: General nutrition questions can be answered without asking.
 ` : `Today's logged meals are shown above. Use this data for all coaching.`}
 
-${hasEventToday || hasRestaurantMeal ? eventStrategy : ""}
+${hasEventToday || hasTomorrowEvent || hasRestaurantMeal ? eventStrategy : ""}
 
 ══════════════════════════════════════════
 AMBIGUOUS MESSAGE RULE

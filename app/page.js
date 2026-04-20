@@ -56,6 +56,7 @@ function isMealPlanningRequest(text) {
     /recommend.*eat/i,
     /recommend.*meal/i,
     /what.*eat.*game/i,
+    /what.*eat.*race/i,
     /what.*eat.*before/i,
     /what.*eat.*today/i,
     /what.*eat.*tonight/i,
@@ -65,9 +66,28 @@ function isMealPlanningRequest(text) {
     /yes.*plan/i,
     /sure.*plan/i,
     /create.*plan/i,
+    /make.*plan/i,
+    /build.*plan/i,
+    /great.*plan/i,
+    /can you.*plan/i,
+    /help.*plan/i,
+    /put together.*plan/i,
     /plan.*today/i,
     /plan.*tonight/i,
+    /plan.*tomorrow/i,
     /plan.*game/i,
+    /plan.*race/i,
+    /plan.*match/i,
+    /plan.*event/i,
+    /plan.*for.*me/i,
+    /plan.*my.*day/i,
+    /plan.*my.*week/i,
+    /fuel.*race/i,
+    /fuel.*game/i,
+    /eat.*race\s+day/i,
+    /race\s+day.*eat/i,
+    /how.*eat.*race/i,
+    /how.*eat.*game/i,
   ].some((p) => p.test(text));
 }
 
@@ -164,16 +184,14 @@ function parseAllMeals(text) {
         mealCounts[matchedType]++;
         const count = mealCounts[matchedType];
 
-        // Snacks get a numbered displayType when there are multiple.
-        // Other meal types always use their base name (only 1 per plan).
         const displayType =
           matchedType === "snack" && count > 1
             ? `snack_${count}`
             : matchedType;
 
         meals.push({
-          mealType:    matchedType,  // always the real DB value
-          displayType,               // used for button labels and unique keys
+          mealType:    matchedType,
+          displayType,
           food:        foods,
           calories:    Math.round(calories),
           protein:     Math.round(protein || 0),
@@ -188,9 +206,9 @@ function parseAllMeals(text) {
     }
   }
 
-  // Inline fallback for non-standard AI formats
+  // Inline fallback
   if (meals.length === 0) {
-    const re = /(breakfast|lunch|dinner|snack)\s*[-\u2013]\s*foods?:\s*([^-\n]+?)\s*[-\u2013]\s*calories?:\s*(\d+)\s*[-\u2013]\s*protein?:\s*(\d+)\s*[-\u2013]\s*carbs?:\s*(\d+)\s*[-\u2013]\s*fat?:\s*(\d+)/gi;
+    const re = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
     const inlineCounts = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
     let m;
     while ((m = re.exec(text)) !== null) {
@@ -220,7 +238,6 @@ function parseAllMeals(text) {
 // MEAL KEY AND LABEL HELPERS
 // ========================================
 
-// Content-based key prevents false "already added" across different conversations
 function getMealKey(msgIdx, meal) {
   const foodKey = meal.food.substring(0, 20).replace(/\s/g, "_");
   return `${msgIdx}-${meal.displayType}-${meal.calories}-${foodKey}`;
@@ -300,7 +317,6 @@ export default function HomePage() {
   const [userName, setUserName]           = useState("");
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
 
-  // Persist saved plan keys in localStorage — clears automatically at midnight
   const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
     if (typeof window !== "undefined") {
       const storedDate = localStorage.getItem("savedPlanKeysDate");
@@ -315,7 +331,6 @@ export default function HomePage() {
   const messagesEndRef = useRef(null);
   const textareaRef    = useRef(null);
 
-  // Sync savedPlanKeys to localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
       localStorage.setItem("savedPlanKeysDate", getLocalDate());
@@ -323,7 +338,6 @@ export default function HomePage() {
     }
   }, [savedPlanKeys]);
 
-  // Load user identity from localStorage on mount
   useEffect(() => {
     const uid   = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
@@ -331,7 +345,6 @@ export default function HomePage() {
     if (uid)   setUserId(uid);
   }, []);
 
-  // Load all data once userId is ready
   useEffect(() => {
     if (userId) {
       loadGoals(userId);
@@ -340,12 +353,10 @@ export default function HomePage() {
     }
   }, [userId]);
 
-  // Scroll to bottom when history changes
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [history]);
 
-  // Auto-resize textarea as user types
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -353,8 +364,6 @@ export default function HomePage() {
         Math.min(textareaRef.current.scrollHeight, 140) + "px";
     }
   }, [message]);
-
-  // ── Data loaders ──────────────────────────
 
   async function loadGoals(uid) {
     try {
@@ -408,8 +417,6 @@ export default function HomePage() {
     }
   }
 
-  // ── Computed values ───────────────────────
-
   const totals = todayMeals.reduce(
     (t, m) => ({
       calories: t.calories + Number(m.calories || 0),
@@ -423,8 +430,6 @@ export default function HomePage() {
   const calPct = goals.calories > 0
     ? Math.min(100, Math.round((totals.calories / goals.calories) * 100))
     : 0;
-
-  // ── Message handler ───────────────────────
 
   async function handleSend() {
     const trimmed = message.trim();
@@ -473,7 +478,7 @@ export default function HomePage() {
           context,
           history:   newHistory.slice(-8).map((m) => ({ role: m.role, content: m.content })),
           userId:    uid,
-          localHour: new Date().getHours(), // browser's actual local time
+          localHour: new Date().getHours(),
           localDate: getLocalDate(),
         }),
       });
@@ -482,7 +487,6 @@ export default function HomePage() {
       const reply = data.reply || "Sorry, could not get a response.";
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
-      // Auto-save food log if AI returned a meal block
       if (newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
         if (parsed.length > 0) {
@@ -508,11 +512,9 @@ export default function HomePage() {
     }
   }
 
-  // ── Plan handlers ─────────────────────────
-
   async function handleAddToPlan(meal, msgIdx, targetDate) {
     const key = getMealKey(msgIdx, meal);
-    if (savedPlanKeys.includes(key)) return; // prevent duplicates
+    if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
     const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
     if (saved) setSavedPlanKeys((prev) => [...prev, key]);
@@ -538,10 +540,6 @@ export default function HomePage() {
       handleSend();
     }
   }
-
-  // ========================================
-  // RENDER
-  // ========================================
 
   return (
     <div className="flex flex-col h-screen bg-white">
@@ -579,7 +577,6 @@ export default function HomePage() {
       {/* ── Messages ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 bg-gray-50">
 
-        {/* Empty state with quick-start prompts */}
         {history.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center px-4 pb-16">
             <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 bg-blue-600 shadow-lg shadow-blue-200">
@@ -608,7 +605,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Conversation history */}
         {history.map((msg, idx) => {
           const isUser = msg.role === "user";
 
@@ -627,7 +623,6 @@ export default function HomePage() {
               key={idx}
               className={`flex ${isUser ? "justify-end" : "justify-start"} items-end gap-2`}
             >
-              {/* AI avatar */}
               {!isUser && (
                 <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 mb-1 bg-blue-600 shadow-sm shadow-blue-200">
                   🧠
@@ -635,8 +630,6 @@ export default function HomePage() {
               )}
 
               <div className="max-w-[82%] flex flex-col gap-2">
-
-                {/* Message bubble */}
                 <div
                   className={`rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
                     isUser
@@ -650,11 +643,8 @@ export default function HomePage() {
                   {msg.content}
                 </div>
 
-                {/* Add to plan buttons */}
                 {showButtons && (
                   <div className="space-y-2 ml-1">
-
-                    {/* Add All button — only when multiple meals */}
                     {meals.length > 1 && (
                       <button
                         onClick={() => handleAddAllToPlan(meals, idx, targetDate)}
@@ -671,7 +661,6 @@ export default function HomePage() {
                       </button>
                     )}
 
-                    {/* Individual meal buttons */}
                     {meals.map((meal) => {
                       const key     = getMealKey(idx, meal);
                       const isSaved = savedPlanKeys.includes(key);
@@ -700,7 +689,6 @@ export default function HomePage() {
           );
         })}
 
-        {/* Typing indicator */}
         {isLoading && (
           <div className="flex items-end gap-2">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 bg-blue-600 shadow-sm shadow-blue-200">
