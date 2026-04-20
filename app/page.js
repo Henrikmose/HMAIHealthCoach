@@ -472,8 +472,8 @@ export default function Home() {
       const data = await response.json();
       console.log('API Response data:', data); // Debug log
 
-      if (data && data.message) {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
+      if (data && data.reply) {
+        setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
       } else {
         console.error('Invalid response format:', data);
         throw new Error('Invalid response format');
