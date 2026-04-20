@@ -147,60 +147,54 @@ export default function ChatPage() {
     return 'dinner';
   };
 
-  // Parse meal blocks from AI response
+  // Parse meal blocks from AI response - FIXED FOR NEW FORMAT
   const parseMealBlocks = async (text) => {
     const blocks = [];
-    const lines = text.split('\n');
     
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
+    // Look for the pattern: "Lunch - Foods: ... - Calories: ... - Protein: ..."
+    const mealPattern = /(Breakfast|Lunch|Dinner|Snack)\s*-\s*Foods:\s*([^-]+)-\s*Calories:\s*(\d+)[^-]*-\s*Protein:\s*([0-9.]+)g?[^-]*-\s*Carbs:\s*([0-9.]+)g?[^-]*-\s*Fat:\s*([0-9.]+)g?/gi;
+    
+    let match;
+    while ((match = mealPattern.exec(text)) !== null) {
+      const [, mealType, food, calories, protein, carbs, fat] = match;
       
-      // Look for meal type headers
-      if (/^\*\*(Breakfast|Lunch|Dinner|Snack|Dessert)\*\*$/.test(line)) {
-        const mealType = line.replace(/\*\*/g, '').toLowerCase();
-        const block = { meal_type: mealType };
-        
-        // Parse the following lines
-        for (let j = i + 1; j < lines.length; j++) {
-          const nextLine = lines[j].trim();
-          if (!nextLine || nextLine.startsWith('**')) break;
-          
-          if (nextLine.startsWith('- Foods:')) {
-            block.food = nextLine.replace('- Foods:', '').trim();
-          } else if (nextLine.startsWith('- Calories:')) {
-            block.calories = parseInt(nextLine.replace('- Calories:', '').trim()) || 0;
-          } else if (nextLine.startsWith('- Protein:')) {
-            block.protein = parseInt(nextLine.replace('- Protein:', '').replace('g', '').trim()) || 0;
-          } else if (nextLine.startsWith('- Carbs:')) {
-            block.carbs = parseInt(nextLine.replace('- Carbs:', '').replace('g', '').trim()) || 0;
-          } else if (nextLine.startsWith('- Fat:')) {
-            block.fat = parseInt(nextLine.replace('- Fat:', '').replace('g', '').trim()) || 0;
-          }
-        }
-        
-        if (block.food && block.calories) {
-          blocks.push(block);
-        }
+      const block = {
+        meal_type: mealType.toLowerCase(),
+        food: food.trim(),
+        calories: parseInt(calories) || 0,
+        protein: parseFloat(protein) || 0,
+        carbs: parseFloat(carbs) || 0,
+        fat: parseFloat(fat) || 0
+      };
+      
+      console.log('Parsed meal block:', block); // Debug logging
+      
+      if (block.food && block.calories) {
+        blocks.push(block);
       }
     }
     
+    console.log('Total blocks found:', blocks.length); // Debug logging
     return blocks;
   };
 
-  // Auto-save detection
+  // Auto-save detection - UPDATED FOR NEW FORMAT
   const shouldAutoSave = (response, activeMealLog) => {
     if (!activeMealLog) return false;
     
+    // Look for the new format triggers
     const triggers = [
       /let's log/i,
-      /total:/i,
-      /logged:/i,
-      /\*\*(breakfast|lunch|dinner|snack)\*\*/i
+      /(Breakfast|Lunch|Dinner|Snack)\s*-\s*Foods:/i,
+      /let's update your intake/i,
+      /Total:\s*\d+\s*cal/i
     ];
     
-    return triggers.some(trigger => trigger.test(response)) && 
-           response.includes('Calories:') && 
-           response.includes('Protein:');
+    const hasData = response.includes('Calories:') && response.includes('Protein:');
+    const shouldSave = triggers.some(trigger => trigger.test(response)) && hasData;
+    
+    console.log('Auto-save check:', { shouldSave, hasData, response: response.substring(0, 100) });
+    return shouldSave;
   };
 
   // Handle sending messages
@@ -254,38 +248,55 @@ export default function ChatPage() {
         body: JSON.stringify({
           message: currentMessage,
           userId: userId,
-          requestType: activeMealLog ? 'food_log' : 'general',
-          contextData: activeMealLog || {},
+          context: activeMealLog ? { 
+            type: activeMealLog.type,
+            originalMessage: activeMealLog.originalMessage,
+            mealType: activeMealLog.mealType,
+            followUpMessage: activeMealLog.followUpMessage
+          } : null,
           localHour: localHour,
           localDate: localDate,
-          history: messages.slice(-10) // Send recent history
+          history: messages.slice(-10)
         }),
       });
 
       const data = await response.json();
+      const aiResponse = data.reply || data.message;
 
       // 5. Add AI response
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: data.reply || data.message 
+        content: aiResponse
       }]);
 
       // 6. Handle auto-save for food logs
-      if (shouldAutoSave(data.reply, activeMealLog)) {
-        const mealBlocks = await parseMealBlocks(data.reply);
+      if (shouldAutoSave(aiResponse, activeMealLog)) {
+        console.log('Auto-save triggered!');
+        const mealBlocks = await parseMealBlocks(aiResponse);
+        
+        console.log('Meal blocks to save:', mealBlocks);
         
         for (const meal of mealBlocks) {
-          await supabase.from('actual_meals').insert({
-            user_id: userId,
-            date: localDate,
-            meal_type: meal.meal_type,
-            food: meal.food,
-            calories: meal.calories,
-            protein: meal.protein,
-            carbs: meal.carbs,
-            fat: meal.fat,
-            servings: 1
-          });
+          console.log('Inserting meal:', meal);
+          const { data: insertData, error: insertError } = await supabase
+            .from('actual_meals')
+            .insert({
+              user_id: userId,
+              date: localDate,
+              meal_type: meal.meal_type,
+              food: meal.food,
+              calories: meal.calories,
+              protein: meal.protein,
+              carbs: meal.carbs,
+              fat: meal.fat,
+              servings: 1
+            });
+            
+          if (insertError) {
+            console.error('Insert error:', insertError);
+          } else {
+            console.log('Insert successful:', insertData);
+          }
         }
         
         // Clear activeMealLog after successful save
@@ -293,6 +304,7 @@ export default function ChatPage() {
         
         // Reload today's totals
         await loadTodaysMeals();
+        console.log('Totals reloaded');
       }
 
     } catch (error) {
