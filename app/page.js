@@ -445,6 +445,8 @@ export default function Home() {
       const localHour = now.getHours();
       const localDate = formatDate(now);
 
+      console.log('Sending API request...'); // Debug log
+
       const response = await fetch('/api/coach', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -459,15 +461,26 @@ export default function Home() {
         })
       });
 
+      console.log('Got response:', response.status); // Debug log
+
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        const errorText = await response.text();
+        console.error('API Error:', response.status, errorText);
+        throw new Error(`API request failed: ${response.status}`);
       }
 
       const data = await response.json();
-      setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
+      console.log('API Response data:', data); // Debug log
+
+      if (data && data.message) {
+        setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
+      } else {
+        console.error('Invalid response format:', data);
+        throw new Error('Invalid response format');
+      }
 
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error in handleSend:', error);
       setMessages(prev => [...prev, { 
         role: 'assistant', 
         content: 'Something went wrong. Please try again.' 
