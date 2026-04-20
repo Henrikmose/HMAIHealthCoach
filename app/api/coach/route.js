@@ -155,9 +155,22 @@ MEAL TIMELINE RULES:
     const nextEvent = idx < events.length - 1 ? events[idx + 1] : null;
 
     if (isPhysicalEvent(event.type)) {
+      // Smart timing logic - don't suggest eating at 3-4am for early events!
+      let preEventAdvice;
+      if (event.hour <= 8) {
+        // Early morning event (7am, 8am)
+        preEventAdvice = "30-60 minutes before OR eat after: light snack (banana, toast) 200-300 cal OR have your main meal after the workout";
+      } else if (event.hour <= 12) {
+        // Late morning event  
+        preEventAdvice = "1-2 hours before: light snack — HIGH carbs, LOW fat (banana, rice cakes) 250-350 cal";
+      } else {
+        // Afternoon/evening event
+        preEventAdvice = "2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal) 300-400 cal";
+      }
+      
       strategy += `
 ${event.type.toUpperCase()} at ${event.hour}:00 (${event.label}):
-- 2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal) 300-400 cal
+- ${preEventAdvice}
 - Within 1 hour after: recovery meal — HIGH protein + carbs
 ${nextEvent && isSocialEvent(nextEvent.type) ? `- NOTE: Social event follows at ${nextEvent.hour}:00 — recovery meal should be lighter since social eating comes next` : "- Include a full Dinner block for post-event recovery"}
 `;
@@ -342,12 +355,20 @@ CALORIE RULE FOR SPORT/RACE DAY: Aim for 85-95% of the ${goal.calories} calorie 
 MEAL STRUCTURE FOR THE FULL DAY:
 1. Breakfast: balanced, good carbs + protein (up at ${hour}:00 so plan accordingly)
 2. Lunch: high carbs, moderate protein, low fat — fuel loading
-3. Pre-event Snack (2-3 hours before event): HIGH carbs, LOW fat, easy to digest (300-400 cal) — banana, rice cakes, oatmeal
+3. Pre-event timing (smart approach based on event time):
+   ${eventHour <= 8 ? "Early event — eat 30-60 min before OR after the event" : eventHour <= 12 ? "Mid-morning — eat 1-2 hours before" : "Afternoon/evening — eat 2-3 hours before"}
+   HIGH carbs, LOW fat, easy to digest (300-400 cal) — banana, rice cakes, oatmeal
 4. Post-event Dinner (within 1-2 hours after): HIGH protein + carbs for recovery — this is MANDATORY, do not skip it
-5. Optional late Snack if still under calorie goal
+
+ATHLETIC EVENT FOOD EXAMPLES — USE THESE FOR RECOVERY DINNER:
+- Grilled chicken with pasta or quinoa
+- Salmon with sweet potato and rice  
+- Turkey with mashed potato
+- Lean beef with rice and vegetables
+- NOT steak or heavy/fatty foods — keep it digestible for recovery
 
 IMPORTANT:
-- You MUST include a Dinner block for post-race/game recovery. This is NOT a restaurant meal — you know what recovery food looks like. Create the Dinner block.
+- You MUST include a Dinner block for post-race/game recovery. This is NOT a restaurant meal — create the Dinner block with recovery-focused foods.
 - Total across all meals should reach ${goal.calories} cal
 - Add timing notes AFTER each meal block in plain text
 - You CAN use two Snack blocks (pre-event + post-event if needed)`;
