@@ -55,6 +55,9 @@ const extractRequestedDate = (message) => {
 
 // Parse meal plan from AI response
 const parseMealPlan = (response) => {
+  if (!response || typeof response !== 'string') {
+    return [];
+  }
   const lines = response.split('\n');
   const meals = [];
   let currentMeal = null;
@@ -165,6 +168,10 @@ const parseMealPlan = (response) => {
 
 // Parse single meal from response
 const parseSingleMeal = (response) => {
+  if (!response || typeof response !== 'string') {
+    return { type: 'Meal', foods: [], calories: 0, protein: 0, carbs: 0, fat: 0, servings: 1 };
+  }
+  
   const meals = parseMealPlan(response);
   if (meals.length > 0) {
     return meals[0];
