@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -37,17 +38,17 @@ function extractWeightFromMessage(message) {
 
 function isVeryActive(activityLevel) {
   const level = (activityLevel || "").toLowerCase();
-  return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("intense");
+  return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
 }
 
 // ── Multi-event detection ──────────────────────────────────────────
 
 function classifyEventType(text) {
   const lower = text.toLowerCase();
-  if (/hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|pickleball|squash|badminton|golf/.test(lower)) return "sport";
-  if (/gym|workout|training|crossfit|weightlift|lifting|exercise|run|running|cycling|swim|yoga|pilates|hiit|cardio|weights/.test(lower)) return "workout";
+  if (/hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket/.test(lower)) return "sport";
+  if (/gym|workout|training|crossfit|weightlift|lifting|exercise|run|running|cycling|swim|yoga|pilates|hiit|cardio/.test(lower)) return "workout";
   if (/hike|hiking|bike ride|marathon|race|triathlon|spartan|10k|5k|half marathon|full marathon/.test(lower)) return "endurance";
-  if (/dinner party|dinner date|dinner out|dinner with|dinner plans|lunch out|lunch with|brunch|breakfast with|restaurant|going out|eating out|wedding|birthday|celebration/.test(lower)) return "social_dining";
+  if (/dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|lunch date/.test(lower)) return "social_dining";
   if (/drinks|bar|cocktail|wine|beer|happy hour/.test(lower)) return "social_drinks";
   if (/bbq|barbecue|cookout|potluck|picnic/.test(lower)) return "social_food";
   if (/long day|work event|conference|meeting|presentation|interview|all.?day/.test(lower)) return "work";
@@ -72,54 +73,6 @@ function parseHour(hourStr, ampm) {
   return h;
 }
 
-// Check if this event is for "tomorrow" vs "today".
-// Uses a tight window and picks the closer qualifier if both appear.
-function isNearTomorrow(text, idx, matchLen) {
-  const start = Math.max(0, idx - 20);
-  const end = Math.min(text.length, idx + matchLen + 25);
-  const window = text.substring(start, end);
-  const hasTomorrow = window.includes("tomorrow");
-  const hasToday = window.includes("today") || window.includes("tonight");
-  if (hasTomorrow && hasToday) {
-    const matchCenter = idx + matchLen / 2;
-    const tomorrowIdx = text.indexOf("tomorrow", start);
-    const todayIdx = Math.max(text.indexOf("today", start), text.indexOf("tonight", start));
-    const tomorrowDist = tomorrowIdx >= 0 ? Math.abs(tomorrowIdx - matchCenter) : 9999;
-    const todayDist = todayIdx >= 0 ? Math.abs(todayIdx - matchCenter) : 9999;
-    return tomorrowDist < todayDist;
-  }
-  return hasTomorrow;
-}
-
-// Keyword list. IMPORTANT: bare "dinner"/"lunch"/"breakfast" are NOT events —
-// they're meal times. Only QUALIFIED forms ("dinner out", "dinner with") count
-// as social events. A user saying "I want dinner at 8pm" is setting meal timing,
-// not telling us about a restaurant.
-const EVENT_KEYWORDS = [
-  // Physical
-  "workout", "gym", "run", "running", "swim", "swimming", "yoga", "pilates",
-  "hiit", "cardio", "crossfit", "lifting", "training", "weights", "exercise",
-  "hockey", "soccer", "football", "basketball", "tennis", "volleyball",
-  "baseball", "rugby", "lacrosse", "cricket", "pickleball", "squash",
-  "badminton", "golf", "hike", "hiking", "bike ride", "marathon", "race",
-  "triathlon", "10k", "5k", "half marathon",
-  // Social dining — qualified forms only
-  "dinner party", "dinner date", "dinner out", "dinner with", "dinner plans",
-  "lunch out", "lunch with", "lunch plans",
-  "brunch", "breakfast with",
-  "restaurant", "going out", "eating out", "wedding", "birthday", "celebration", "party",
-  // Drinks / food events
-  "drinks", "happy hour", "bar", "cocktail", "wine", "beer",
-  "bbq", "barbecue", "cookout", "potluck", "picnic",
-  // Work
-  "meeting", "presentation", "interview", "conference", "work event",
-];
-
-// Build one big regex alternation from the keyword list
-const EVENT_KEYWORD_ALT = EVENT_KEYWORDS
-  .map(k => k.replace(/ /g, "\\s+"))
-  .join("|");
-
 // Extract ALL events from text with their times
 // Returns array sorted by hour: [{ type, hour, label, isTomorrow }]
 function extractAllEvents(text) {
@@ -127,72 +80,53 @@ function extractAllEvents(text) {
   const lower = text.toLowerCase();
   const events = [];
 
-  // Pattern 1: "event ... at TIME"  e.g. "tennis at 6pm", "dinner out at 8"
-  // Limit the gap between event and time to 30 chars so we don't cross events
-  const re1 = new RegExp(
-    `\\b(${EVENT_KEYWORD_ALT})\\b[^.!?]{0,30}?\\bat\\s+(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)?`,
-    "gi"
-  );
+  // Patterns to find time + event combinations
+  // e.g. "workout at 7am", "tennis at 5pm", "dinner at 8"
+  const timeEventPatterns = [
+    // "X at TIME" pattern
+    /((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date)[^.!?]*?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi,
+    // "TIME + X" pattern  
+    /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date))/gi,
+  ];
 
-  // Pattern 2: "TIME ... event"  e.g. "at 7am workout", "7pm tennis"
-  const re2 = new RegExp(
-    `\\b(?:at\\s+)?(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)\\s+[^.!?]{0,15}?(${EVENT_KEYWORD_ALT})\\b`,
-    "gi"
-  );
-
+  // Try pattern 1: "event at time"
   let match;
-
-  // Try pattern 1
+  const re1 = /(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|dinner|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|potluck|picnic|lunch)\b[^.!?]{0,30}?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
+  
   while ((match = re1.exec(lower)) !== null) {
     const eventText = match[1].trim();
     const h = parseHour(match[2], match[4]);
     const type = classifyEventType(eventText);
     if (type && h >= 0 && h <= 23) {
-      const isTomorrow = isNearTomorrow(lower, match.index, match[0].length);
-      events.push({ type, hour: h, label: eventText, isTomorrow, _idx: match.index });
+      const isTomorrow = lower.includes("tomorrow");
+      events.push({ type, hour: h, label: eventText.trim(), isTomorrow });
     }
   }
 
-  // Try pattern 2
+  // Try pattern 2: "at time for/event"  
+  const re2 = /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|10k|5k|golf|cycling|dinner|restaurant|brunch|drinks|bar|party|bbq)\b)/gi;
+  
   while ((match = re2.exec(lower)) !== null) {
     const h = parseHour(match[1], match[3]);
-    const eventText = match[4].trim();
-    const type = classifyEventType(eventText);
+    const type = classifyEventType(match[4]);
     if (type && h >= 0 && h <= 23) {
-      const isTomorrow = isNearTomorrow(lower, match.index, match[0].length);
-      // Avoid duplicates at same hour + type
+      const isTomorrow = lower.includes("tomorrow");
+      // Avoid duplicates at same hour
       if (!events.find(e => e.hour === h && e.type === type)) {
-        events.push({ type, hour: h, label: eventText, isTomorrow, _idx: match.index });
-      }
-    }
-  }
-
-  // De-duplicate: if two events at same hour, keep the more specific one (physical > social > work)
-  const deduped = [];
-  for (const e of events) {
-    const existing = deduped.find(d => d.hour === e.hour);
-    if (!existing) {
-      deduped.push(e);
-    } else {
-      // Prefer physical > social > work > other
-      const rank = t => isPhysicalEvent(t) ? 3 : isSocialEvent(t) ? 2 : t === "work" ? 1 : 0;
-      if (rank(e.type) > rank(existing.type)) {
-        deduped.splice(deduped.indexOf(existing), 1, e);
+        events.push({ type, hour: h, label: match[4].trim(), isTomorrow });
       }
     }
   }
 
   // Sort by hour
-  deduped.sort((a, b) => a.hour - b.hour);
-
-  // Strip internal index before returning
-  return deduped.map(e => ({ type: e.type, hour: e.hour, label: e.label, isTomorrow: e.isTomorrow }));
+  events.sort((a, b) => a.hour - b.hour);
+  return events;
 }
 
 // Check if we have events but are missing times — need to ask user
 function eventsMissingTimes(text) {
   const lower = text.toLowerCase();
-  const hasEventKeywords = /workout|gym|tennis|hockey|soccer|football|basketball|marathon|race|triathlon|dinner party|dinner out|restaurant|going out/.test(lower);
+  const hasEventKeywords = /workout|gym|tennis|hockey|soccer|football|basketball|marathon|race|triathlon|golf|yoga|run|swim|dinner party|dinner date|restaurant|going out|eating out|birthday|wedding|brunch|drinks|bar/.test(lower);
   const hasTimeKeywords = /\d+\s*(am|pm)|at\s+\d+|\d+:\d+|morning|afternoon|evening|night/.test(lower);
   return hasEventKeywords && !hasTimeKeywords;
 }
@@ -210,7 +144,7 @@ function buildMultiEventStrategy(events, currentHour, goal) {
 MULTI-EVENT DAY DETECTED — ${events.length} event(s):
 ${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 (${e.label})`).join("\n")}
 
-CALORIE TARGET: Aim for 85-95% of ${goal.calories} cal (${Math.round(goal.calories * 0.85)}-${Math.round(goal.calories * 0.95)} cal)
+CALORIE TARGET: Aim for 85-95% of ${goal.calories} cal (${Math.round(goal.calories * 0.85)}-${Math.round(goal.calories * 0.95)} cal). Never below 80% (${Math.round(goal.calories * 0.8)} cal) on active days.
 
 MEAL TIMELINE RULES:
 `;
@@ -223,22 +157,22 @@ MEAL TIMELINE RULES:
     if (isPhysicalEvent(event.type)) {
       strategy += `
 ${event.type.toUpperCase()} at ${event.hour}:00 (${event.label}):
-- 2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes)
+- 2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal) 300-400 cal
 - Within 1 hour after: recovery meal — HIGH protein + carbs
-${nextEvent && isSocialEvent(nextEvent.type) ? `- NOTE: Social event follows at ${nextEvent.hour}:00 — budget calories accordingly` : ""}
+${nextEvent && isSocialEvent(nextEvent.type) ? `- NOTE: Social event follows at ${nextEvent.hour}:00 — recovery meal should be lighter since social eating comes next` : "- Include a full Dinner block for post-event recovery"}
 `;
     } else if (isSocialEvent(event.type)) {
       strategy += `
 SOCIAL EVENT at ${event.hour}:00 (${event.label}):
-${prevEvent && isPhysicalEvent(prevEvent.type) ? `- Follows physical event at ${prevEvent.hour}:00` : ""}
+${prevEvent && isPhysicalEvent(prevEvent.type) ? `- Follows physical event at ${prevEvent.hour}:00 — budget remaining calories for this meal` : "- Keep meals before this event LIGHT (lean protein + veg)"}
 - DO NOT create a meal block for this event — unknown menu
 - After all planned meal blocks, add plain text:
-  "For the ${event.label} — I don't know the exact menu, so here's what to look for:
+  "For the ${event.label} — I don\'t know the exact menu, so here\'s what to look for:
   - Lean protein: grilled or baked over fried
-  - Light on heavy sauces and rich sides 
+  - Light on heavy sauces and rich sides  
   - Go easy on bread and alcohol
   - Watch portion sizes
-  When you're there, take a photo of the menu and I'll help you pick the best option."
+  When you\'re there, take a photo of the menu and I\'ll help you pick the best option."
 - Budget remaining calories for this event in plain text only
 `;
     }
@@ -248,7 +182,7 @@ ${prevEvent && isPhysicalEvent(prevEvent.type) ? `- Follows physical event at ${
 MEAL BLOCK STRUCTURE FOR THIS DAY:
 Only create blocks for meals YOU control (before events or between events).
 For social dining events: plain text guidance only, NO meal block.
-For physical events: include Dinner block for post-event recovery UNLESS a social event follows.
+For physical events: include Dinner block for post-event recovery UNLESS a social event follows soon after.
 Total planned meals should add up to 85-95% of ${goal.calories} cal.
 `;
 
@@ -258,15 +192,15 @@ Total planned meals should add up to 85-95% of ${goal.calories} cal.
 function isRestaurantOrPartyMeal(text) {
   if (!text) return false;
   const lower = text.toLowerCase();
-  return /dinner party|dinner date|restaurant|going out|eating out|party|wedding|birthday|someone's place|someone's house/.test(lower);
+  return /dinner party|dinner date|restaurant|going out|eating out|party|wedding|birthday|someone('s| else| is).*cook|friend.*cook|family.*cook|steak dinner|sushi|italian|chinese|mexican|thai|indian|at a (restaurant|bar|pub|place)/.test(lower);
 }
 
 function getUnloggedMealPrompt(hour, nothingLogged) {
   if (!nothingLogged) return null;
-  if (hour >= 7 && hour < 11) return "It's morning and nothing is logged yet. Ask: 'Have you had breakfast yet?' before planning.";
-  if (hour >= 11 && hour < 14) return "It's late morning/lunchtime and nothing is logged. Ask: 'What have you eaten so far today?' before planning.";
-  if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't see any meals logged today — what have you had so far?' before planning.";
-  if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see anything logged today. What have you eaten so far?' before planning.";
+  if (hour >= 7  && hour < 11) return "It's morning and nothing is logged yet. Ask: 'Have you had breakfast yet? If so, what did you have? I want to make sure I account for it before planning your day.'";
+  if (hour >= 11 && hour < 14) return "It's late morning/lunchtime and nothing is logged. Ask: 'Before I plan your meals, what have you eaten so far today? Even a rough idea helps me give you accurate advice.'";
+  if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't have any food logged for today. What have you eaten so far? Knowing this is important before I suggest anything for the rest of the day.'";
+  if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see anything logged today. What did you eat earlier? I want to factor that in before suggesting anything for tonight.'";
   return null;
 }
 
@@ -288,12 +222,12 @@ export async function POST(req) {
       const { data: profile } = await supabase
         .from("user_profiles").select("*").eq("user_id", activeUserId).single();
       if (profile) {
-        userName = profile.name || "there";
-        currentWeight = profile.current_weight;
-        targetWeight = profile.target_weight;
-        weightUnit = profile.weight_unit || "lbs";
-        activityLevel = profile.activity_level || "moderately active";
-        goalType = profile.goal_type || "fat_loss";
+        userName         = profile.name || "there";
+        currentWeight    = profile.current_weight;
+        targetWeight     = profile.target_weight;
+        weightUnit       = profile.weight_unit || "lbs";
+        activityLevel    = profile.activity_level || "moderately active";
+        goalType         = profile.goal_type || "fat_loss";
         healthConditions = profile.health_conditions || "";
       }
     } catch (e) { console.log("Profile error:", e.message); }
@@ -317,9 +251,9 @@ export async function POST(req) {
     const totals = sumMeals(todayMeals);
     const remaining = {
       calories: Math.max(0, goal.calories - totals.calories),
-      protein: Math.max(0, goal.protein - totals.protein),
-      carbs: Math.max(0, goal.carbs - totals.carbs),
-      fat: Math.max(0, goal.fat - totals.fat),
+      protein:  Math.max(0, goal.protein  - totals.protein),
+      carbs:    Math.max(0, goal.carbs    - totals.carbs),
+      fat:      Math.max(0, goal.fat      - totals.fat),
     };
 
     const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
@@ -327,7 +261,6 @@ export async function POST(req) {
     const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
 
     const allText = [...history.map(h => h.content || ""), message || ""].join(" ");
-
     // Multi-event detection
     const events = extractAllEvents(allText);
     const hasMultipleEvents = events.length > 1;
@@ -369,6 +302,7 @@ export async function POST(req) {
 
     // Build event strategy
     let eventStrategy = "";
+
     // If user mentioned events but no times — ask for times
     if (missingEventTimes && !hasAnyEvent) {
       eventStrategy = `
@@ -389,31 +323,31 @@ RULES — NO EXCEPTIONS:
 1. Create meal blocks ONLY for meals BEFORE the event (Breakfast, Lunch, Snack)
 2. Do NOT create a Dinner block. Not even an estimate. Not steak, not anything.
 3. After the pre-event meal blocks, write this in plain text:
-  "For the dinner itself — I don't know the exact menu, so here's what to look for:
-  - Go for grilled or baked protein over fried
-  - Skip heavy cream sauces and rich sides
-  - Go easy on bread and appetizers
-  - Watch portion sizes on starches
-  When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
+   "For the dinner itself — I don't know the exact menu, so here's what to look for:
+   - Go for grilled or baked protein over fried
+   - Skip heavy cream sauces and rich sides
+   - Go easy on bread and appetizers
+   - Watch portion sizes on starches
+   When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
 4. Tell them how many calories they have budgeted for the event in plain text only
 5. Keep pre-event meals light — lean protein + vegetables
 6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event`;
     } else if ((hasEventToday || hasTomorrowEvent) && eventType) {
       if (["sport", "workout", "endurance"].includes(eventType)) {
         eventStrategy = `
-PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour !== null ? eventHour + ":00" : "scheduled time"}):
+PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour !== null ? eventHour + ":00" : "scheduled time"}, ${hoursUntilEvent !== null ? hoursUntilEvent + "h away" : ""}):
 
-CALORIE RULE FOR SPORT/RACE DAY: Aim for 85-95% of the ${goal.calories} calorie target (${Math.round(goal.calories * 0.85)}-${Math.round(goal.calories * 0.95)} cal)
+CALORIE RULE FOR SPORT/RACE DAY: Aim for 85-95% of the ${goal.calories} calorie target (${Math.round(goal.calories * 0.85)}-${Math.round(goal.calories * 0.95)} cal minimum). Athletes need solid fuel. Never plan below 80% (${Math.round(goal.calories * 0.8)} cal) on a race or game day unless user explicitly asks for a deficit.
 
 MEAL STRUCTURE FOR THE FULL DAY:
 1. Breakfast: balanced, good carbs + protein (up at ${hour}:00 so plan accordingly)
 2. Lunch: high carbs, moderate protein, low fat — fuel loading
-3. Pre-event Snack (2-3 hours before event): HIGH carbs, LOW fat, easy to digest (300-400 cal)
-4. Post-event Dinner (within 1-2 hours after): HIGH protein + carbs for recovery — this is MANDATORY
+3. Pre-event Snack (2-3 hours before event): HIGH carbs, LOW fat, easy to digest (300-400 cal) — banana, rice cakes, oatmeal
+4. Post-event Dinner (within 1-2 hours after): HIGH protein + carbs for recovery — this is MANDATORY, do not skip it
 5. Optional late Snack if still under calorie goal
 
 IMPORTANT:
-- You MUST include a Dinner block for post-race/game recovery. This is NOT a restaurant meal — you plan it.
+- You MUST include a Dinner block for post-race/game recovery. This is NOT a restaurant meal — you know what recovery food looks like. Create the Dinner block.
 - Total across all meals should reach ${goal.calories} cal
 - Add timing notes AFTER each meal block in plain text
 - You CAN use two Snack blocks (pre-event + post-event if needed)`;
@@ -427,9 +361,9 @@ LONG WORK DAY STRATEGY:
       }
     }
 
-    let systemMessage = `You are ${userName}'s personal AI nutrition coach, health advisor, and meal planning partner.
+    let systemMessage = `You are ${userName}'s personal AI nutrition coach, health advisor, and supportive friend.
 
-This app serves ALL types of people — athletes, gym-goers, busy professionals, people managing health conditions, families, etc.
+This app serves ALL types of people — athletes, gym-goers, busy professionals, people managing health conditions, parents, seniors, and anyone wanting to live healthier. Adapt completely to WHO the person is and WHAT their day looks like.
 
 ══════════════════════════════════════════
 CRITICAL FORMATTING RULES
@@ -440,8 +374,8 @@ CRITICAL FORMATTING RULES
 4. Short sections with line breaks. Never walls of text.
 
 EMOJI RULES:
-Use: 🍽️ 📊 💪 ✅ ⚖️ 🔥 👉 💡 🥗 🍗 🎯
-Avoid: 🎉 😊 🔥 💪 😍 🙌
+Use: 🎯 📊 👉 ✅ ⚖️ 💬 🧠 👍 🔍
+Avoid: 🎉 😊 🔥 💪
 
 ══════════════════════════════════════════
 PERSONALITY
@@ -458,8 +392,8 @@ Name: ${userName}
 Health Goal: ${goalLabel}
 Activity Level: ${activityLevel}
 Very Active: ${veryActive ? "YES" : "NO"}
-${currentWeight ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
-${targetWeight ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
+${currentWeight  ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
+${targetWeight   ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
 ${healthConditions ? `Health Notes: ${healthConditions}` : ""}
 Local Time: ${hour}:00 (${timeOfDay})
 
@@ -475,29 +409,28 @@ You MUST use ${goal.calories} as the daily calorie goal in ALL coaching and meal
 Do NOT say "your new target for fat loss is 2300" or any invented number.
 Do NOT use ${weightLossCals} as the plan target unless user explicitly asks to lose weight TODAY.
 If user says "stay within my macros" or "plan my meals" → use ${goal.calories}. Full stop.
-
 Do NOT calculate a different number based on their goal type.
 Do NOT apply your own deficit to arrive at a different target.
 Do NOT say "for fat loss you should eat X" if X is different from ${goal.calories}.
 
-The ${goal.calories} target ALREADY reflects their goals — it is the number they want to eat daily.
+The ${goal.calories} target ALREADY reflects their goals — it is the number they want to eat each day.
 
 When telling the user how many calories they have left, ALWAYS calculate from ${goal.calories}.
-Example: if ${userName} has eaten ${totals.calories} cal, they have ${remaining.calories} cal remaining out of ${goal.calories}.
+Example: if ${userName} has eaten ${totals.calories} cal, they have ${remaining.calories} cal remaining — not any other number.
 
 TODAY'S INTAKE (${today}):
 Calories: ${totals.calories}/${goal.calories} (${remaining.calories} remaining)
-Protein: ${totals.protein}/${goal.protein}g
-Carbs: ${totals.carbs}/${goal.carbs}g
-Fat: ${totals.fat}/${goal.fat}g
+Protein:  ${totals.protein}/${goal.protein}g
+Carbs:    ${totals.carbs}/${goal.carbs}g
+Fat:      ${totals.fat}/${goal.fat}g
 
 MEALS LOGGED TODAY:
 ${mealsSummary}
 
-${events.length > 0 ? `🗓️ EVENTS DETECTED (${events.length}):
-${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 ${e.isTomorrow ? "(tomorrow)" : ""} (${e.label})`).join("\n")}` : "No events detected"}
+${events.length > 0 ? `📅 EVENTS DETECTED (${events.length}):
+${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 ${e.isTomorrow ? "(tomorrow)" : "(today)"} — ${e.label}`).join("\n")}` : ""}
 ${hasRestaurantMeal ? "🍽️ RESTAURANT/PARTY MEAL DETECTED" : ""}
-${missingEventTimes && !hasAnyEvent ? "⚠️ EVENTS MENTIONED BUT NO TIMES PROVIDED — ASK FOR TIMES" : ""}
+${missingEventTimes && !hasAnyEvent ? "⚠️ EVENTS MENTIONED BUT NO TIMES PROVIDED — ASK FOR TIMES BEFORE PLANNING" : ""}
 
 ══════════════════════════════════════════
 CRITICAL: ASK BEFORE ASSUMING
@@ -575,9 +508,9 @@ Snack
 👉 Have this within 30 minutes after your game for recovery.
 
 WRONG:
-Snack (pre-game) FORBIDDEN — no parentheses
-Snack (post-game) FORBIDDEN — no parentheses
-**Snack** FORBIDDEN — no markdown 
+Snack (pre-game)     FORBIDDEN — no parentheses
+Snack (post-game)    FORBIDDEN — no parentheses
+**Snack**            FORBIDDEN — no markdown
 
 TOTAL FORMAT — plain text only:
 📊 Total: X cal | Xg protein | Xg carbs | Xg fat
@@ -597,7 +530,7 @@ TIME-AWARE PLANNING
 ══════════════════════════════════════════
 Current local time: ${hour}:00
 Only suggest meals for remaining time today:
-${hour < 10 ? "All meals available: Breakfast, Lunch, Snack, Dinner" : ""}
+${hour < 10  ? "All meals available: Breakfast, Lunch, Snack, Dinner" : ""}
 ${hour >= 10 && hour < 14 ? "Breakfast time has passed. Available: Lunch, Snack, Dinner" : ""}
 ${hour >= 14 && hour < 17 ? "Available: Snack, Dinner" : ""}
 ${hour >= 17 && hour < 20 ? "Available: Dinner, Snack" : ""}
@@ -614,7 +547,7 @@ ${veryActive
   : `Split: eat ${foodCutAmount} cal less + burn 200 more (20-30 min walk). New target: ${weightLossCals} cal.`}
 ${weightToLose ? `Timeline: ${weightToLose} lbs ÷ 1/week = ${weeksToGoal} weeks.` : ""}
 Ask: "Want a meal plan for tomorrow at ${weightLossCals} cal? Or a 2-3 day plan?"
-When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.` : `If user asks about losing weight, ask what timeline they have in mind and confirm before planning.`}
+When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.` : `If user asks about losing weight or mentions lbs to lose, THEN calculate a deficit plan. Otherwise use ${goal.calories} cal for all plans.`}
 
 ══════════════════════════════════════════
 MULTI-FOOD LOGGING
@@ -662,25 +595,6 @@ Hummus:            2 tbsp = 70 cal, 2g P, 6g C, 4g F
 UNITS: Always use US units — oz, cups, tbsp, tsp, slices, pieces`;
 
     if (context?.type === "food_log") {
-      // Smart duplicate meal detection - converts duplicates to snacks
-      if (context.mealType) {
-        let finalMealType = context.mealType;
-        
-        // Check if user already logged this meal type today
-        const existingMealOfSameType = todayMeals.find(meal => 
-          meal.meal_type.toLowerCase() === context.mealType.toLowerCase()
-        );
-        
-        if (existingMealOfSameType && context.mealType !== 'snack') {
-          finalMealType = 'snack';
-          // Add context to system prompt about the meal type change
-          systemMessage += `\n\nIMPORTANT DUPLICATE MEAL HANDLING: The user already logged ${context.mealType} today, so log this as a SNACK instead. Tell the user: "I see you already logged ${context.mealType} today. I'll add this as a snack instead."`;
-        }
-        
-        // Update the context to use the final meal type
-        context.mealType = finalMealType;
-      }
-      
       systemMessage += `
 
 ══════════════════════════════════════════
@@ -688,7 +602,7 @@ FOOD LOGGING MODE
 ══════════════════════════════════════════
 ${userName} is logging food they ate.
 Original: "${context.originalMessage}"
-${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00 → ${hour < 11 ? "breakfast" : hour < 15 ? "lunch" : hour < 18 ? "snack" : "dinner"}`}
+${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
 QUANTITY DETECTION — READ THIS FIRST:
@@ -700,12 +614,12 @@ These all count as quantities already provided:
 
 DECISION TREE:
 Step 1: Does the original message contain ALL foods WITH quantities (using any of the above)?
- → YES: Calculate macros immediately and return meal block. Do NOT ask anything.
- → NO: Ask for the FIRST missing quantity only. Nothing else.
+→ YES: Calculate macros immediately and return meal block. Do NOT ask anything.
+→ NO: Ask for the FIRST missing quantity only. Nothing else.
 
 Step 2 (after follow-up): Do you now have quantities for ALL foods?
- → YES: Return the complete meal block with all foods combined.
- → NO: Ask for the next missing quantity.
+→ YES: Return the complete meal block with all foods combined.
+→ NO: Ask for the next missing quantity.
 
 EXAMPLES:
 "I had a slice of toast, half an avocado, and 2 eggs" → ALL quantities present → LOG IMMEDIATELY
@@ -728,7 +642,7 @@ Local time: ${hour}:00
 Nothing logged: ${nothingEatenYet}
 ${events.length > 0 ? `Events detected: ${events.map(e => `${e.type} at ${e.hour}:00`).join(", ")}` : "No events detected"}
 ${missingEventTimes && !hasAnyEvent ? "MISSING TIMES: Ask user what time each event is before planning." : ""}
-${hasRestaurantMeal && !hasPhysicalEvents && !hasMultipleEvents ? "Restaurant/social event only — DO NOT create a Dinner block." : ""}
+${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO NOT create a Dinner block. Plain text guidance only." : ""}
 
 ${nothingEatenYet ? `
 IMPORTANT: Nothing logged. Ask what they've eaten today before creating a plan.
@@ -754,33 +668,26 @@ Plain text total after all meal blocks.`;
     }
     conversationMessages.push({ role: "user", content: message || "" });
 
-    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Events: ${events.length} | Restaurant: ${hasRestaurantMeal} ===`);
-    if (events.length > 0) {
-      console.log("Events:", events.map(e => `${e.type}@${e.hour}:00${e.isTomorrow ? "(tmrw)" : ""}`).join(", "));
-    }
+    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Events: ${events.length} | Restaurant: ${hasRestaurantMeal}`);
+
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: conversationMessages,
+      temperature: 0.7,
+    });
+
+    const reply = completion.choices[0].message.content;
+    console.log("=== RESPONSE ===\n", reply);
 
     try {
-      const completion = await client.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: conversationMessages,
-        temperature: 0.7,
-      });
+      await supabase.from("ai_messages").insert([{
+        user_id: activeUserId, message: message || "", response: reply,
+        created_at: new Date().toISOString(),
+      }]);
+    } catch (e) { console.log("Save error:", e); }
 
-      const reply = completion.choices[0].message.content;
-      console.log("=== RESPONSE ===\n", reply);
+    return Response.json({ reply });
 
-      try {
-        await supabase.from("ai_messages").insert([{
-          user_id: activeUserId, message: message || "", response: reply,
-          created_at: new Date().toISOString(),
-        }]);
-      } catch (e) { console.log("Save error:", e); }
-
-      return Response.json({ reply });
-    } catch (error) {
-      console.error("AI ERROR:", error);
-      return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
-    }
   } catch (error) {
     console.error("AI ERROR:", error);
     return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
