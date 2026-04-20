@@ -340,20 +340,21 @@ export default function Home() {
           const meal = meals[0];
           const saveDate = getLocalDate();
           
-          const response = await fetch('/api/save-meal', {
+          const response = await fetch('/api/save-meals', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              table: 'actual_meals',
               userId,
-              date: saveDate,
-              meal_type: activeMealLog.mealType,
-              food: meal.foods.join(', '),
-              calories: meal.calories,
-              protein: meal.protein,
-              carbs: meal.carbs,
-              fat: meal.fat,
-              servings: meal.servings || 1,
-              table: 'actual_meals'
+              meal: {
+                date: saveDate,
+                mealType: activeMealLog.mealType,
+                food: meal.foods.join(', '),
+                calories: meal.calories,
+                protein: meal.protein,
+                carbs: meal.carbs,
+                fat: meal.fat
+              }
             })
           });
 
@@ -505,21 +506,21 @@ export default function Home() {
     try {
       const table = activeMealLog ? 'actual_meals' : 'planned_meals';
       
-      const response = await fetch('/api/save-meal', {
+      const response = await fetch('/api/save-meals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          table,
           userId,
-          date: saveDate,
-          meal_type: meal.type,
-          food: meal.foods.join(', '),
-          calories: meal.calories,
-          protein: meal.protein,
-          carbs: meal.carbs,
-          fat: meal.fat,
-          servings: meal.servings || 1,
-          suggested_time: meal.suggestedTime || null,
-          table
+          meal: {
+            date: saveDate,
+            mealType: meal.type,
+            food: meal.foods.join(', '),
+            calories: meal.calories,
+            protein: meal.protein,
+            carbs: meal.carbs,
+            fat: meal.fat
+          }
         })
       });
 
