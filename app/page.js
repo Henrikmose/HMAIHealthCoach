@@ -330,7 +330,9 @@ export default function Home() {
       const isCompletedLog = lastMessage.content.includes('Updated totals') || 
                             lastMessage.content.includes('Got it') ||
                             lastMessage.content.includes('Great! Here\'s the complete meal block') ||
-                            (activeMealLog && lastMessage.content.includes('**' + activeMealLog.mealType + '**'));
+                            lastMessage.content.includes('Let\'s log') ||
+                            lastMessage.content.includes('Total:') ||
+                            (activeMealLog && lastMessage.content.includes('**' + activeMealLog.mealType.charAt(0).toUpperCase() + activeMealLog.mealType.slice(1) + '**'));
 
       if (isCompletedLog && activeMealLog) {
         // Auto-save the meal
