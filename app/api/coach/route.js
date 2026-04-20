@@ -337,6 +337,15 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat - totals.fat),
     };
 
+    // Use only the CURRENT message for event detection to avoid stale history picking up old events.
+    // Fall back to recent history only if current message has no events.
+    const currentText = message || "";
+    let events = extractAllEvents(currentText);
+    if (events.length === 0) {
+      const recentHistory = history.slice(-4).map(h => h.content || "").join(" ");
+      events = extractAllEvents(recentHistory + " " + currentText);
+    }
+
     // Determine if user is planning tomorrow vs today based on events
     const planningTomorrow = events.some(e => e.isTomorrow);
     const planningToday = events.some(e => !e.isTomorrow);
@@ -350,15 +359,6 @@ export async function POST(req) {
     
     // Skip asking about today's meals if user is planning tomorrow
     const shouldAskAboutTodaysMeals = nothingEatenYet && !planningTomorrow;
-
-    // Use only the CURRENT message for event detection to avoid stale history picking up old events.
-    // Fall back to recent history only if current message has no events.
-    const currentText = message || "";
-    let events = extractAllEvents(currentText);
-    if (events.length === 0) {
-      const recentHistory = history.slice(-4).map(h => h.content || "").join(" ");
-      events = extractAllEvents(recentHistory + " " + currentText);
-    }
 
     const hasMultipleEvents = events.length > 1;
     const hasAnyEvent = events.length > 0;
