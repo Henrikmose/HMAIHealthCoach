@@ -25,7 +25,15 @@ function formatDateLabel(dateStr) {
 
 function sumMeals(meals) {
   return (meals || []).reduce(
-    (t, m) => ({ calories: t.calories + Number(m.calories||0), protein: t.protein + Number(m.protein||0), carbs: t.carbs + Number(m.carbs||0), fat: t.fat + Number(m.fat||0) }),
+    (t, m) => {
+      const s = Number(m.servings || 1);
+      return {
+        calories: t.calories + Number(m.calories||0) * s,
+        protein: t.protein + Number(m.protein||0) * s,
+        carbs: t.carbs + Number(m.carbs||0) * s,
+        fat: t.fat + Number(m.fat||0) * s
+      };
+    },
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
 }
@@ -54,20 +62,57 @@ function MacroBar({ label, value, goal, color }) {
   );
 }
 
-function MealCard({ meal, onDelete, onMarkEaten, isActual }) {
+function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, isActual }) {
   const [busy, setBusy] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [servings, setServings] = useState(meal.servings || 1);
+  
   async function act(fn) { setBusy(true); await fn(); setBusy(false); }
+  
+  async function handleDelete() {
+    if (!showConfirm) {
+      setShowConfirm(true);
+      return;
+    }
+    await act(() => onDelete(meal.id));
+    setShowConfirm(false);
+  }
+  
+  async function handleServingsChange(newServings) {
+    const val = parseFloat(newServings);
+    if (isNaN(val) || val <= 0) return;
+    setServings(val);
+    if (onUpdateServings) {
+      await onUpdateServings(meal.id, val, isActual);
+    }
+  }
+
+  const displayCal = Math.round((meal.calories || 0) * servings);
+  const displayP = Math.round((meal.protein || 0) * servings);
+  const displayC = Math.round((meal.carbs || 0) * servings);
+  const displayF = Math.round((meal.fat || 0) * servings);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
       <div className="flex justify-between items-start gap-2">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-gray-800 leading-snug">{meal.food}</p>
-          <div className="flex gap-3 mt-1.5 flex-wrap">
-            <span className="text-xs font-medium text-gray-500">🔥 {meal.calories} cal</span>
-            <span className="text-xs font-medium text-blue-500">P {meal.protein}g</span>
-            <span className="text-xs font-medium text-emerald-500">C {meal.carbs}g</span>
-            <span className="text-xs font-medium text-amber-500">F {meal.fat}g</span>
+          <div className="flex gap-3 mt-1.5 flex-wrap items-center">
+            <span className="text-xs font-medium text-gray-500">🔥 {displayCal} cal</span>
+            <span className="text-xs font-medium text-blue-500">P {displayP}g</span>
+            <span className="text-xs font-medium text-emerald-500">C {displayC}g</span>
+            <span className="text-xs font-medium text-amber-500">F {displayF}g</span>
+          </div>
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-xs text-gray-400">Servings:</span>
+            <input
+              type="number"
+              min="0.25"
+              step="0.25"
+              value={servings}
+              onChange={(e) => handleServingsChange(e.target.value)}
+              className="w-16 text-xs px-2 py-1 border border-gray-200 rounded-lg text-center focus:outline-none focus:border-blue-400"
+            />
           </div>
         </div>
         <div className="flex gap-1.5 flex-shrink-0">
@@ -77,10 +122,23 @@ function MealCard({ meal, onDelete, onMarkEaten, isActual }) {
               {busy ? "..." : "✓ Ate"}
             </button>
           )}
-          <button onClick={() => act(() => onDelete(meal.id))} disabled={busy}
-            className="text-xs px-2.5 py-1.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-red-400 transition-colors disabled:opacity-40">
-            {busy ? "..." : "✕"}
-          </button>
+          {showConfirm ? (
+            <div className="flex gap-1">
+              <button onClick={handleDelete} disabled={busy}
+                className="text-xs px-2 py-1.5 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 transition-colors disabled:opacity-40">
+                {busy ? "..." : "Yes"}
+              </button>
+              <button onClick={() => setShowConfirm(false)}
+                className="text-xs px-2 py-1.5 rounded-xl bg-gray-200 text-gray-600 hover:bg-gray-300 transition-colors">
+                No
+              </button>
+            </div>
+          ) : (
+            <button onClick={handleDelete} disabled={busy}
+              className="text-xs px-2.5 py-1.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-red-50 hover:text-red-400 transition-colors disabled:opacity-40">
+              {busy ? "..." : "✕"}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -145,6 +203,17 @@ export default function DashboardPage() {
       await supabase.from("planned_meals").delete().eq("id", meal.id);
       await load(uid, selectedDate);
     } catch (e) { console.error("Mark eaten exception:", e); }
+  }
+
+  async function updateServings(id, newServings, isActual) {
+    const table = isActual ? "actual_meals" : "planned_meals";
+    const { error } = await supabase.from(table).update({ servings: newServings }).eq("id", id);
+    if (error) { console.error("Update servings error:", error); return; }
+    if (isActual) {
+      setActual((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
+    } else {
+      setPlanned((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
+    }
   }
 
   const actualTotals  = sumMeals(actual);
@@ -244,7 +313,7 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deletePlanned} onMarkEaten={markEaten} isActual={false} />)}
+                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deletePlanned} onMarkEaten={markEaten} onUpdateServings={updateServings} isActual={false} />)}
                 </div>
               ))}
             </div>
@@ -266,7 +335,7 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deleteActual} onMarkEaten={() => {}} isActual={true} />)}
+                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deleteActual} onMarkEaten={() => {}} onUpdateServings={updateServings} isActual={true} />)}
                 </div>
               ))}
             </div>

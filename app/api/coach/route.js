@@ -638,55 +638,77 @@ Original: "${context.originalMessage}"
 ${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
-STOP — READ THESE RULES BEFORE RESPONDING:
-
-RULE 1: NEVER ASK THE USER FOR CALORIES OR MACROS
-You are the nutrition expert. YOU calculate calories from quantities.
+RULE 1: NEVER ASK USER FOR CALORIES OR MACROS — YOU ARE THE EXPERT
 WRONG: "How many calories are in the eggs?"
-RIGHT: Calculate it yourself using the macro reference table.
+WRONG: "How much does the spicy tuna roll weigh?"
+RIGHT: Use your nutrition knowledge to estimate. A standard sushi roll = ~300-350 cal. Eggs = 70 cal each.
 
-RULE 2: WHAT COUNTS AS A QUANTITY (the pattern)
-A quantity is ANY of the following before or after a food:
+RULE 2: IF THERE'S ANY NUMBER OR DESCRIPTOR, LOG IT
+Quantities include: numbers (2, 8, .5), units (oz, pcs, cup), or words (a, half, whole, medium, large)
+- "2 eggs" → LOG (has number)
+- "8oz chicken" or "8 oz" → LOG (has number + unit)
+- "8pcs cali roll" or "8 pcs" → LOG (has number + unit)
+- ".5 cup rice" or "half cup" → LOG (has fraction)
+- "a whole avocado" → LOG (has "a" and "whole")
+- "a banana" → LOG (has "a")
+- "3 salmon sashimi" → LOG (has number)
 
-NUMBERS: 1, 2, 3, 8, 0.5, .5, 1/2, 1/4, etc.
-UNITS: oz, pcs, pieces, piece, cup, cups, slice, slices, tbsp, tsp, scoop, scoops, bowl, plate, serving
-WORDS: a, an, one, two, three, half, whole, entire, quarter, single, couple, few, small, medium, large
-COMBOS: "8oz", "8 oz", "8pcs", "8 pcs", ".5 cup", "0.5 cup", "half cup", "2 large"
+RULE 3: ONLY ASK IF TRULY NOTHING IS THERE
+- "I had chicken" → no quantity at all → ask "How much chicken?"
+- "I had rice" → no quantity at all → ask "How much rice?"
 
-If ANY of these patterns appear with a food → QUANTITY IS PROVIDED → LOG IT
-
-RULE 3: ONLY ASK IF TRULY MISSING
-ASK only when there is literally NO number, unit, or descriptor:
-- "I had chicken" → nothing indicating amount → ask
-- "I had rice" → nothing indicating amount → ask
-- "chicken and rice" → no quantities at all → ask for first one
-
-DO NOT ASK if any indicator exists:
-- "2 eggs" → has number → LOG
-- "8oz chicken" → has number+unit → LOG
-- "a whole avocado" → has "a" + "whole" → LOG
-- "half an avocado" → has "half" → LOG
-- "8pcs cali roll" → has number+unit → LOG
-- ".5 cup rice" → has number+unit → LOG
-- "a banana" → has "a" → LOG
-- "large coffee" → has "large" → LOG
-
-RULE 4: CALCULATE MACROS YOURSELF
-Use the macro reference table in this prompt. Never ask the user for nutritional info.
-
-DECISION PROCESS:
-1. Scan message for foods
-2. For each food: does it have a number, unit, or descriptor word? 
-3. YES to all → Calculate macros → Return meal block
-4. NO to any → Ask "How much [food]?" for the first missing one only
+RULE 4: USE REASONABLE ESTIMATES WHEN EXACT IS UNKNOWN
+Standard portions:
+- Sushi roll = ~50-60 cal per piece, 8-piece roll = ~400-500 cal
+- Sashimi = ~40 cal per piece
+- Chicken breast = 46 cal/oz, 8.7g protein/oz
+- Eggs = 70 cal, 6g protein each
+- Avocado = 240 cal, 22g fat
+- Toast = 80 cal per slice
+Use the macro reference table. When in doubt, estimate reasonably and LOG IT.
 
 AFTER LOGGING — ALWAYS include:
 1. 📊 Updated totals: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
 2. 👉 One coaching tip about macros
-3. IF 300+ calories remaining: Suggest a specific snack that fits their remaining macros`;
+3. IF 300+ calories remaining: Suggest a specific snack`;
     }
 
     if (context?.type === "meal_planning") {
+      // Calculate suggested eating times based on events
+      let timingGuide = "";
+      if (events.length > 0) {
+        const sortedEvents = [...events].sort((a, b) => a.hour - b.hour);
+        sortedEvents.forEach((event, idx) => {
+          if (isPhysicalEvent(event.type)) {
+            if (event.hour <= 8) {
+              // Early morning workout - don't suggest eating at 5am!
+              timingGuide += `
+${event.type.toUpperCase()} at ${event.hour}:00:
+- OPTION A: Light snack 30 min before (${event.hour - 1}:30am) — banana or toast, ~150 cal
+- OPTION B: Work out fasted, eat breakfast AFTER (${event.hour + 1}:00am)
+- Post-workout recovery: ${event.hour + 1}:00-${event.hour + 2}:00am — eggs, oatmeal, protein shake
+DO NOT suggest a full 300+ cal breakfast before a 7am or 8am workout. That means eating at 5-6am which is unrealistic.
+`;
+            } else {
+              const preEventTime = event.hour - 2;
+              const postEventTime = event.hour + 1;
+              timingGuide += `
+${event.type.toUpperCase()} at ${event.hour}:00:
+- Pre-event snack: ${preEventTime}:00 (2 hours before)
+- Post-event recovery: ${postEventTime}:00 (within 1 hour after)
+`;
+            }
+          } else if (isSocialEvent(event.type)) {
+            timingGuide += `
+SOCIAL EVENT at ${event.hour}:00 (${event.label}):
+- Keep meals before this LIGHT
+- Budget ${Math.round(goal.calories * 0.4)}-${Math.round(goal.calories * 0.5)} cal for this event
+- NO meal block — give plain text guidance only
+`;
+          }
+        });
+      }
+
       systemMessage += `
 
 ══════════════════════════════════════════
@@ -694,19 +716,24 @@ MEAL PLANNING MODE
 ══════════════════════════════════════════
 Request: "${context.request || message}"
 Local time: ${hour}:00
-Nothing logged: ${nothingEatenYet}
+Planning for: ${events.some(e => e.isTomorrow) ? "TOMORROW" : "TODAY"}
 ${events.length > 0 ? `Events detected: ${events.map(e => `${e.type} at ${e.hour}:00`).join(", ")}` : "No events detected"}
 ${missingEventTimes && !hasAnyEvent ? "MISSING TIMES: Ask user what time each event is before planning." : ""}
 ${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO NOT create a Dinner block. Plain text guidance only." : ""}
 
-${nothingEatenYet ? `
-IMPORTANT: Nothing logged. Ask what they've eaten today before creating a plan.
-Exception: if they said "I haven't eaten yet" or "starting fresh", proceed.
-` : ""}
+${timingGuide}
 
-SNACK RULES FOR THIS PLAN:
+CRITICAL — INCLUDE SPECIFIC TIMES:
+After each meal block, add a line like:
+👉 Have this at 6:30am (30 min before workout)
+👉 Post-workout recovery at 8:15am
+👉 Lunch at 12:30pm during work
+👉 Pre-tennis snack at 4:00pm
+
+Calculate times based on the events the user gave you. Be specific!
+
+SNACK RULES:
 - For athletic events: suggest TWO Snacks (pre-event + post-event recovery)
-- For normal days: one Snack is fine
 - Each Snack gets its own separate block with timing context after it
 - NEVER suggest 2 Breakfasts, 2 Lunches, or 2 Dinners
 
