@@ -499,8 +499,10 @@ export default function HomePage() {
       let newActiveMealLog = activeMealLog;
 
       // Check if user is confirming a previously suggested meal — MUST check before planning detection
-      const lastAiMsg = [...history].reverse().find(m => m.role === "assistant");
-      const lastAiHadMeals = lastAiMsg && parseAllMeals(lastAiMsg.content).length > 0;
+      // Look at last 4 AI messages in case the most recent was a text-only response
+      const recentAiMsgs = [...history].reverse().filter(m => m.role === "assistant").slice(0, 4);
+      const anyRecentAiHadMeals = recentAiMsgs.some(m => parseAllMeals(m.content).length > 0);
+      const lastAiHadMeals = anyRecentAiHadMeals;
 
       if (isLogMessage(trimmed)) {
         newActiveMealLog = {
@@ -698,9 +700,12 @@ export default function HomePage() {
           const triggerText = !isUser && history[idx - 1]?.role === "user"
             ? history[idx - 1].content
             : "";
-          // Button only shows after user confirms the suggestion
-          const nextUserMsg = history[idx + 1]?.role === "user" ? history[idx + 1].content : null;
-          const userConfirmed = nextUserMsg && isConfirmation(nextUserMsg);
+          // Button shows after user confirms — check next user message OR the one after that
+          // (in case AI gave a text-only recap after the plan before user said yes)
+          const nextUserMsg  = history[idx + 1]?.role === "user" ? history[idx + 1].content : null;
+          const nextNextUserMsg = history[idx + 3]?.role === "user" ? history[idx + 3].content : null;
+          const userConfirmed = (nextUserMsg && isConfirmation(nextUserMsg)) ||
+                                (nextNextUserMsg && isConfirmation(nextNextUserMsg));
           const showButtons = meals.length > 0 && userConfirmed;
           const targetDate = extractTargetDate(triggerText);
           const allSaved = meals.length > 0 &&
