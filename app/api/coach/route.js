@@ -524,11 +524,18 @@ NEVER use **Breakfast** — just write Breakfast (plain text).
 
 ALLOWED MEAL TYPES: Breakfast, Lunch, Dinner, Snack
 
-SNACK RULE — VERY IMPORTANT:
+ONE PER TYPE RULE — NO EXCEPTIONS:
+- MAXIMUM 1 Breakfast block per plan
+- MAXIMUM 1 Lunch block per plan
+- MAXIMUM 1 Dinner block per plan
+- Snack is the ONLY type that can repeat
+WRONG: Two Dinner blocks in one plan — NEVER do this
+WRONG: Two Lunch blocks in one plan — NEVER do this
+
+SNACK RULE:
 - You CAN suggest MULTIPLE Snacks in one plan
 - Each Snack gets its own separate block
 - Add timing context AFTER the block in plain text
-- NEVER suggest 2 Breakfasts, 2 Lunches, or 2 Dinners
 
 CORRECT (multiple snacks):
 Snack
@@ -547,16 +554,35 @@ Snack
 - Carbs: 12
 - Fat: 8
 
-👉 Have this within 30 minutes after your game for recovery.
+👉 Have this right after your game for recovery.
 
 WRONG:
 Snack (pre-game)     FORBIDDEN — no parentheses
 Snack (post-game)    FORBIDDEN — no parentheses
 **Snack**            FORBIDDEN — no markdown
 
+POST-EVENT TIMING RULE:
+NEVER guess a specific time after an event. You don't know how long it lasts.
+WRONG: "Have this at 8:30pm (after your workout)"
+WRONG: "Have this at 9:00pm post-game"
+RIGHT: "Have this right after your workout"
+RIGHT: "Have this right after your game — within 1 hour of finishing"
+
 TOTAL FORMAT — plain text only:
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
 👉 [one coaching note]
+
+EVERY MEAL PLAN MUST END WITH THIS LINE:
+Reply "yes" to save this plan, or let me know if you'd like to change anything.
+
+CUISINE / RESTAURANT AMBIGUITY RULE:
+If the user mentions a cuisine or food type (sushi, Italian, Mexican, etc.) without clearly stating whether they are going OUT or want it planned:
+- DO NOT guess — ask first
+- Say: "Are you going out for sushi or would you like me to plan a sushi meal for you?"
+- Wait for their answer before creating any meal block
+Clear signals to plan it: "plan me sushi", "I want sushi for lunch", "add sushi to my plan"
+Clear signals it's a restaurant: "going out for sushi", "sushi restaurant", "sushi date", "sushi dinner out"
+Ambiguous — always ask: "sushi lunch scheduled", "having sushi", "sushi at 12:30"
 
 IMPORTANT: The total must include ALREADY EATEN calories too.
 Already eaten today: ${totals.calories} cal | ${totals.protein}g P | ${totals.carbs}g C | ${totals.fat}g F
@@ -770,17 +796,18 @@ ${timingGuide}
 CRITICAL — TIMING RULES:
 Pre-event snack time: calculate EXACTLY. Event at 7:30pm, 30 min before = 7:00pm NOT 6:00pm.
 Formula: snack_time = event_time minus buffer_minutes. Do the math explicitly.
-Post-event meal: NEVER guess a specific time — say "right after your [event]" or "when you get home from your [event]". Only use a specific time if the user told you how long the event lasts.
+Post-event meal: NEVER use a specific time — always say "right after your [event]" or "when you get home from your [event]".
+No exceptions. You don't know how long the event lasts so never guess a post-event time.
 
-CRITICAL — INCLUDE SPECIFIC TIMES:
-After each meal block, add a line like:
+CRITICAL — INCLUDE SPECIFIC TIMES FOR PRE-EVENT:
+After each meal block, add a timing note like:
 👉 Have this at 6:30am (30 min before workout)
-👉 Post-workout breakfast at 8:15am — right after your workout
 👉 Lunch at 12:30pm during work
 👉 Pre-tennis snack at 4:00pm (2 hours before your 6pm match)
-👉 Right after your game — recovery dinner when you get home
+👉 Right after your workout — have this within 1 hour of finishing
+👉 Right after your game — recovery meal when you get home
 
-Calculate pre-event times precisely. Use "right after your [event]" for post-event always.
+Pre-event: always calculate exact time. Post-event: always say "right after".
 
 SNACK RULES:
 - For athletic events: suggest TWO Snacks (pre-event + post-event recovery)

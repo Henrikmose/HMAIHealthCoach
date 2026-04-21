@@ -215,6 +215,13 @@ function parseAllMeals(text) {
         mealCounts[matchedType]++;
         const count = mealCounts[matchedType];
 
+        // Deduplicate — only one Breakfast, Lunch, Dinner allowed per plan
+        // Snacks can repeat freely
+        if (matchedType !== "snack" && count > 1) {
+          i = j;
+          continue; // skip duplicate non-snack blocks
+        }
+
         const displayType =
           matchedType === "snack" && count > 1
             ? `snack_${count}`
@@ -575,17 +582,19 @@ export default function HomePage() {
     if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
 
-    // Always query DB directly — never trust stale React state
-    const { data: existing } = await supabase
-      .from("planned_meals")
-      .select("id")
-      .eq("user_id", uid)
-      .eq("meal_type", meal.mealType)
-      .eq("date", targetDate);
+    // Only replace for Breakfast/Lunch/Dinner — Snacks can stack (multiple per day)
+    if (meal.mealType !== "snack") {
+      const { data: existing } = await supabase
+        .from("planned_meals")
+        .select("id")
+        .eq("user_id", uid)
+        .eq("meal_type", meal.mealType)
+        .eq("date", targetDate);
 
-    if (existing && existing.length > 0) {
-      for (const e of existing) {
-        await supabase.from("planned_meals").delete().eq("id", e.id);
+      if (existing && existing.length > 0) {
+        for (const e of existing) {
+          await supabase.from("planned_meals").delete().eq("id", e.id);
+        }
       }
     }
 
@@ -744,7 +753,7 @@ export default function HomePage() {
                       const key     = getMealKey(idx, meal);
                       const isSaved = savedPlanKeys.includes(key);
                       const label   = getMealLabel(meal.displayType);
-                      const hasExisting = plannedMeals.some(
+                      const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
                         pm => pm.meal_type === meal.mealType && pm.date === targetDate
                       );
                       return (
