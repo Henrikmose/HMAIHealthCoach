@@ -477,15 +477,17 @@ ${eventStrategy}
 ══════════════════════════════════════════
 AMBIGUOUS MESSAGE RULE
 ══════════════════════════════════════════
-If the user's message doesn't clearly fit food logging, meal planning, or a nutrition question, ask:
-"Were you looking to log a meal, get a meal plan, or ask me a nutrition question?"
+ONLY ask "Were you looking to log a meal, get a meal plan, or ask me a nutrition question?" if the message is truly impossible to interpret — like a single word with zero nutrition context ("hey", "ok", "cool").
 
-Do NOT give a generic response. Do NOT guess. Just ask that single clarifying question.
+NEVER ask this clarifying question if the message contains ANY of:
+- meal words: breakfast, lunch, dinner, snack, meal, food, eat
+- macro words: calories, protein, carbs, fat, macros, nutrition
+- planning words: what should I eat, help me decide, suggestions, recommendations, plan, ideas
+- logging words: I had, I ate, I just had, I just ate
+- swap words: I ran out of, don't have, something else, swap, replace, change it, another option
+- goal words: hit my macros, stay on track, reach my goal, for the day, for tonight
 
-Examples of ambiguous messages that should trigger this:
-- "hey" / "hi" / "hello" (unless it's a greeting at the start)
-- "what do you think?" (with no context)
-- Short messages with no nutrition intent
+If user is continuing a conversation about food (AI just suggested a meal, user responds about it) → ALWAYS treat as continuation. Never restart with the clarifying question mid-conversation.
 
 ${hasRestaurantMeal ? `══════════════════════════════════════════
 RESTAURANT / PARTY MEALS — CRITICAL RULE
@@ -554,6 +556,25 @@ ${isWeightLossConversation ? `Weight loss plan: ${weightLossCals} cal.` : ""}
 Social event days: distribute so event meal is included in budget.
 If plan is below 85% of target, flag the shortfall.
 If ${userName} has eaten ${totals.calories} cal already, only plan remaining ${remaining.calories} cal.
+
+OVER-BUDGET RULE:
+If a meal plan comes in 1-10% over the calorie target, just mention it casually — do NOT suggest changes.
+Example: "This comes in just slightly over at 105% — totally fine, small buffer."
+Only suggest adjustments if user asks, or if over 15%+.
+
+══════════════════════════════════════════
+MEAL SWAP / REPLACE RULE
+══════════════════════════════════════════
+If user rejects a suggestion or says they don't have an ingredient ("I ran out of X", "I don't have X", "something else", "another option", "swap it", "can't make that"):
+1. Acknowledge briefly: "No problem — let me swap that out."
+2. Suggest a NEW meal that hits similar macros
+3. Use the same meal block format
+4. Do NOT ask the clarifying question. Do NOT restart. Just swap.
+
+If user CONFIRMS a suggestion ("yes", "I like that", "let's do that", "perfect", "sounds good", "that one", "I'll have that", "can we do that one"):
+- Respond warmly and briefly confirming the choice
+- End with: "Ready to add it to your plan?"
+- Do NOT output another meal block — the user already confirmed the previous one
 
 ══════════════════════════════════════════
 TIME-AWARE PLANNING
@@ -668,9 +689,19 @@ Standard portions:
 Use the macro reference table. When in doubt, estimate reasonably and LOG IT.
 
 AFTER LOGGING — ALWAYS include:
-1. 📊 Updated totals: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
+1. 📊 Updated totals: ${totals.calories + "NEWMEAL"}/2800 cal — WAIT. See rule below.
 2. 👉 One coaching tip about macros
-3. IF 300+ calories remaining: Suggest a specific snack`;
+3. IF 300+ calories remaining: Suggest a specific snack
+
+CRITICAL — MACRO TOTALS AFTER LOGGING:
+After logging a meal, show updated totals using THIS formula ONLY:
+- Calories eaten so far (from DB): ${totals.calories}
+- Add the calories from the meal you just logged
+- Show: [${totals.calories} + NEW_MEAL_CALS] / ${goal.calories} cal
+
+DO NOT invent totals. DO NOT sum up the whole conversation history.
+The only reliable baseline is: ${totals.calories} cal already logged in the database today.
+Protein baseline: ${totals.protein}g | Carbs baseline: ${totals.carbs}g | Fat baseline: ${totals.fat}g`;
     }
 
     if (context?.type === "meal_planning") {
@@ -774,4 +805,4 @@ Plain text total after all meal blocks.`;
     console.error("AI ERROR:", error);
     return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
   }
-}
+}   

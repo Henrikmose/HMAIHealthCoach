@@ -88,7 +88,39 @@ function isMealPlanningRequest(text) {
     /race\s+day.*eat/i,
     /how.*eat.*race/i,
     /how.*eat.*game/i,
+    // Broader dinner/meal suggestion patterns
+    /help.*deciding.*dinner/i,
+    /help.*deciding.*lunch/i,
+    /help.*deciding.*breakfast/i,
+    /what.*have.*dinner/i,
+    /what.*have.*lunch/i,
+    /what.*have.*breakfast/i,
+    /dinner.*macros/i,
+    /lunch.*macros/i,
+    /hit.*macros/i,
+    /reach.*macros/i,
+    /recommendations.*eat/i,
+    /what.*recommendations/i,
+    /ideas.*eat/i,
+    /ideas.*dinner/i,
+    /ideas.*lunch/i,
+    /tell me.*dinner/i,
+    /tell me.*eat/i,
+    /deciding.*eat/i,
+    /for\s+dinner\b/i,
+    /for\s+lunch\b/i,
+    /for\s+breakfast\b/i,
   ].some((p) => p.test(text));
+}
+
+function isConfirmation(text) {
+  if (!text) return false;
+  return /\b(yes|yeah|yep|yup|sure|perfect|great|sounds good|i like that|let'?s do|that one|i'?ll have|add it|can we do that|looks good|works for me|do that one|i want that|i'?ll take|love it|that works|go with that|do it|let'?s go with)\b/i.test(text);
+}
+
+function isMealSwap(text) {
+  if (!text) return false;
+  return /i ran out|don'?t have|out of|no more|something else|another option|another suggestion|swap|give me another|can'?t make|different option|instead of|instead|no (salmon|chicken|beef|fish|meat|that)/i.test(text);
 }
 
 function isWeightGoalRequest(text) {
@@ -313,6 +345,7 @@ export default function HomePage() {
   const [isLoading, setIsLoading]         = useState(false);
   const [activeMealLog, setActiveMealLog] = useState(null);
   const [todayMeals, setTodayMeals]       = useState([]);
+  const [plannedMeals, setPlannedMeals]   = useState([]);
   const [userId, setUserId]               = useState(null);
   const [userName, setUserName]           = useState("");
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
@@ -349,6 +382,7 @@ export default function HomePage() {
     if (userId) {
       loadGoals(userId);
       loadTodayMeals(userId);
+      loadPlannedMeals(userId);
       loadTodayMessages(userId);
     }
   }, [userId]);
@@ -394,19 +428,30 @@ export default function HomePage() {
     }
   }
 
+  async function loadPlannedMeals(uid) {
+    try {
+      const { data } = await supabase
+        .from("planned_meals").select("*")
+        .eq("user_id", uid)
+        .eq("date", getLocalDate());
+      setPlannedMeals(data || []);
+    } catch (e) {
+      console.log("Planned meals load error:", e);
+    }
+  }
+
   async function loadTodayMessages(uid) {
     try {
-      const today = getLocalDate();
+      // Load last 20 messages — no date filter to avoid timezone issues
       const { data } = await supabase
         .from("ai_messages").select("*")
         .eq("user_id", uid)
-        .gte("created_at", `${today}T00:00:00.000Z`)
-        .lte("created_at", `${today}T23:59:59.999Z`)
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: false })
+        .limit(20);
 
       if (data && data.length > 0) {
         const rebuilt = [];
-        for (const row of data) {
+        for (const row of data.reverse()) {
           if (row.message)  rebuilt.push({ role: "user",      content: row.message });
           if (row.response) rebuilt.push({ role: "assistant", content: row.response });
         }
@@ -460,6 +505,11 @@ export default function HomePage() {
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed };
+      } else if (isMealSwap(trimmed) && history.some(m => m.role === "assistant" && parseAllMeals(m.content).length > 0)) {
+        // User is swapping a previously suggested meal — treat as planning continuation
+        newActiveMealLog = null;
+        setActiveMealLog(null);
+        context = { type: "meal_planning", request: trimmed, isSwap: true };
       } else if (activeMealLog) {
         newActiveMealLog = {
           ...activeMealLog,
@@ -516,9 +566,22 @@ export default function HomePage() {
     const key = getMealKey(msgIdx, meal);
     if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
+
+    // If a planned meal of this type already exists for this date, delete it first (replace)
+    const existing = plannedMeals.find(
+      pm => pm.meal_type === meal.mealType && pm.date === targetDate
+    );
+    if (existing) {
+      await supabase.from("planned_meals").delete().eq("id", existing.id);
+    }
+
     const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-    if (saved) setSavedPlanKeys((prev) => [...prev, key]);
-    else alert("Could not save to plan. Please try again.");
+    if (saved) {
+      setSavedPlanKeys((prev) => [...prev, key]);
+      await loadPlannedMeals(uid);
+    } else {
+      alert("Could not save to plan. Please try again.");
+    }
   }
 
   async function handleAddAllToPlan(meals, msgIdx, targetDate) {
@@ -612,8 +675,10 @@ export default function HomePage() {
           const triggerText = !isUser && history[idx - 1]?.role === "user"
             ? history[idx - 1].content
             : "";
-          const showButtons = meals.length > 0 &&
-            (isMealPlanningRequest(triggerText) || isWeightGoalRequest(triggerText));
+          // Button only shows after user confirms the suggestion
+          const nextUserMsg = history[idx + 1]?.role === "user" ? history[idx + 1].content : null;
+          const userConfirmed = nextUserMsg && isConfirmation(nextUserMsg);
+          const showButtons = meals.length > 0 && userConfirmed;
           const targetDate = extractTargetDate(triggerText);
           const allSaved = meals.length > 0 &&
             meals.every((m) => savedPlanKeys.includes(getMealKey(idx, m)));
@@ -665,6 +730,9 @@ export default function HomePage() {
                       const key     = getMealKey(idx, meal);
                       const isSaved = savedPlanKeys.includes(key);
                       const label   = getMealLabel(meal.displayType);
+                      const hasExisting = plannedMeals.some(
+                        pm => pm.meal_type === meal.mealType && pm.date === targetDate
+                      );
                       return (
                         <button
                           key={key}
@@ -673,11 +741,15 @@ export default function HomePage() {
                           className={`w-full text-xs py-2 px-4 rounded-xl font-medium transition-all border ${
                             isSaved
                               ? "bg-emerald-50 text-emerald-600 border-emerald-200 cursor-default"
+                              : hasExisting
+                              ? "bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100 active:scale-95"
                               : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50 active:scale-95"
                           }`}
                         >
                           {isSaved
                             ? `✅ ${label} added`
+                            : hasExisting
+                            ? `↺ Replace ${label} · ${meal.calories} cal`
                             : `+ Add ${label} · ${meal.calories} cal`}
                         </button>
                       );
