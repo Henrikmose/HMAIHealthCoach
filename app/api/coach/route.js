@@ -224,7 +224,8 @@ function getUnloggedMealPrompt(hour, nothingLogged) {
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { message, context, history = [], userId, localHour, localDate: clientDate, image } = body;
+    const { message, context, history = [], userId, localHour, localDate: clientDate, images } = body;
+    const image = images?.[0] || null; // backward compat for single image checks
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
     const hour = typeof localHour === "number" ? localHour : new Date().getHours();
@@ -348,7 +349,8 @@ RULES — NO EXCEPTIONS:
    When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
 4. Tell them how many calories they have budgeted for the event in plain text only
 5. Keep pre-event meals light — lean protein + vegetables
-6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event`;
+6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event
+7. When logging a restaurant meal after the fact: always add "Note: these are estimates based on typical restaurant portions — actual macros will vary."`;
     } else if ((hasEventToday || hasTomorrowEvent) && eventType) {
       if (["sport", "workout", "endurance"].includes(eventType)) {
         eventStrategy = `
@@ -853,57 +855,61 @@ Each meal type alone on its own line — no parentheses.
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat after all meal blocks.`;
     }
 
-    // ── Photo context prompt ────────────────────────────────────────
-    if (context?.type === "photo" && image) {
+    if (context?.type === "photo" && images?.length > 0) {
       const photoIntent = context.photoIntent || "unknown";
+      const imageCount = images.length;
       systemMessage += `
 
 ══════════════════════════════════════════
-PHOTO MODE
+PHOTO MODE — ${imageCount} image(s) received
 ══════════════════════════════════════════
-The user has sent a photo. Analyze it carefully.
-
-INTENT DETECTED: ${photoIntent}
 User message: "${context.message || "(no message)"}"
+Intent detected: ${photoIntent}
+Number of images: ${imageCount}
 
-PHOTO HANDLING RULES:
-
+${imageCount === 1 ? `SINGLE LABEL / MENU:
 IF it's a NUTRITION LABEL:
-1. Read ALL values carefully: calories, protein, carbs, fat, serving size, servings per container
-2. Return the macros clearly:
-   "Got it — [Product name if visible]
-   Per serving:
-   - Calories: X
-   - Protein: Xg
-   - Carbs: Xg
-   - Fat: Xg
-   - Serving size: X"
-3. Then ask about servings if unclear: "How many servings did you have?"
-4. Once confirmed → return a meal block in standard format for logging
+1. Read ALL values: calories, protein, carbs, fat, serving size
+2. Report clearly:
+   "Got it — [Product name]
+   Per serving: Calories X | Protein Xg | Carbs Xg | Fat Xg | Serving: X"
+3. If servings unclear: ask "How many servings did you have?"
+4. Then ask: "Did you eat this or saving it for later?"
+   - Eaten → return standard meal block for actual_meals
+   - Planned → return standard meal block noted as planned
 
-IF intent is "eaten" → log to actual_meals (return meal block)
-IF intent is "planned" → log to planned_meals (return meal block, note it as planned)
-IF intent is "unknown" → ask: "Did you eat this or are you planning to have it later?"
-
-IF it's TWO LABELS (comparison):
-1. Read both labels
-2. Compare side by side based on ${userName}'s remaining macros today:
-   Remaining: ${remaining.calories} cal | ${remaining.protein}g protein | ${remaining.carbs}g carbs | ${remaining.fat}g fat
-3. Declare a winner with clear reasoning
-4. Ask if they want to log the winner
+IF intent is "eaten" → skip the question, return meal block directly
+IF intent is "planned" / "for later" / "as planned" → skip question, return meal block for planned
 
 IF it's a RESTAURANT MENU:
 1. Read the menu items
-2. Based on remaining macros (${remaining.calories} cal left, ${remaining.protein}g protein needed)
-3. Recommend 2-3 best options with estimated macros
-4. Explain why each works for their goals
-5. "Take a photo of what you ordered and I'll log it for you"
+2. Based on ${userName}'s remaining macros: ${remaining.calories} cal | ${remaining.protein}g P | ${remaining.carbs}g C | ${remaining.fat}g F
+3. Recommend 2-3 best options with estimated macros and clear reasoning
+4. Always add this disclaimer after recommendations:
+   "Note: these are estimates based on typical restaurant portions — actual macros will vary depending on how the restaurant prepares each dish."
+5. End with: "Let me know which one you pick and I'll log it for you"
 
-IF the image is unclear/blurry/unreadable:
-- Say: "I can't quite read this — could you try a clearer photo with better lighting?"
-- Do NOT guess if you can't read it confidently
+IMPORTANT — WHEN USER SAYS THEY WILL ORDER FROM RESTAURANT:
+If the user previously got multiple recommendations and says something like "I'll order that" or "add it to my dinner":
+- DO NOT assume which item they mean if multiple were suggested
+- Ask: "Which one did you go with — [option 1], [option 2], or [option 3]?"
+- Only create a meal block AFTER they confirm the specific item
 
-NEVER make up macro numbers. Only report what you can clearly see on the label.`;
+IF image is unclear: "I can't quite read this — could you try a clearer photo?"` :
+
+`MULTIPLE LABELS — COMPARISON MODE (${imageCount} labels):
+1. Read each label carefully — label them Label 1, Label 2, etc.
+2. Build a comparison:
+   Label 1: [name if visible] — X cal | Xg P | Xg C | Xg F per serving
+   Label 2: [name if visible] — X cal | Xg P | Xg C | Xg F per serving
+   (etc.)
+3. Based on ${userName}'s remaining macros today:
+   Remaining: ${remaining.calories} cal | ${remaining.protein}g protein | ${remaining.carbs}g carbs | ${remaining.fat}g fat
+4. Declare a winner with clear reasoning — which fits best for their goals
+5. Explain the key trade-offs for the others
+6. End with: "Want me to log the winner? And did you eat it or saving for later?"`}
+
+NEVER make up macro numbers. Only report what you can clearly read on the label.`;
     }
 
     const conversationMessages = [{ role: "system", content: systemMessage }];
@@ -913,29 +919,24 @@ NEVER make up macro numbers. Only report what you can clearly see on the label.`
       }
     }
 
-    // Build the final user message — with image if present
-    if (image?.base64) {
-      conversationMessages.push({
-        role: "user",
-        content: [
-          {
-            type: "image_url",
-            image_url: {
-              url: `data:${image.mimeType};base64,${image.base64}`,
-              detail: "high",
-            },
-          },
-          ...(message ? [{ type: "text", text: message }] : []),
-        ],
-      });
+    // Build final user message — with images if present
+    if (images?.length > 0) {
+      const contentParts = images.map(img => ({
+        type: "image_url",
+        image_url: {
+          url: `data:${img.mimeType};base64,${img.base64}`,
+          detail: "high",
+        },
+      }));
+      if (message) contentParts.push({ type: "text", text: message });
+      conversationMessages.push({ role: "user", content: contentParts });
     } else {
       conversationMessages.push({ role: "user", content: message || "" });
     }
 
-    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photo: ${image ? "YES" : "NO"} | Events: ${events.length}`);
+    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
-    // Use vision-capable model when image is present
-    const model = image?.base64 ? "gpt-4o" : "gpt-4o-mini";
+    const model = images?.length > 0 ? "gpt-4o" : "gpt-4o-mini";
 
     const completion = await client.chat.completions.create({
       model,
