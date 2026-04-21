@@ -638,36 +638,52 @@ Original: "${context.originalMessage}"
 ${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
-QUANTITY DETECTION — READ THIS FIRST:
-These all count as quantities already provided:
-- Numbers: "2 eggs", "6oz chicken", "1 cup rice"
-- Fractions: "half an avocado", "half a banana", "1/2 cup"
-- Portions: "a slice", "one slice", "a piece", "a medium", "a large"
-- Descriptive: "a handful", "a small bowl"
-- Complete items: "a whole avocado", "whole banana", "entire apple"
-- When macros provided: "protein shake - 150 cal, 30g protein" = complete info
+STOP — READ THESE RULES BEFORE RESPONDING:
 
-DECISION TREE:
-Step 1: Does the original message contain ALL foods WITH quantities (using any of the above)?
-→ YES: Calculate macros immediately and return meal block. Do NOT ask anything.
-→ NO: Ask for the FIRST missing quantity only. Nothing else.
+RULE 1: NEVER ASK THE USER FOR CALORIES OR MACROS
+You are the nutrition expert. YOU calculate calories from quantities.
+WRONG: "How many calories are in the eggs?"
+RIGHT: Calculate it yourself using the macro reference table.
 
-Step 2 (after follow-up): Do you now have quantities for ALL foods?
-→ YES: Return the complete meal block with all foods combined.
-→ NO: Ask for the next missing quantity.
+RULE 2: WHAT COUNTS AS A QUANTITY (the pattern)
+A quantity is ANY of the following before or after a food:
 
-EXAMPLES:
-"I had a slice of toast, half an avocado, and 2 eggs" → ALL quantities present → LOG IMMEDIATELY
-"I had a whole avocado and 3 eggs" → ALL quantities present → LOG IMMEDIATELY  
-"I had a protein shake - 150 cal, 30g protein" → Complete info → LOG IMMEDIATELY
-"I had chicken and rice" → NO quantities → ask "How much chicken did you have?"
-"I had 6oz chicken" → quantity present for chicken only → log chicken immediately
+NUMBERS: 1, 2, 3, 8, 0.5, .5, 1/2, 1/4, etc.
+UNITS: oz, pcs, pieces, piece, cup, cups, slice, slices, tbsp, tsp, scoop, scoops, bowl, plate, serving
+WORDS: a, an, one, two, three, half, whole, entire, quarter, single, couple, few, small, medium, large
+COMBOS: "8oz", "8 oz", "8pcs", "8 pcs", ".5 cup", "0.5 cup", "half cup", "2 large"
 
-AFTER LOGGING — ALWAYS include these 3 things:
+If ANY of these patterns appear with a food → QUANTITY IS PROVIDED → LOG IT
+
+RULE 3: ONLY ASK IF TRULY MISSING
+ASK only when there is literally NO number, unit, or descriptor:
+- "I had chicken" → nothing indicating amount → ask
+- "I had rice" → nothing indicating amount → ask
+- "chicken and rice" → no quantities at all → ask for first one
+
+DO NOT ASK if any indicator exists:
+- "2 eggs" → has number → LOG
+- "8oz chicken" → has number+unit → LOG
+- "a whole avocado" → has "a" + "whole" → LOG
+- "half an avocado" → has "half" → LOG
+- "8pcs cali roll" → has number+unit → LOG
+- ".5 cup rice" → has number+unit → LOG
+- "a banana" → has "a" → LOG
+- "large coffee" → has "large" → LOG
+
+RULE 4: CALCULATE MACROS YOURSELF
+Use the macro reference table in this prompt. Never ask the user for nutritional info.
+
+DECISION PROCESS:
+1. Scan message for foods
+2. For each food: does it have a number, unit, or descriptor word? 
+3. YES to all → Calculate macros → Return meal block
+4. NO to any → Ask "How much [food]?" for the first missing one only
+
+AFTER LOGGING — ALWAYS include:
 1. 📊 Updated totals: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
 2. 👉 One coaching tip about macros
-3. IF 300+ calories remaining: Suggest a specific snack that fits their remaining macros
-   Example: "You have 900 cal left — a Greek yogurt with berries (~200 cal, 20g protein) later would help hit your protein target."`;
+3. IF 300+ calories remaining: Suggest a specific snack that fits their remaining macros`;
     }
 
     if (context?.type === "meal_planning") {
