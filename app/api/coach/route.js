@@ -224,7 +224,7 @@ function getUnloggedMealPrompt(hour, nothingLogged) {
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { message, context, history = [], userId, localHour, localDate: clientDate } = body;
+    const { message, context, history = [], userId, localHour, localDate: clientDate, image } = body;
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
     const hour = typeof localHour === "number" ? localHour : new Date().getHours();
@@ -853,18 +853,92 @@ Each meal type alone on its own line — no parentheses.
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat after all meal blocks.`;
     }
 
+    // ── Photo context prompt ────────────────────────────────────────
+    if (context?.type === "photo" && image) {
+      const photoIntent = context.photoIntent || "unknown";
+      systemMessage += `
+
+══════════════════════════════════════════
+PHOTO MODE
+══════════════════════════════════════════
+The user has sent a photo. Analyze it carefully.
+
+INTENT DETECTED: ${photoIntent}
+User message: "${context.message || "(no message)"}"
+
+PHOTO HANDLING RULES:
+
+IF it's a NUTRITION LABEL:
+1. Read ALL values carefully: calories, protein, carbs, fat, serving size, servings per container
+2. Return the macros clearly:
+   "Got it — [Product name if visible]
+   Per serving:
+   - Calories: X
+   - Protein: Xg
+   - Carbs: Xg
+   - Fat: Xg
+   - Serving size: X"
+3. Then ask about servings if unclear: "How many servings did you have?"
+4. Once confirmed → return a meal block in standard format for logging
+
+IF intent is "eaten" → log to actual_meals (return meal block)
+IF intent is "planned" → log to planned_meals (return meal block, note it as planned)
+IF intent is "unknown" → ask: "Did you eat this or are you planning to have it later?"
+
+IF it's TWO LABELS (comparison):
+1. Read both labels
+2. Compare side by side based on ${userName}'s remaining macros today:
+   Remaining: ${remaining.calories} cal | ${remaining.protein}g protein | ${remaining.carbs}g carbs | ${remaining.fat}g fat
+3. Declare a winner with clear reasoning
+4. Ask if they want to log the winner
+
+IF it's a RESTAURANT MENU:
+1. Read the menu items
+2. Based on remaining macros (${remaining.calories} cal left, ${remaining.protein}g protein needed)
+3. Recommend 2-3 best options with estimated macros
+4. Explain why each works for their goals
+5. "Take a photo of what you ordered and I'll log it for you"
+
+IF the image is unclear/blurry/unreadable:
+- Say: "I can't quite read this — could you try a clearer photo with better lighting?"
+- Do NOT guess if you can't read it confidently
+
+NEVER make up macro numbers. Only report what you can clearly see on the label.`;
+    }
+
     const conversationMessages = [{ role: "system", content: systemMessage }];
     if (history?.length > 0) {
       for (const msg of history.slice(-10)) {
         if (msg.role && msg.content) conversationMessages.push({ role: msg.role, content: msg.content });
       }
     }
-    conversationMessages.push({ role: "user", content: message || "" });
 
-    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Events: ${events.length} | Restaurant: ${hasRestaurantMeal}`);
+    // Build the final user message — with image if present
+    if (image?.base64) {
+      conversationMessages.push({
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${image.mimeType};base64,${image.base64}`,
+              detail: "high",
+            },
+          },
+          ...(message ? [{ type: "text", text: message }] : []),
+        ],
+      });
+    } else {
+      conversationMessages.push({ role: "user", content: message || "" });
+    }
+
+    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photo: ${image ? "YES" : "NO"} | Events: ${events.length}`);
+
+    // Use vision-capable model when image is present
+    const model = image?.base64 ? "gpt-4o" : "gpt-4o-mini";
 
     const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
+      model,
       messages: conversationMessages,
       temperature: 0.7,
     });

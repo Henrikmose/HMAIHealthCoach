@@ -122,6 +122,17 @@ function isMealSwap(text) {
   return /i ran out|don'?t have|out of|no more|something else|another option|another suggestion|swap|give me another|can'?t make|different option|instead of|instead|no (salmon|chicken|beef|fish|meat|that)/i.test(text);
 }
 
+function detectPhotoIntent(text) {
+  if (!text) return "unknown";
+  const lower = text.toLowerCase();
+  if (/i (just |already )?(had|ate|drank|consumed|finished)/i.test(lower)) return "eaten";
+  if (/for (dinner|lunch|breakfast|snack|later|tonight|tomorrow)/i.test(lower)) return "planned";
+  if (/(going to|will have|planning|saving|for when i get home|store|shopping|found this)/i.test(lower)) return "planned";
+  if (/(which|better|compare|vs|versus|best for|recommend|should i (get|buy|choose))/i.test(lower)) return "compare";
+  if (/(menu|order|what (should|can) i (get|order|have)|restaurant)/i.test(lower)) return "menu";
+  return "unknown";
+}
+
 function isWeightGoalRequest(text) {
   if (!text) return false;
   return [
@@ -355,6 +366,8 @@ export default function HomePage() {
   const [userId, setUserId]               = useState(null);
   const [userName, setUserName]           = useState("");
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
+  const [pendingImage, setPendingImage]   = useState(null); // { base64, mimeType, preview }
+  const [showPhotoMenu, setShowPhotoMenu] = useState(false);
 
   const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
     if (typeof window !== "undefined") {
@@ -367,8 +380,10 @@ export default function HomePage() {
     return [];
   });
 
-  const messagesEndRef = useRef(null);
-  const textareaRef    = useRef(null);
+  const messagesEndRef  = useRef(null);
+  const textareaRef     = useRef(null);
+  const cameraInputRef  = useRef(null);
+  const libraryInputRef = useRef(null);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -484,15 +499,24 @@ export default function HomePage() {
 
   async function handleSend() {
     const trimmed = message.trim();
-    if (!trimmed || isLoading) return;
+    if ((!trimmed && !pendingImage) || isLoading) return;
 
     const uid = userId || localStorage.getItem("user_id");
     setMessage("");
     setIsLoading(true);
 
-    const userMsg    = { role: "user", content: trimmed };
+    // Build user message — include image preview if present
+    const userMsg = {
+      role: "user",
+      content: trimmed || (pendingImage ? "📷 Photo" : ""),
+      imagePreview: pendingImage?.preview || null,
+    };
     const newHistory = [...history, userMsg];
     setHistory(newHistory);
+
+    // Capture and clear image before async ops
+    const imageToSend = pendingImage;
+    setPendingImage(null);
 
     try {
       let context = {};
@@ -513,6 +537,12 @@ export default function HomePage() {
         };
         setActiveMealLog(newActiveMealLog);
         context = newActiveMealLog;
+      } else if (imageToSend) {
+        // Photo sent — detect intent from message
+        const photoIntent = detectPhotoIntent(trimmed);
+        newActiveMealLog = null;
+        setActiveMealLog(null);
+        context = { type: "photo", photoIntent, message: trimmed };
       } else if (isConfirmation(trimmed) && lastAiHadMeals) {
         // User confirmed a meal suggestion — don't treat as new planning request
         newActiveMealLog = null;
@@ -547,6 +577,7 @@ export default function HomePage() {
           userId:    uid,
           localHour: new Date().getHours(),
           localDate: getLocalDate(),
+          image:     imageToSend ? { base64: imageToSend.base64, mimeType: imageToSend.mimeType } : null,
         }),
       });
 
@@ -627,6 +658,26 @@ export default function HomePage() {
       e.preventDefault();
       handleSend();
     }
+  }
+
+  async function handleImageSelected(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setShowPhotoMenu(false);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(",")[1];
+      const mimeType = file.type || "image/jpeg";
+      const preview = reader.result;
+      setPendingImage({ base64, mimeType, preview });
+    };
+    reader.readAsDataURL(file);
+    // Reset input so same file can be selected again
+    e.target.value = "";
+  }
+
+  function clearImage() {
+    setPendingImage(null);
   }
 
   return (
@@ -723,6 +774,13 @@ export default function HomePage() {
               )}
 
               <div className="max-w-[82%] flex flex-col gap-2">
+                {/* Image preview in message bubble */}
+                {msg.imagePreview && (
+                  <div className={`rounded-2xl overflow-hidden ${isUser ? "rounded-br-sm" : "rounded-bl-sm"}`}>
+                    <img src={msg.imagePreview} alt="Shared photo"
+                      className="w-full max-w-[240px] h-auto object-cover rounded-2xl" />
+                  </div>
+                )}
                 <div
                   className={`rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
                     isUser
@@ -813,13 +871,56 @@ export default function HomePage() {
 
       {/* ── Input ── */}
       <div className="px-4 py-3 border-t border-gray-100 bg-white">
+
+        {/* Hidden file inputs */}
+        <input ref={cameraInputRef} type="file" accept="image/*" capture="environment"
+          onChange={handleImageSelected} style={{ display: "none" }} />
+        <input ref={libraryInputRef} type="file" accept="image/*"
+          onChange={handleImageSelected} style={{ display: "none" }} />
+
+        {/* Photo menu popup */}
+        {showPhotoMenu && (
+          <div className="mb-2 flex gap-2">
+            <button onClick={() => { setShowPhotoMenu(false); cameraInputRef.current?.click(); }}
+              className="flex-1 text-sm py-2.5 px-3 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 font-semibold hover:bg-blue-100 transition-colors">
+              📷 Take Photo
+            </button>
+            <button onClick={() => { setShowPhotoMenu(false); libraryInputRef.current?.click(); }}
+              className="flex-1 text-sm py-2.5 px-3 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 font-semibold hover:bg-blue-100 transition-colors">
+              🖼️ Choose from Library
+            </button>
+            <button onClick={() => setShowPhotoMenu(false)}
+              className="text-sm py-2.5 px-3 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors">
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Image preview */}
+        {pendingImage && (
+          <div className="mb-2 relative inline-block">
+            <img src={pendingImage.preview} alt="Preview"
+              className="h-20 w-20 object-cover rounded-xl border border-gray-200" />
+            <button onClick={clearImage}
+              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-700 text-white text-xs flex items-center justify-center hover:bg-red-500 transition-colors">
+              ✕
+            </button>
+          </div>
+        )}
+
         <div className="flex gap-2 items-end">
+          {/* Camera button */}
+          <button onClick={() => setShowPhotoMenu(!showPhotoMenu)} disabled={isLoading}
+            className="rounded-2xl px-3 text-xl transition-all active:scale-95 disabled:opacity-40 flex-shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-600"
+            style={{ minHeight: "60px" }}>
+            📷
+          </button>
           <textarea
             ref={textareaRef}
             value={message}
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask your coach..."
+            placeholder={pendingImage ? "Add a message or just send the photo..." : "Ask your coach..."}
             rows={2}
             className="flex-1 resize-none rounded-2xl px-4 py-3 text-sm focus:outline-none border transition-all bg-gray-50"
             style={{
@@ -830,7 +931,7 @@ export default function HomePage() {
           />
           <button
             onClick={handleSend}
-            disabled={isLoading || !message.trim()}
+            disabled={isLoading || (!message.trim() && !pendingImage)}
             className="rounded-2xl px-5 text-sm font-bold text-white transition-all active:scale-95 disabled:opacity-40 flex-shrink-0 shadow-sm shadow-blue-200"
             style={{
               minHeight:  "60px",
