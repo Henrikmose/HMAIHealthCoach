@@ -62,35 +62,41 @@ function MacroBar({ label, value, goal, color }) {
   );
 }
 
-function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, isActual }) {
+function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isActual }) {
   const [busy, setBusy] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [showCopy, setShowCopy] = useState(false);
   const [servings, setServings] = useState(meal.servings || 1);
-  
+  const [copyDate, setCopyDate] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  });
+  const [copyMealType, setCopyMealType] = useState(meal.meal_type || "lunch");
+
   async function act(fn) { setBusy(true); await fn(); setBusy(false); }
-  
+
   async function handleDelete() {
-    if (!showConfirm) {
-      setShowConfirm(true);
-      return;
-    }
+    if (!showConfirm) { setShowConfirm(true); return; }
     await act(() => onDelete(meal.id));
     setShowConfirm(false);
   }
-  
+
   async function handleServingsChange(newServings) {
     const val = parseFloat(newServings);
     if (isNaN(val) || val <= 0) return;
     setServings(val);
-    if (onUpdateServings) {
-      await onUpdateServings(meal.id, val, isActual);
-    }
+    if (onUpdateServings) await onUpdateServings(meal.id, val, isActual);
+  }
+
+  async function handleCopyConfirm() {
+    await act(() => onCopy({ ...meal, meal_type: copyMealType }, copyDate));
+    setShowCopy(false);
   }
 
   const displayCal = Math.round((meal.calories || 0) * servings);
-  const displayP = Math.round((meal.protein || 0) * servings);
-  const displayC = Math.round((meal.carbs || 0) * servings);
-  const displayF = Math.round((meal.fat || 0) * servings);
+  const displayP   = Math.round((meal.protein  || 0) * servings);
+  const displayC   = Math.round((meal.carbs    || 0) * servings);
+  const displayF   = Math.round((meal.fat      || 0) * servings);
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 mb-2">
@@ -105,14 +111,9 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, isActual }) {
           </div>
           <div className="flex items-center gap-2 mt-2">
             <span className="text-xs text-gray-400">Servings:</span>
-            <input
-              type="number"
-              min="0.25"
-              step="0.25"
-              value={servings}
+            <input type="number" min="0.25" step="0.25" value={servings}
               onChange={(e) => handleServingsChange(e.target.value)}
-              className="w-16 text-xs px-2 py-1 border border-gray-200 rounded-lg text-center focus:outline-none focus:border-blue-400"
-            />
+              className="w-16 text-xs px-2 py-1 border border-gray-200 rounded-lg text-center focus:outline-none focus:border-blue-400" />
           </div>
         </div>
         <div className="flex gap-1.5 flex-shrink-0">
@@ -122,6 +123,10 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, isActual }) {
               {busy ? "..." : "✓ Ate"}
             </button>
           )}
+          <button onClick={() => { setShowCopy(!showCopy); setShowConfirm(false); }} disabled={busy}
+            className="text-xs px-2.5 py-1.5 rounded-xl bg-blue-50 text-blue-500 hover:bg-blue-100 transition-colors disabled:opacity-40">
+            📋
+          </button>
           {showConfirm ? (
             <div className="flex gap-1">
               <button onClick={handleDelete} disabled={busy}
@@ -141,6 +146,37 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, isActual }) {
           )}
         </div>
       </div>
+
+      {showCopy && (
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <p className="text-xs font-semibold text-gray-600 mb-2">📋 Copy to...</p>
+          <div className="flex gap-2 mb-2">
+            <button onClick={() => { const d = new Date(); d.setDate(d.getDate()+1); setCopyDate(d.toISOString().split("T")[0]); }}
+              className="text-xs px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 transition-colors font-medium">
+              Tomorrow
+            </button>
+            <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)}
+              className="flex-1 text-xs px-2 py-1.5 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-400" />
+          </div>
+          <div className="flex gap-2">
+            <select value={copyMealType} onChange={(e) => setCopyMealType(e.target.value)}
+              className="flex-1 text-xs px-2 py-1.5 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-400 bg-white">
+              <option value="breakfast">Breakfast</option>
+              <option value="lunch">Lunch</option>
+              <option value="dinner">Dinner</option>
+              <option value="snack">Snack</option>
+            </select>
+            <button onClick={handleCopyConfirm} disabled={busy}
+              className="text-xs px-4 py-1.5 rounded-xl bg-blue-500 text-white font-semibold hover:bg-blue-600 transition-colors disabled:opacity-40">
+              {busy ? "..." : "Copy"}
+            </button>
+            <button onClick={() => setShowCopy(false)}
+              className="text-xs px-3 py-1.5 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -214,6 +250,23 @@ export default function DashboardPage() {
     } else {
       setPlanned((prev) => prev.map((m) => m.id === id ? { ...m, servings: newServings } : m));
     }
+  }
+
+  async function copyMeal(meal, targetDate) {
+    const uid = userId || localStorage.getItem("user_id");
+    const { error } = await supabase.from("planned_meals").insert([{
+      user_id: uid,
+      date: targetDate,
+      meal_type: meal.meal_type,
+      food: meal.food,
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+      servings: meal.servings || 1,
+    }]);
+    if (error) { console.error("Copy meal error:", error); alert("Could not copy meal. Please try again."); return; }
+    if (targetDate === selectedDate) await load(uid, selectedDate);
   }
 
   const actualTotals  = sumMeals(actual);
@@ -313,7 +366,7 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deletePlanned} onMarkEaten={markEaten} onUpdateServings={updateServings} isActual={false} />)}
+                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deletePlanned} onMarkEaten={markEaten} onUpdateServings={updateServings} onCopy={copyMeal} isActual={false} />)}
                 </div>
               ))}
             </div>
@@ -335,7 +388,7 @@ export default function DashboardPage() {
                     <span className="text-sm font-bold text-gray-700">{MEAL_EMOJI[type]||"🍽️"} {type.charAt(0).toUpperCase()+type.slice(1)}</span>
                     <span className="text-xs text-gray-400">{Math.round(sumMeals(meals).calories)} cal</span>
                   </div>
-                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deleteActual} onMarkEaten={() => {}} onUpdateServings={updateServings} isActual={true} />)}
+                  {meals.map((m) => <MealCard key={m.id} meal={m} onDelete={deleteActual} onMarkEaten={() => {}} onUpdateServings={updateServings} onCopy={copyMeal} isActual={true} />)}
                 </div>
               ))}
             </div>

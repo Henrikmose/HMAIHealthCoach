@@ -62,8 +62,7 @@ function isMealPlanningRequest(text) {
     /what.*eat.*tonight/i,
     /ideal\s+meal/i,
     /give.*meal/i,
-    /yes\s+please/i,
-    /yes.*plan/i,
+    /yes\s+please/i,    /yes.*plan/i,
     /sure.*plan/i,
     /create.*plan/i,
     /make.*plan/i,
@@ -492,6 +491,10 @@ export default function HomePage() {
       let context = {};
       let newActiveMealLog = activeMealLog;
 
+      // Check if user is confirming a previously suggested meal — MUST check before planning detection
+      const lastAiMsg = [...history].reverse().find(m => m.role === "assistant");
+      const lastAiHadMeals = lastAiMsg && parseAllMeals(lastAiMsg.content).length > 0;
+
       if (isLogMessage(trimmed)) {
         newActiveMealLog = {
           type:              "food_log",
@@ -501,6 +504,11 @@ export default function HomePage() {
         };
         setActiveMealLog(newActiveMealLog);
         context = newActiveMealLog;
+      } else if (isConfirmation(trimmed) && lastAiHadMeals) {
+        // User confirmed a meal suggestion — don't treat as new planning request
+        newActiveMealLog = null;
+        setActiveMealLog(null);
+        context = { type: "meal_planning", request: trimmed, isConfirmation: true };
       } else if (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed)) {
         newActiveMealLog = null;
         setActiveMealLog(null);
@@ -567,12 +575,18 @@ export default function HomePage() {
     if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
 
-    // If a planned meal of this type already exists for this date, delete it first (replace)
-    const existing = plannedMeals.find(
-      pm => pm.meal_type === meal.mealType && pm.date === targetDate
-    );
-    if (existing) {
-      await supabase.from("planned_meals").delete().eq("id", existing.id);
+    // Always query DB directly — never trust stale React state
+    const { data: existing } = await supabase
+      .from("planned_meals")
+      .select("id")
+      .eq("user_id", uid)
+      .eq("meal_type", meal.mealType)
+      .eq("date", targetDate);
+
+    if (existing && existing.length > 0) {
+      for (const e of existing) {
+        await supabase.from("planned_meals").delete().eq("id", e.id);
+      }
     }
 
     const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);

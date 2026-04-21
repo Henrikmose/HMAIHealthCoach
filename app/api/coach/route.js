@@ -48,7 +48,7 @@ function classifyEventType(text) {
   if (/hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket/.test(lower)) return "sport";
   if (/gym|workout|training|crossfit|weightlift|lifting|exercise|run|running|cycling|swim|yoga|pilates|hiit|cardio/.test(lower)) return "workout";
   if (/hike|hiking|bike ride|marathon|race|triathlon|spartan|10k|5k|half marathon|full marathon/.test(lower)) return "endurance";
-  if (/dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|lunch date/.test(lower)) return "social_dining";
+  if (/dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|lunch date|sushi|italian|chinese|mexican|thai|indian|steakhouse|dinner out|dinner tonight|dinner tomorrow|dinner at/.test(lower)) return "social_dining";
   if (/drinks|bar|cocktail|wine|beer|happy hour/.test(lower)) return "social_drinks";
   if (/bbq|barbecue|cookout|potluck|picnic/.test(lower)) return "social_food";
   if (/long day|work event|conference|meeting|presentation|interview|all.?day/.test(lower)) return "work";
@@ -91,7 +91,7 @@ function extractAllEvents(text) {
 
   // Try pattern 1: "event at time"
   let match;
-  const re1 = /(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|dinner|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|potluck|picnic|lunch)\b[^.!?]{0,30}?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
+  const re1 = /(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|dinner|sushi|italian|chinese|mexican|thai|indian|steakhouse|restaurant|going out|eating out|birthday|wedding|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|potluck|picnic|lunch)\b[^.!?]{0,30}?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
   
   while ((match = re1.exec(lower)) !== null) {
     const eventText = match[1].trim();
@@ -384,11 +384,21 @@ LONG WORK DAY STRATEGY:
 
     let systemMessage = `STOP — READ THIS FIRST — NO MARKDOWN EVER
 ══════════════════════════════════════════
-NEVER use ** or ## or * or _ or any markdown.
-Write plain text only. Markdown breaks the app.
-WRONG: **Breakfast**
-RIGHT: Breakfast
-This rule overrides everything else.
+NEVER use ** or ## or * or _ or any markdown. EVER.
+Write plain text only. Markdown breaks the app display.
+
+MOST COMMON VIOLATIONS — NEVER DO THESE:
+WRONG: **Pre-Workout Snack**     RIGHT: (nothing — just write the meal block)
+WRONG: **Post-Workout Recovery** RIGHT: (nothing — just write the meal block)
+WRONG: **Lunch**                 RIGHT: Lunch
+WRONG: **Breakfast**             RIGHT: Breakfast
+WRONG: **Dinner**                RIGHT: Dinner
+
+Do NOT add descriptive labels before meal blocks. Just write the meal type alone.
+WRONG: **Pre-Tennis Snack**\nSnack     RIGHT: Snack
+WRONG: **Recovery Dinner**\nDinner     RIGHT: Dinner
+
+This rule overrides everything else. No exceptions.
 ══════════════════════════════════════════
 
 You are ${userName}'s personal AI nutrition coach, health advisor, and supportive friend.
@@ -548,6 +558,11 @@ TOTAL FORMAT — plain text only:
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
 👉 [one coaching note]
 
+IMPORTANT: The total must include ALREADY EATEN calories too.
+Already eaten today: ${totals.calories} cal | ${totals.protein}g P | ${totals.carbs}g C | ${totals.fat}g F
+Total = already eaten + all planned meals in this plan.
+Example: if eaten=545 and plan=1380, total = 1925/2800 cal (69%)
+
 ══════════════════════════════════════════
 CALORIE TARGETS FOR MEAL PLANS
 ══════════════════════════════════════════
@@ -571,10 +586,11 @@ If user rejects a suggestion or says they don't have an ingredient ("I ran out o
 3. Use the same meal block format
 4. Do NOT ask the clarifying question. Do NOT restart. Just swap.
 
-If user CONFIRMS a suggestion ("yes", "I like that", "let's do that", "perfect", "sounds good", "that one", "I'll have that", "can we do that one"):
+If user CONFIRMS a suggestion ("yes", "yes please", "I like that", "let's do that", "perfect", "sounds good", "that one", "I'll have that", "can we do that one", "sure", "great"):
 - Respond warmly and briefly confirming the choice
 - End with: "Ready to add it to your plan?"
 - Do NOT output another meal block — the user already confirmed the previous one
+- Do NOT offer adjustments or revisions unless the user asked for them
 
 ══════════════════════════════════════════
 TIME-AWARE PLANNING
@@ -689,19 +705,16 @@ Standard portions:
 Use the macro reference table. When in doubt, estimate reasonably and LOG IT.
 
 AFTER LOGGING — ALWAYS include:
-1. 📊 Updated totals: ${totals.calories + "NEWMEAL"}/2800 cal — WAIT. See rule below.
-2. 👉 One coaching tip about macros
-3. IF 300+ calories remaining: Suggest a specific snack
-
-CRITICAL — MACRO TOTALS AFTER LOGGING:
-After logging a meal, show updated totals using THIS formula ONLY:
-- Calories eaten so far (from DB): ${totals.calories}
-- Add the calories from the meal you just logged
-- Show: [${totals.calories} + NEW_MEAL_CALS] / ${goal.calories} cal
-
-DO NOT invent totals. DO NOT sum up the whole conversation history.
-The only reliable baseline is: ${totals.calories} cal already logged in the database today.
-Protein baseline: ${totals.protein}g | Carbs baseline: ${totals.carbs}g | Fat baseline: ${totals.fat}g`;
+1. The meal you just logged (foods + macros)
+2. Updated totals using ONLY this formula:
+   - Calories: ${totals.calories} (from DB) + [new meal calories] = [sum]
+   - Protein: ${totals.protein}g + [new meal protein]g = [sum]g
+   - Carbs: ${totals.carbs}g + [new meal carbs]g = [sum]g
+   - Fat: ${totals.fat}g + [new meal fat]g = [sum]g
+   Format: 📊 Updated totals: [sum]/${goal.calories} cal ([pct]%) | [sum]g protein | [sum]g carbs | [sum]g fat
+3. DO NOT add any other meals or history to the total — ONLY DB baseline + this new meal
+4. 👉 One coaching tip
+5. IF 300+ calories remaining after this meal: suggest a specific next meal or snack`;
     }
 
     if (context?.type === "meal_planning") {
@@ -754,14 +767,20 @@ ${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO
 
 ${timingGuide}
 
+CRITICAL — TIMING RULES:
+Pre-event snack time: calculate EXACTLY. Event at 7:30pm, 30 min before = 7:00pm NOT 6:00pm.
+Formula: snack_time = event_time minus buffer_minutes. Do the math explicitly.
+Post-event meal: NEVER guess a specific time — say "right after your [event]" or "when you get home from your [event]". Only use a specific time if the user told you how long the event lasts.
+
 CRITICAL — INCLUDE SPECIFIC TIMES:
 After each meal block, add a line like:
 👉 Have this at 6:30am (30 min before workout)
-👉 Post-workout recovery at 8:15am
+👉 Post-workout breakfast at 8:15am — right after your workout
 👉 Lunch at 12:30pm during work
-👉 Pre-tennis snack at 4:00pm
+👉 Pre-tennis snack at 4:00pm (2 hours before your 6pm match)
+👉 Right after your game — recovery dinner when you get home
 
-Calculate times based on the events the user gave you. Be specific!
+Calculate pre-event times precisely. Use "right after your [event]" for post-event always.
 
 SNACK RULES:
 - For athletic events: suggest TWO Snacks (pre-event + post-event recovery)
@@ -805,4 +824,4 @@ Plain text total after all meal blocks.`;
     console.error("AI ERROR:", error);
     return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
   }
-}   
+}
