@@ -899,27 +899,23 @@ WRONG: "How many calories are in the eggs?"
 RIGHT: Use your nutrition knowledge to estimate. A standard sushi roll = ~300-350 cal. Eggs = 70 cal each.
 `}
 
-RULE 2 — MULTI-FOOD QUANTITY CHECK (CRITICAL):
-When user logs multiple foods, check EACH food for a quantity separately.
-If ANY food is missing a quantity → ask about the missing ones BEFORE logging anything.
+RULE 2 — QUANTITY CHECK:
+These ALL count as valid quantities — never ask if any of these are present:
+- Numbers: 2, 8, 0.5, 1.5
+- Units: oz, lb, cup, tbsp, tsp, g, ml, pcs, pieces, slices
+- Words: a, an, half, whole, one, two, three, medium, large, small, some
+- "half an avocado" → half = quantity ✅ LOG IT
+- "an apple" → an = 1 ✅ LOG IT
+- "2 eggs" → 2 = quantity ✅ LOG IT
+- "8oz chicken" → 8oz = quantity ✅ LOG IT
+- "some rice" → some = quantity ✅ estimate 1 cup
 
-EXAMPLES:
-"I had 8oz beef and sweet potatoes"
-→ Beef: 8oz ✅ | Sweet potato: no quantity ❌
-→ ASK: "Got the 8oz beef! How much sweet potato? (e.g. 1 medium, 1 cup, 6oz)"
-→ Do NOT assume 5oz or any size — wait for answer, then log both
+ONLY ask when there is truly NOTHING:
+- "sweet potatoes" alone with no descriptor = ask "How much sweet potato?"
+- "chicken" alone with no descriptor = ask "How much chicken?"
+- "beef and sweet potatoes" where beef has oz but sweet potatoes has NOTHING = ask only about sweet potato
 
-"I had 8oz beef and 1 medium sweet potato"
-→ Both have quantities ✅ → LOG both immediately
-
-"I had chicken" → no quantity → ask "How much chicken?"
-
-ACCEPTABLE QUANTITIES — do not ask if present:
-Numbers (2, 8, .5), units (oz, cup, tbsp, pcs), words (a, an, half, whole, medium, large, small)
-"2 eggs" ✅ | "8oz chicken" ✅ | "a banana" ✅ | "half avocado" ✅ | "1 medium sweet potato" ✅
-
-NEVER ASSUME A SIZE for variable foods (sweet potato, chicken breast, steak, fish fillet).
-Only estimate universal standards: "a slice of bread" = 30g, "an egg" = 50g.
+KEY RULE: "half", "a", "an", "some", "whole" are ALL valid quantities. Never ask when these words are present.
 
 MEAL BLOCK FORMAT — CRITICAL:
 Use SINGLE TOTAL NUMBERS ONLY. Never breakdown math.
