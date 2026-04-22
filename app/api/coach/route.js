@@ -398,6 +398,20 @@ export async function POST(req) {
       todayMeals = meals || [];
     } catch (e) { console.log("Meals error:", e.message); }
 
+    // ── Load today's planned meals ──
+    let todayPlanned = [];
+    try {
+      const { data: planned } = await supabase
+        .from("planned_meals").select("*").eq("user_id", activeUserId).eq("date", today);
+      todayPlanned = planned || [];
+    } catch (e) { console.log("Planned meals error:", e.message); }
+
+    const plannedTypes = [...new Set(todayPlanned.map(m => m.meal_type))];
+    const hasPlannedMeals = todayPlanned.length > 0;
+    const plannedSummary = todayPlanned.length > 0
+      ? todayPlanned.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal)`).join("\n")
+      : "No planned meals yet";
+
     const totals = sumMeals(todayMeals);
     const remaining = {
       calories: Math.max(0, goal.calories - totals.calories),
@@ -618,6 +632,19 @@ Fat:      ${totals.fat}/${goal.fat}g (${Math.round((totals.fat/goal.fat)*100)}%)
 
 MEALS LOGGED TODAY:
 ${mealsSummary}
+
+PLANNED MEALS TODAY:
+${plannedSummary}
+${hasPlannedMeals ? `
+CRITICAL — PLANNED MEALS ALREADY EXIST:
+The user already has ${todayPlanned.length} planned meal(s) for today: ${plannedTypes.join(", ")}.
+- Do NOT re-generate or re-suggest these meals
+- Do NOT ask if they want to plan the rest of the day if all major meals are planned
+- Do NOT end with "Reply yes to save this plan" for meals that are already saved
+- If user says "yes" or confirms → acknowledge their existing plan, do NOT create new meal blocks
+- If user asks to change something specific → make ONLY that change
+- If a meal type is already planned → treat any new food for that type as an ADDITIONAL entry (new log), not a replacement
+` : ""}
 
 ${events.length > 0 ? `📅 EVENTS DETECTED (${events.length}):
 ${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 ${e.isTomorrow ? "(tomorrow)" : "(today)"} — ${e.label}`).join("\n")}` : ""}
@@ -997,6 +1024,20 @@ CRITICAL — TIMING RULES:
 Pre-event snack time: calculate EXACTLY. Event at 7:30pm, 30 min before = 7:00pm NOT 6:00pm.
 Post-event meal: NEVER use a specific time — always say "right after your [event]".
 
+TOMORROW TIMING RULES:
+When planning tomorrow, ALWAYS assign specific times to every meal — never generic labels.
+Extract wake time from user message (e.g. "get up at 7am" → breakfast at 7:30am).
+Calculate all meal times from the wake time and event schedule:
+- Breakfast: wake time + 30-45 min
+- Lunch: breakfast + 3-4 hours
+- Pre-event snack: event time minus 1.5-2 hours (light) or 30 min (small)
+- Dinner: after last event
+Example: Wake 7am, work 8-5pm, hockey 7:30pm:
+  Breakfast → 7:30am
+  Lunch → 12:00pm  
+  Pre-game snack → 5:30pm (2 hrs before 7:30pm)
+  Post-game recovery → right after your second game
+
 SNACK RULES:
 - For athletic events: suggest TWO Snacks (pre-event + post-event recovery)
 - Each Snack gets its own separate block with timing context after it
@@ -1034,20 +1075,29 @@ IF intent is "eaten" → skip the question, return meal block directly
 IF intent is "planned" / "for later" / "as planned" → skip question, return meal block for planned
 
 IF it's a RESTAURANT MENU:
-1. Read the menu items
+1. Read EVERY item on the menu carefully
 2. Based on ${userName}'s remaining macros: ${remaining.calories} cal | ${remaining.protein}g P | ${remaining.carbs}g C | ${remaining.fat}g F
-3. Recommend 2-3 best options with estimated macros and clear reasoning
-4. Always add this disclaimer after recommendations:
-   "Note: these are estimates based on typical restaurant portions — actual macros will vary depending on how the restaurant prepares each dish."
-5. End with: "Let me know which one you pick and I'll log it for you"
+3. Structure your response exactly like this:
 
-IMPORTANT — WHEN USER SAYS THEY WILL ORDER FROM RESTAURANT:
-If the user previously got multiple recommendations and says something like "I'll order that" or "add it to my dinner":
-- DO NOT assume which item they mean if multiple were suggested
-- Ask: "Which one did you go with — [option 1], [option 2], or [option 3]?"
-- Only create a meal block AFTER they confirm the specific item
+Best picks (name 2-3 specific items):
+- [Item name] — why it's good (specific: "lean protein, no sauce, light rice")
+- [Item name] — why it's good
 
-IF image is unclear: "I can't quite read this — could you try a clearer photo?"` :
+Worth considering (1-2 items with a caveat):
+- [Item name] — good but [specific caveat: "ask for sauce on the side"]
+
+Avoid these (name specific items and exactly why):
+- [Item name] — specific reason ("fried tempura inside + mayo drizzle = 600+ cal")
+- [Item name] — specific reason ("cream cheese based, looks healthy but isn't")
+- [Item name] — specific reason ("imitation crab mixed with mayo")
+
+Key words that signal unhealthy: "crunchy" = fried, "spicy mayo" = heavy sauce, "cream cheese" = high fat, "shaggy dog" = fried shrimp + mayo, "tempura" = battered and fried
+
+4. End with one specific ordering tip: portion size, what to skip, or what to ask for
+5. Always add: "Note: these are estimates based on typical restaurant portions — actual macros will vary."
+6. End with: "Let me know which one you pick and I'll log it for you"
+
+NEVER give generic advice like "lean proteins are good choices" — always name the specific items from THIS menu.` :
 
 `MULTIPLE LABELS — COMPARISON MODE (${imageCount} labels):
 1. Read each label carefully — label them Label 1, Label 2, etc.

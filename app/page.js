@@ -373,6 +373,7 @@ export default function HomePage() {
   const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
   const [pendingImages, setPendingImages]  = useState([]); // max 4: [{ base64, mimeType, preview }]
   const [showPhotoMenu, setShowPhotoMenu] = useState(false);
+  const [loadingStage, setLoadingStage]   = useState("");
 
   const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
     if (typeof window !== "undefined") {
@@ -521,6 +522,22 @@ export default function HomePage() {
     const imagesToSend = [...pendingImages];
     setPendingImages([]);
 
+    // Set loading stage based on what's being sent
+    if (imagesToSend.length > 1) {
+      setLoadingStage("Comparing labels...");
+    } else if (imagesToSend.length === 1) {
+      setLoadingStage("Scanning label...");
+    } else {
+      setLoadingStage("Thinking...");
+    }
+
+    // Progressive messages for photo calls
+    let stageTimer;
+    if (imagesToSend.length > 0) {
+      stageTimer = setTimeout(() => setLoadingStage("Reading nutrition values..."), 2500);
+      setTimeout(() => setLoadingStage("Almost done..."), 5500);
+    }
+
     try {
       let context = {};
       let newActiveMealLog = activeMealLog;
@@ -619,6 +636,7 @@ export default function HomePage() {
       ]);
     } finally {
       setIsLoading(false);
+      setLoadingStage("");
     }
   }
 
@@ -851,18 +869,40 @@ export default function HomePage() {
 
           {history.map((msg, idx) => {
             const isUser = msg.role === "user";
-            const meals = !isUser ? parseAllMeals(msg.content) : [];
+
+            // Find meals from the most recent AI message before this point
+            const findRecentMeals = (beforeIdx) => {
+              for (let i = beforeIdx - 1; i >= 0; i--) {
+                if (history[i].role === "assistant") {
+                  const m = parseAllMeals(history[i].content);
+                  if (m.length > 0) return { meals: m, sourceIdx: i };
+                }
+              }
+              return { meals: [], sourceIdx: -1 };
+            };
+
+            // Buttons show on the AI message that comes AFTER user confirmation
+            // i.e. this is an AI message, and the previous user message was a confirmation
+            const prevUserMsg = !isUser && history[idx - 1]?.role === "user" ? history[idx - 1].content : null;
+            const thisIsPostConfirmAI = !isUser && prevUserMsg && isConfirmation(prevUserMsg);
+            const { meals: confirmMeals, sourceIdx } = thisIsPostConfirmAI
+              ? findRecentMeals(idx) : { meals: [], sourceIdx: -1 };
+
+            // Also get meals for this message (for non-confirmation flow)
+            const thisMeals = !isUser ? parseAllMeals(msg.content) : [];
+
+            // Determine which meals + source to use for buttons
+            const buttonMeals = thisIsPostConfirmAI && confirmMeals.length > 0 ? confirmMeals : [];
+            const buttonSourceIdx = sourceIdx >= 0 ? sourceIdx : idx;
+
             const triggerText = !isUser && history[idx - 1]?.role === "user"
               ? history[idx - 1].content : "";
             const surroundingTexts = history.slice(Math.max(0, idx - 6), idx).map(m => m.content || "");
-            const nextUserMsg = history[idx + 1]?.role === "user" ? history[idx + 1].content : null;
-            const nextNextUserMsg = history[idx + 3]?.role === "user" ? history[idx + 3].content : null;
-            const userConfirmed = (nextUserMsg && isConfirmation(nextUserMsg)) ||
-                                  (nextNextUserMsg && isConfirmation(nextNextUserMsg));
-            const showButtons = meals.length > 0 && userConfirmed;
             const targetDate = extractTargetDate(triggerText, surroundingTexts);
-            const allSaved = meals.length > 0 &&
-              meals.every((m) => savedPlanKeys.includes(getMealKey(idx, m)));
+
+            const showButtons = buttonMeals.length > 0;
+            const allSaved = showButtons &&
+              buttonMeals.every((m) => savedPlanKeys.includes(getMealKey(buttonSourceIdx, m)));
 
             return (
               <div key={idx} style={{ display:"flex",
@@ -907,18 +947,17 @@ export default function HomePage() {
                   {/* Add to plan buttons */}
                   {showButtons && (
                     <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                      {meals.length > 1 && (
-                        <button onClick={() => handleAddAllToPlan(meals, idx, targetDate)}
+                      {buttonMeals.length > 1 && (
+                        <button onClick={() => handleAddAllToPlan(buttonMeals, buttonSourceIdx, targetDate)}
                           disabled={allSaved}
                           style={{ fontSize:12, padding:"10px 16px", borderRadius:12, fontWeight:700,
                             background: allSaved ? "#10b98122" : "#10b981",
-                            color: allSaved ? "#10b981" : "#fff", border:"none", cursor:"pointer",
-                            opacity: allSaved ? 1 : 1 }}>
-                          {allSaved ? "✅ All meals added" : `+ Add all ${meals.length} meals to plan`}
+                            color: allSaved ? "#10b981" : "#fff", border:"none", cursor:"pointer" }}>
+                          {allSaved ? "✅ All meals added" : `+ Add all ${buttonMeals.length} meals to plan`}
                         </button>
                       )}
-                      {meals.map(meal => {
-                        const key = getMealKey(idx, meal);
+                      {buttonMeals.map(meal => {
+                        const key = getMealKey(buttonSourceIdx, meal);
                         const isSaved = savedPlanKeys.includes(key);
                         const label = getMealLabel(meal.displayType);
                         const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
@@ -926,7 +965,7 @@ export default function HomePage() {
                         );
                         return (
                           <button key={key}
-                            onClick={() => handleAddToPlan(meal, idx, targetDate)}
+                            onClick={() => handleAddToPlan(meal, buttonSourceIdx, targetDate)}
                             disabled={isSaved}
                             style={{ fontSize:12, padding:"9px 16px", borderRadius:12, fontWeight:600,
                               border: isSaved ? "none" : `1px solid ${hasExisting ? "#f59e0b" : "#2563eb"}`,
@@ -954,7 +993,15 @@ export default function HomePage() {
                 💬
               </div>
               <div style={{ background: T.aiBubble, border:`1px solid ${T.aiBorder}`,
-                borderRadius:"18px 18px 18px 4px", padding:"14px 16px" }}>
+                borderRadius:"18px 18px 18px 4px", padding:"12px 16px",
+                display:"flex", flexDirection:"column", gap:8 }}>
+                {/* Progressive status text */}
+                {loadingStage && (
+                  <p style={{ fontSize:12, color: T.sub, margin:0, fontWeight:500 }}>
+                    {loadingStage}
+                  </p>
+                )}
+                {/* Bouncing dots */}
                 <div style={{ display:"flex", gap:5, alignItems:"center" }}>
                   {[0,150,300].map(d => (
                     <div key={d} style={{ width:7, height:7, borderRadius:"50%",
@@ -1065,7 +1112,6 @@ export default function HomePage() {
           {[
             { id:"coach",     icon:"💬", label:"Coach",     path:"/"          },
             { id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
-            { id:"plan",      icon:"📋", label:"Plan",      path:"/plan"      },
             { id:"profile",   icon:"⚙️", label:"Profile",   path:"/profile"   },
           ].map(tab => (
             <button key={tab.id}

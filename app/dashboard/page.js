@@ -259,7 +259,6 @@ function BottomNav({ t, dark }) {
   const tabs = [
     { id:"coach",     icon:"💬", label:"Coach",     path:"/"          },
     { id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
-    { id:"plan",      icon:"📋", label:"Plan",      path:"/plan"      },
     { id:"profile",   icon:"⚙️", label:"Profile",   path:"/profile"   },
   ];
   return (
