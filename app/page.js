@@ -386,6 +386,9 @@ export default function HomePage() {
     return [];
   });
 
+  // Track which AI message indices have had ALL their meals saved — close them permanently
+  const [closedPlanIndices, setClosedPlanIndices] = useState(new Set());
+
   const messagesEndRef  = useRef(null);
   const textareaRef     = useRef(null);
   const cameraInputRef  = useRef(null);
@@ -672,7 +675,7 @@ export default function HomePage() {
     if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
 
-    // Only replace for Breakfast/Lunch/Dinner — Snacks can stack (multiple per day)
+    // Only replace for Breakfast/Lunch/Dinner — Snacks can stack
     if (meal.mealType !== "snack") {
       const { data: existing } = await supabase
         .from("planned_meals")
@@ -690,7 +693,10 @@ export default function HomePage() {
 
     const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
     if (saved) {
-      setSavedPlanKeys((prev) => [...prev, key]);
+      const newKeys = [...savedPlanKeys, key];
+      setSavedPlanKeys(newKeys);
+      // Close this plan index — no more looking back at it
+      setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
       await loadPlannedMeals(uid);
     } else {
       alert("Could not save to plan. Please try again.");
@@ -707,7 +713,12 @@ export default function HomePage() {
         if (saved) newKeys.push(key);
       }
     }
-    if (newKeys.length > 0) setSavedPlanKeys((prev) => [...prev, ...newKeys]);
+    if (newKeys.length > 0) {
+      setSavedPlanKeys(prev => [...prev, ...newKeys]);
+      // Close this plan index entirely — conversation is done
+      setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
+      await loadPlannedMeals(uid);
+    }
   }
 
   function handleKeyDown(e) {
@@ -897,11 +908,13 @@ export default function HomePage() {
           {history.map((msg, idx) => {
             const isUser = msg.role === "user";
 
-            // Find meals from the most recent AI message — only look back 6 messages
+            // Find meals — only look back 3 messages, skip any closed plan indices
             const findRecentMeals = (beforeIdx) => {
-              const limit = Math.max(0, beforeIdx - 6); // max 6 messages back
+              const limit = Math.max(0, beforeIdx - 3);
               for (let i = beforeIdx - 1; i >= limit; i--) {
                 if (history[i].role === "assistant") {
+                  // Skip if this plan has already been saved — it's closed
+                  if (closedPlanIndices.has(i)) continue;
                   const m = parseAllMeals(history[i].content);
                   if (m.length > 0) return { meals: m, sourceIdx: i };
                 }
@@ -909,28 +922,25 @@ export default function HomePage() {
               return { meals: [], sourceIdx: -1 };
             };
 
-            // Buttons show on the AI message that comes AFTER user confirmation
-            // i.e. this is an AI message, and the previous user message was a confirmation
             const prevUserMsg = !isUser && history[idx - 1]?.role === "user" ? history[idx - 1].content : null;
             const thisIsPostConfirmAI = !isUser && prevUserMsg && isConfirmation(prevUserMsg);
 
-            // Also show buttons if prev user message was a photo-related selection
-            // e.g. "I will go over the protein shake", "the whole bag", "I'll take that one"
+            // Photo selection — only for specific winner phrases, not general messages
             const isPhotoSelection = !isUser && prevUserMsg && (
-              /\b(whole bag|full bag|all of it|the (protein|shake|fitzels|first|second|other)|i'?ll go|go over|i will go|i had (it|this)|ate (it|this)|as a snack|as a lunch|as a dinner|as a breakfast)\b/i.test(prevUserMsg)
+              /\b(whole bag|full bag|all of it|i'?ll go (with|over)|i will go (with|over)|i'?ll take that|i choose|going with)\b/i.test(prevUserMsg)
             );
 
             const { meals: confirmMeals, sourceIdx } = (thisIsPostConfirmAI || isPhotoSelection)
               ? findRecentMeals(idx) : { meals: [], sourceIdx: -1 };
 
-            // Also get meals for this message
             const thisMeals = !isUser ? parseAllMeals(msg.content) : [];
 
-            // Show buttons on post-confirm AI OR if this AI message itself has meals (photo winner flow)
-            const buttonMeals = (thisIsPostConfirmAI || isPhotoSelection) && confirmMeals.length > 0
+            // Only show buttons for multi-meal plans (2+ meals) or explicit photo winner
+            // Never show buttons for single food logs — those auto-save
+            const buttonMeals = (thisIsPostConfirmAI && confirmMeals.length >= 2)
               ? confirmMeals
-              : thisMeals.length > 0 && !isUser && isPhotoSelection
-              ? thisMeals
+              : (isPhotoSelection && confirmMeals.length > 0)
+              ? confirmMeals
               : [];
             const buttonSourceIdx = sourceIdx >= 0 ? sourceIdx : idx;
 

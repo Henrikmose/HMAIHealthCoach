@@ -1044,21 +1044,38 @@ Each block format (exactly this — nothing extra between blocks):
 
 [MealType] — [Time] ([context])
 - Foods: [food1, amount]; [food2, amount]
-- Calories: [total only — no math]
+- Calories: [total only — single number, no math]
 - Protein: [X]g
 - Carbs: [X]g
 - Fat: [X]g
-
 Breakdown: [food1] — [cal] cal, [P]g P, [C]g C, [F]g F | [food2] — [cal] cal, [P]g P, [C]g C, [F]g F
 
-Then immediately the next meal block. No other coaching text between blocks.
-All coaching tips go in STEP 3 only, after the total line.
+The Breakdown line is MANDATORY for every meal with 2+ foods.
+WRONG — no breakdown:
+Lunch — 12:00pm
+- Foods: Chicken breast, 6oz; Quinoa, 1 cup; Broccoli, 1 cup
+- Calories: 520
+- Protein: 56g
+- Carbs: 55g
+- Fat: 8g
 
-MACRO FORMAT — ALWAYS include "g" unit:
+RIGHT — with breakdown:
+Lunch — 12:00pm
+- Foods: Chicken breast, 6oz; Quinoa, 1 cup; Broccoli, 1 cup
+- Calories: 520
+- Protein: 56g
+- Carbs: 55g
+- Fat: 8g
+Breakdown: Chicken — 280 cal, 52g P, 0g C, 5g F | Quinoa — 185 cal, 8g P, 34g C, 3g F | Broccoli — 55 cal, 4g P, 11g C, 0g F
+
+Then the next meal block immediately. No other text between blocks.
+All coaching tips go in STEP 3 only.
+
+MACRO FORMAT — ALWAYS include "g" on protein, carbs, fat:
 WRONG: - Protein: 56    RIGHT: - Protein: 56g
 WRONG: - Carbs: 30      RIGHT: - Carbs: 30g
 WRONG: - Fat: 36        RIGHT: - Fat: 36g
-Calories never get "g" — just the number. All other macros ALWAYS get "g".
+Calories = number only (no "g"). All other macros always get "g".
 
 For restaurant/social meals: include inline ordering guidance (NOT a meal block) — like:
 "For sushi — you have ~${Math.round(remaining.calories * 0.45)} calories budgeted here. Smart ordering:
@@ -1068,22 +1085,24 @@ For restaurant/social meals: include inline ordering guidance (NOT a meal block)
 - Take a photo of the menu and I'll help you pick the best options."
 
 STEP 2.5 — TOTAL LINE (after all meal blocks, before rules)
-After ALL meal blocks, write ONE total line using ONLY the meals in THIS plan:
-📊 Total planned: [sum of all meals above]/${goal.calories} cal ([pct]%) | [P]g protein | [C]g carbs | [F]g fat
+After ALL meal blocks, add up ONLY the meals you just wrote above — nothing else.
 
-CRITICAL — TOTAL CALCULATION RULES:
-- Add up ONLY the meals you just listed in this response
-- Do NOT include ${totals.calories} cal already eaten today — that is separate
-- Do NOT include meals suggested in previous messages
-- Do NOT add anything from conversation history
+TOTAL CALCULATION — MANDATORY:
+Step 1: List each meal calorie from what you just wrote:
+  Breakfast: X cal
+  Lunch: X cal
+  Snack 1: X cal
+  Dinner: X cal
+  Snack 2: X cal
+Step 2: Add them: X + X + X + X + X = TOTAL
+Step 3: Write: 📊 Total planned: [TOTAL]/${goal.calories} cal ([pct]%) | [P]g protein | [C]g carbs | [F]g fat
 
-WORKED EXAMPLE:
-You suggest: Breakfast 410 + Lunch 520 + Snack 290 + Pre-game 300 + Post-game 320 = 1840 cal
-Correct total line: 📊 Total planned: 1840/${goal.calories} cal (66%) | ...
-WRONG: 1840 + ${totals.calories} (already eaten) = some larger number — NEVER do this
-WRONG: adding meals from previous AI messages = NEVER do this
+NEVER include:
+- ${totals.calories} already eaten today
+- Meals from previous messages in this conversation
+- Any number not from a meal block you wrote in THIS response
 
-The total = ONLY what you listed in THIS response. Nothing more.
+DOUBLE CHECK: If your total seems higher than the sum of your meals → you made an error. Recalculate.
 
 STEP 3 — SIMPLE RULES (2-4 lines after the total)
 End with 2-4 short rules specific to this day. Not generic advice.
@@ -1184,8 +1203,9 @@ SERVINGS HANDLING — CRITICAL:
 2. If user ate 1 serving → servings field = 1, use per-serving macros
 3. If user ate whole container with X servings → servings field = X, use per-serving macros
    The dashboard multiplies: calories × servings automatically
-4. ALWAYS ask if label has multiple servings and user didn't specify:
+4. ALWAYS ask if label has multiple servings (>1) and user didn't specify how much:
    "The bag has 3 servings — did you have 1 serving (120 cal) or the whole bag (360 cal)?"
+   EXCEPTION: skip asking if user said "whole bag", "all of it", "I ate this" with clear single-serve context
 5. NEVER use whole-bag totals as the per-serving macros
 
 Meal block from label MUST use PER-SERVING values + correct servings count:
