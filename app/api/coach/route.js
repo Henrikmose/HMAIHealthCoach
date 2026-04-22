@@ -881,7 +881,9 @@ FOOD LOGGING MODE
 ══════════════════════════════════════════
 ${userName} is logging food they ate.
 Original: "${context.originalMessage}"
-${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00`}
+${context.mealType ? `Meal type: ${context.mealType}` : `No meal type given — infer from time of day:
+  Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
+  Use this inferred type in the meal block. NEVER skip logging because meal type is missing.`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
 ${dbFoodResults ? `
@@ -897,38 +899,41 @@ WRONG: "How many calories are in the eggs?"
 RIGHT: Use your nutrition knowledge to estimate. A standard sushi roll = ~300-350 cal. Eggs = 70 cal each.
 `}
 
-RULE 2: IF THERE'S ANY NUMBER OR DESCRIPTOR, LOG IT
-Quantities include: numbers (2, 8, .5), units (oz, pcs, cup), or words (a, half, whole, medium, large)
-- "2 eggs" → LOG (has number)
-- "8oz chicken" or "8 oz" → LOG (has number + unit)
-- "8pcs cali roll" or "8 pcs" → LOG (has number + unit)
-- ".5 cup rice" or "half cup" → LOG (has fraction)
-- "a whole avocado" → LOG (has "a" and "whole")
-- "a banana" → LOG (has "a")
+RULE 2 — MULTI-FOOD QUANTITY CHECK (CRITICAL):
+When user logs multiple foods, check EACH food for a quantity separately.
+If ANY food is missing a quantity → ask about the missing ones BEFORE logging anything.
 
-RULE 3: ONLY ASK IF TRULY NOTHING IS THERE
-- "I had chicken" → no quantity at all → ask "How much chicken?"
-- "I had rice" → no quantity at all → ask "How much rice?"
+EXAMPLES:
+"I had 8oz beef and sweet potatoes"
+→ Beef: 8oz ✅ | Sweet potato: no quantity ❌
+→ ASK: "Got the 8oz beef! How much sweet potato? (e.g. 1 medium, 1 cup, 6oz)"
+→ Do NOT assume 5oz or any size — wait for answer, then log both
 
-RULE 4: USE REASONABLE ESTIMATES WHEN EXACT IS UNKNOWN (only if no DB result)
-Standard portions:
-- Sushi roll = ~50-60 cal per piece, 8-piece roll = ~400-500 cal
-- Sashimi = ~40 cal per piece
-- Eggs = 70 cal, 6g protein each
-- Avocado = 240 cal, 22g fat
-- Toast = 80 cal per slice
+"I had 8oz beef and 1 medium sweet potato"
+→ Both have quantities ✅ → LOG both immediately
+
+"I had chicken" → no quantity → ask "How much chicken?"
+
+ACCEPTABLE QUANTITIES — do not ask if present:
+Numbers (2, 8, .5), units (oz, cup, tbsp, pcs), words (a, an, half, whole, medium, large, small)
+"2 eggs" ✅ | "8oz chicken" ✅ | "a banana" ✅ | "half avocado" ✅ | "1 medium sweet potato" ✅
+
+NEVER ASSUME A SIZE for variable foods (sweet potato, chicken breast, steak, fish fillet).
+Only estimate universal standards: "a slice of bread" = 30g, "an egg" = 50g.
+
+MEAL BLOCK FORMAT — CRITICAL:
+Use SINGLE TOTAL NUMBERS ONLY. Never breakdown math.
+WRONG: - Calories: 368 (chicken) + 130 (sweet potato) = 498
+RIGHT:  - Calories: 498
+WRONG: - Protein: 56g (chicken) + 3g (sweet potato) = 59g
+RIGHT:  - Protein: 59g
 
 AFTER LOGGING — ALWAYS include:
-1. The meal you just logged (foods + macros)
-2. Updated totals using ONLY this formula:
-   - Calories: ${totals.calories} (from DB) + [new meal calories] = [sum]
-   - Protein: ${totals.protein}g + [new meal protein]g = [sum]g
-   - Carbs: ${totals.carbs}g + [new meal carbs]g = [sum]g
-   - Fat: ${totals.fat}g + [new meal fat]g = [sum]g
-   Format: 📊 Updated totals: [sum]/${goal.calories} cal ([pct]%) | [sum]g protein | [sum]g carbs | [sum]g fat
-3. DO NOT add any other meals or history to the total — ONLY DB baseline + this new meal
+1. The meal logged with single total numbers
+2. 📊 Updated totals: [sum]/${goal.calories} cal ([pct]%) | [sum]g protein | [sum]g carbs | [sum]g fat
+3. ONLY DB baseline + this new meal — nothing else
 4. 👉 One coaching tip
-5. IF 300+ calories remaining after this meal: suggest a specific next meal or snack`;
+5. IF 300+ calories remaining: suggest a specific next meal or snack`;
     }
 
     if (context?.type === "meal_planning") {
@@ -986,6 +991,14 @@ NEVER use ** or ## anywhere in this response. Not for workout labels, not for me
 WRONG: **7:00 AM Workout** / **Post-Workout Recovery** / **Lunch (12:30 PM)**
 RIGHT: Just write the plain meal block — Snack / Breakfast / Lunch / Dinner on their own line
 
+CALORIE FORMAT — CRITICAL:
+NEVER use breakdown math format for macros. Always use single totals.
+WRONG: - Calories: 150 (oatmeal) + 105 (banana) + 165 (almonds) = 420
+RIGHT:  - Calories: 420
+WRONG: - Protein: 5g (oatmeal) + 1g (banana) + 6g (almonds) = 12g
+RIGHT:  - Protein: 12g
+This applies to ALL meals in the plan. Single number only. No math shown.
+
 NO OPTIONS FORMAT:
 NEVER present "Option A" / "Option B" or "Fasted Workout" choices.
 Just pick the best single plan and present it. User can ask for changes after.
@@ -1024,18 +1037,40 @@ CRITICAL — TIMING RULES:
 Pre-event snack time: calculate EXACTLY. Event at 7:30pm, 30 min before = 7:00pm NOT 6:00pm.
 Post-event meal: NEVER use a specific time — always say "right after your [event]".
 
-TOMORROW TIMING RULES:
-When planning tomorrow, ALWAYS assign specific times to every meal — never generic labels.
-Extract wake time from user message (e.g. "get up at 7am" → breakfast at 7:30am).
-Calculate all meal times from the wake time and event schedule:
-- Breakfast: wake time + 30-45 min
-- Lunch: breakfast + 3-4 hours
-- Pre-event snack: event time minus 1.5-2 hours (light) or 30 min (small)
-- Dinner: after last event
-Example: Wake 7am, work 8-5pm, hockey 7:30pm:
-  Breakfast → 7:30am
-  Lunch → 12:00pm  
-  Pre-game snack → 5:30pm (2 hrs before 7:30pm)
+TOMORROW TIMING RULES — MANDATORY:
+When planning tomorrow, EVERY meal block MUST have a specific time label.
+Format: "Breakfast — 7:00am (before your walk)"
+
+STEP 1: Extract schedule from user message:
+- Wake time (e.g. "get up at 7am", "3 mile walk at 8am" → wake ~7:00am)
+- Work hours
+- Event times (hockey at 7:30pm, workout at 6am etc)
+
+STEP 2: Calculate meal times from schedule:
+- Breakfast: wake time + 30min (or BEFORE morning activity if walk/workout)
+  → "walk at 8am" = eat breakfast at 7:00am BEFORE the walk, not after
+  → Label: "Breakfast — 7:00am (eat before your 8am walk)"
+- Lunch: ~4hrs after breakfast
+  → Label: "Lunch — 12:00pm"
+- Pre-event dinner/snack: 2-2.5hrs before physical event
+  → "hockey at 7:30pm" = eat at 5:00pm
+  → Label: "Dinner — 5:00pm (2.5hrs before your 7:30pm games)"
+- Pre-game snack: 30-60min before event if needed
+  → Label: "Snack — 6:30pm (1hr before puck drop)"
+- Post-event recovery: NEVER a specific time
+  → Label: "Snack — right after your second game"
+
+STEP 3: Every meal block title includes the time:
+WRONG: "Breakfast"
+RIGHT: "Breakfast — 7:00am (before your 8am walk)"
+WRONG: "Dinner"
+RIGHT: "Dinner — 5:00pm (2.5hrs before your 7:30pm games)"
+
+Example for: walk 8am, work 9-5, hockey 7:30pm-10pm:
+  Breakfast → 7:00am (eat before your 8am walk)
+  Lunch → 12:00pm
+  Dinner → 5:00pm (2.5hrs before your 7:30pm games)
+  Pre-game snack → 6:30pm (light — 1hr before puck drop)
   Post-game recovery → right after your second game
 
 SNACK RULES:
@@ -1071,8 +1106,11 @@ IF it's a NUTRITION LABEL:
    - Eaten → return standard meal block for actual_meals
    - Planned → return standard meal block noted as planned
 
-IF intent is "eaten" → skip the question, return meal block directly
+IF intent is "eaten" → skip the question, return meal block directly using inferred meal type from time:
+  Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
+  NEVER skip logging because meal type is missing — always infer it
 IF intent is "planned" / "for later" / "as planned" → skip question, return meal block for planned
+IF intent is "unknown" and no meal type mentioned → infer from time of day, log as eaten
 
 IF it's a RESTAURANT MENU:
 1. Read EVERY item on the menu carefully
