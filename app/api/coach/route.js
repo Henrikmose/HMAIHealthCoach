@@ -41,7 +41,139 @@ function isVeryActive(activityLevel) {
   return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
 }
 
-// ── Multi-event detection ──────────────────────────────────────────
+// ── Food Database Lookup ──────────────────────────────────────────
+
+// Parse food items and quantities from a message
+// Returns array of { food, amount, unit }
+function parseFoodItems(message) {
+  if (!message) return [];
+  const items = [];
+
+  // Patterns: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
+  const patterns = [
+    // number + unit + food: "8oz chicken breast", "1 cup oatmeal"
+    /(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?([a-z][a-z\s,]+?)(?:\s*[,;]|$)/gi,
+    // number + food (no unit): "2 eggs", "3 chicken wings"
+    /(\d+\.?\d*)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
+    // descriptor + food: "a banana", "half avocado", "whole chicken breast"
+    /\b(a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
+  ];
+
+  const [p1, p2, p3] = patterns;
+  let match;
+
+  // Pattern 1: number + unit + food
+  while ((match = p1.exec(message)) !== null) {
+    items.push({ amount: parseFloat(match[1]), unit: match[2].toLowerCase(), food: match[3].trim() });
+  }
+
+  // Pattern 2: number + food (if no unit match found for same position)
+  if (items.length === 0) {
+    while ((match = p2.exec(message)) !== null) {
+      const food = match[2].trim();
+      if (food.length > 2) items.push({ amount: parseFloat(match[1]), unit: 'serving', food });
+    }
+  }
+
+  return items;
+}
+
+// Look up a food in the USDA database
+async function lookupFood(foodName) {
+  if (!foodName) return null;
+  try {
+    // Full text search — finds closest match
+    const { data, error } = await supabase
+      .from('foods')
+      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
+      .textSearch('name', foodName.split(' ').join(' & '), { type: 'websearch' })
+      .limit(1);
+
+    if (!error && data && data.length > 0) return data[0];
+
+    // Fallback: ILIKE search
+    const { data: data2 } = await supabase
+      .from('foods')
+      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
+      .ilike('name', `%${foodName}%`)
+      .limit(1);
+
+    return data2?.[0] || null;
+  } catch (e) {
+    console.log('Food lookup error:', e.message);
+    return null;
+  }
+}
+
+// Convert amount + unit to grams
+async function convertToGrams(amount, unit, foodId) {
+  const unitLower = unit.toLowerCase().replace(/s$/, ''); // remove plural
+
+  // 1. Try food-specific conversion first
+  if (foodId) {
+    const { data } = await supabase
+      .from('food_specific_conversions')
+      .select('grams_per_unit')
+      .eq('food_id', foodId)
+      .ilike('unit_name', `%${unitLower}%`)
+      .limit(1);
+    if (data?.[0]) return amount * data[0].grams_per_unit;
+  }
+
+  // 2. Standard weight/volume conversion
+  const { data } = await supabase
+    .from('unit_conversions')
+    .select('grams_per_unit, ml_per_unit, unit_category')
+    .eq('unit_name', unitLower)
+    .limit(1);
+
+  if (data?.[0]) {
+    if (data[0].grams_per_unit) return amount * data[0].grams_per_unit;
+    // Volume — use water density (1g/ml) as default
+    if (data[0].ml_per_unit) return amount * data[0].ml_per_unit;
+  }
+
+  // 3. Can't convert — return null, AI will estimate
+  return null;
+}
+
+// Calculate macros from DB food + grams
+function calcMacros(food, grams) {
+  const factor = grams / 100;
+  return {
+    calories: Math.round(food.calories_per_100g * factor),
+    protein:  Math.round(food.protein_per_100g  * factor * 10) / 10,
+    carbs:    Math.round(food.carbs_per_100g     * factor * 10) / 10,
+    fat:      Math.round(food.fat_per_100g       * factor * 10) / 10,
+  };
+}
+
+// Main lookup — tries DB, returns null if not found
+async function lookupFoodMacros(message) {
+  const items = parseFoodItems(message);
+  if (items.length === 0) return null;
+
+  const results = [];
+  for (const item of items.slice(0, 5)) { // max 5 foods per message
+    const food = await lookupFood(item.food);
+    if (!food) continue;
+
+    const grams = await convertToGrams(item.amount, item.unit, food.id);
+    if (!grams) continue;
+
+    const macros = calcMacros(food, grams);
+    results.push({
+      food: food.name,
+      amount: item.amount,
+      unit: item.unit,
+      grams: Math.round(grams),
+      ...macros,
+      source: 'usda_db',
+    });
+  }
+
+  return results.length > 0 ? results : null;
+}
 
 function classifyEventType(text) {
   const lower = text.toLowerCase();
@@ -273,6 +405,19 @@ export async function POST(req) {
       carbs:    Math.max(0, goal.carbs    - totals.carbs),
       fat:      Math.max(0, goal.fat      - totals.fat),
     };
+
+    // ── DB Food Lookup (for food_log context) ──
+    let dbFoodResults = null;
+    if (context?.type === "food_log") {
+      const lookupMsg = context.followUpMessage || context.originalMessage || message;
+      dbFoodResults = await lookupFoodMacros(lookupMsg);
+      if (dbFoodResults) {
+        console.log(`=== DB FOOD LOOKUP: found ${dbFoodResults.length} food(s) ===`);
+        dbFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
+      } else {
+        console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
+      }
+    }
 
     const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
     const nothingEatenYet = todayMeals.length === 0;
@@ -712,10 +857,18 @@ Original: "${context.originalMessage}"
 ${context.mealType ? `Meal type: ${context.mealType}` : `Infer meal type from time: ${hour}:00`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
+${dbFoodResults ? `
+DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA):
+${dbFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
+  Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
+
+CRITICAL: Use the numbers above EXACTLY. Do not recalculate or estimate.
+Return a meal block with these exact macro values.
+` : `
 RULE 1: NEVER ASK USER FOR CALORIES OR MACROS — YOU ARE THE EXPERT
 WRONG: "How many calories are in the eggs?"
-WRONG: "How much does the spicy tuna roll weigh?"
 RIGHT: Use your nutrition knowledge to estimate. A standard sushi roll = ~300-350 cal. Eggs = 70 cal each.
+`}
 
 RULE 2: IF THERE'S ANY NUMBER OR DESCRIPTOR, LOG IT
 Quantities include: numbers (2, 8, .5), units (oz, pcs, cup), or words (a, half, whole, medium, large)
@@ -725,21 +878,18 @@ Quantities include: numbers (2, 8, .5), units (oz, pcs, cup), or words (a, half,
 - ".5 cup rice" or "half cup" → LOG (has fraction)
 - "a whole avocado" → LOG (has "a" and "whole")
 - "a banana" → LOG (has "a")
-- "3 salmon sashimi" → LOG (has number)
 
 RULE 3: ONLY ASK IF TRULY NOTHING IS THERE
 - "I had chicken" → no quantity at all → ask "How much chicken?"
 - "I had rice" → no quantity at all → ask "How much rice?"
 
-RULE 4: USE REASONABLE ESTIMATES WHEN EXACT IS UNKNOWN
+RULE 4: USE REASONABLE ESTIMATES WHEN EXACT IS UNKNOWN (only if no DB result)
 Standard portions:
 - Sushi roll = ~50-60 cal per piece, 8-piece roll = ~400-500 cal
 - Sashimi = ~40 cal per piece
-- Chicken breast = 46 cal/oz, 8.7g protein/oz
 - Eggs = 70 cal, 6g protein each
 - Avocado = 240 cal, 22g fat
 - Toast = 80 cal per slice
-Use the macro reference table. When in doubt, estimate reasonably and LOG IT.
 
 AFTER LOGGING — ALWAYS include:
 1. The meal you just logged (foods + macros)
