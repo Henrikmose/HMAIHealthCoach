@@ -114,7 +114,7 @@ function isMealPlanningRequest(text) {
 
 function isConfirmation(text) {
   if (!text) return false;
-  return /\b(yes|yeah|yep|yup|yew|yea|ya|ye|sure|perfect|great|sounds good|i like that|let'?s do|that one|i'?ll have|add it|can we do that|looks good|works for me|do that one|i want that|i'?ll take|love it|that works|go with that|do it|let'?s go with|as planned|as actual|for later|plan it|log it|save it|add (it |this )?(to my )?(plan|log)|confirm|correct|right|exactly|absolutely)\b/i.test(text);
+  return /\b(yes|yeah|yep|yup|yew|yea|ya|ye|sure|perfect|great|sounds good|i like that|let'?s do|that one|i'?ll have|add it|can we do that|looks good|works for me|do that one|i want that|i'?ll take|love it|that works|go with that|do it|let'?s go with|as planned|as actual|for later|plan it|log it|save it|add (it |this )?(to my )?(plan|log)|confirm|correct|right|exactly|absolutely|i'?ll go|i will go|go over|i'?ll take that|i choose|going with|i'?ll have that|that one|the (protein|shake|fitzels|first|second|last|other) one)\b/i.test(text);
 }
 
 function isMealSwap(text) {
@@ -628,6 +628,33 @@ export default function HomePage() {
           }
         }
       }
+
+      // Auto-save photo logs when intent is "eaten" or meal type was specified
+      if (context?.type === "photo" && imagesToSend.length > 0) {
+        const photoIntent = context.photoIntent;
+        const msgLower = (trimmed || "").toLowerCase();
+        const isEaten = photoIntent === "eaten" ||
+          /\b(had|ate|drank|consumed|finished|as a snack|as a lunch|as a breakfast|as a dinner|for snack|for lunch|for breakfast|for dinner)\b/i.test(msgLower);
+
+        if (isEaten) {
+          const parsed = parseAllMeals(reply);
+          if (parsed.length > 0) {
+            // Infer meal type from time if not in meal block
+            const hour = new Date().getHours();
+            const inferredType = hour < 11 ? "breakfast" : hour < 14 ? "lunch" : hour < 17 ? "snack" : "dinner";
+            const meal = {
+              ...parsed[0],
+              date: getLocalDate(),
+              mealType: parsed[0].mealType || inferredType,
+            };
+            const saved = await saveMealViaAPI("actual_meals", meal, uid);
+            if (saved) {
+              await loadTodayMeals(uid);
+              console.log("✅ Photo meal auto-saved to actual_meals");
+            }
+          }
+        }
+      }
     } catch (err) {
       console.error("Send error:", err);
       setHistory([
@@ -886,14 +913,25 @@ export default function HomePage() {
             // i.e. this is an AI message, and the previous user message was a confirmation
             const prevUserMsg = !isUser && history[idx - 1]?.role === "user" ? history[idx - 1].content : null;
             const thisIsPostConfirmAI = !isUser && prevUserMsg && isConfirmation(prevUserMsg);
-            const { meals: confirmMeals, sourceIdx } = thisIsPostConfirmAI
+
+            // Also show buttons if prev user message was a photo-related selection
+            // e.g. "I will go over the protein shake", "the whole bag", "I'll take that one"
+            const isPhotoSelection = !isUser && prevUserMsg && (
+              /\b(whole bag|full bag|all of it|the (protein|shake|fitzels|first|second|other)|i'?ll go|go over|i will go|i had (it|this)|ate (it|this)|as a snack|as a lunch|as a dinner|as a breakfast)\b/i.test(prevUserMsg)
+            );
+
+            const { meals: confirmMeals, sourceIdx } = (thisIsPostConfirmAI || isPhotoSelection)
               ? findRecentMeals(idx) : { meals: [], sourceIdx: -1 };
 
-            // Also get meals for this message (for non-confirmation flow)
+            // Also get meals for this message
             const thisMeals = !isUser ? parseAllMeals(msg.content) : [];
 
-            // Determine which meals + source to use for buttons
-            const buttonMeals = thisIsPostConfirmAI && confirmMeals.length > 0 ? confirmMeals : [];
+            // Show buttons on post-confirm AI OR if this AI message itself has meals (photo winner flow)
+            const buttonMeals = (thisIsPostConfirmAI || isPhotoSelection) && confirmMeals.length > 0
+              ? confirmMeals
+              : thisMeals.length > 0 && !isUser && isPhotoSelection
+              ? thisMeals
+              : [];
             const buttonSourceIdx = sourceIdx >= 0 ? sourceIdx : idx;
 
             const triggerText = !isUser && history[idx - 1]?.role === "user"

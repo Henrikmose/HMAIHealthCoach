@@ -732,18 +732,22 @@ CORRECT (multiple snacks):
 Snack
 - Foods: Banana, 1 medium; Rice cakes, 2
 - Calories: 175
-- Protein: 3
-- Carbs: 42
-- Fat: 0
+- Protein: 3g
+- Carbs: 42g
+- Fat: 0g
+
+Breakdown: Banana — 105 cal, 1g P, 27g C, 0g F | Rice cakes — 70 cal, 2g P, 15g C, 0g F
 
 👉 Have this 2 hours before your game for quick energy.
 
 Snack
 - Foods: Protein shake, 1 scoop; Milk whole, 1 cup
 - Calories: 270
-- Protein: 33
-- Carbs: 12
-- Fat: 8
+- Protein: 33g
+- Carbs: 12g
+- Fat: 8g
+
+Breakdown: Protein shake — 120 cal, 25g P, 3g C, 2g F | Milk — 150 cal, 8g P, 9g C, 6g F
 
 👉 Have this right after your game for recovery.
 
@@ -926,11 +930,21 @@ ONLY ask when there is truly NOTHING:
 KEY RULE: "half", "a", "an", "some", "whole" are ALL valid quantities. Never ask when these words are present.
 
 MEAL BLOCK FORMAT — CRITICAL:
-Use SINGLE TOTAL NUMBERS ONLY. Never breakdown math.
+Use SINGLE TOTAL NUMBERS ONLY. Never breakdown math in the meal block.
 WRONG: - Calories: 368 (chicken) + 130 (sweet potato) = 498
 RIGHT:  - Calories: 498
 WRONG: - Protein: 56g (chicken) + 3g (sweet potato) = 59g
 RIGHT:  - Protein: 59g
+
+ALWAYS include "g" on protein, carbs, fat:
+WRONG: - Protein: 56    RIGHT: - Protein: 56g
+WRONG: - Carbs: 30      RIGHT: - Carbs: 30g
+WRONG: - Fat: 36        RIGHT: - Fat: 36g
+
+AFTER the meal block, add a Breakdown line showing per-food contributions:
+Breakdown: Ground beef — 480 cal, 53g P, 0g C, 29g F | Sweet potato — 160 cal, 3g P, 37g C, 0g F
+
+This lets the user see what each food contributed without breaking the parser.
 
 ADDING TO EXISTING MEAL ("I also had X", "I also ate X", "add X to my breakfast"):
 When user adds a food to an existing meal type — ONLY log the NEW item.
@@ -1035,8 +1049,16 @@ Each block format (exactly this — nothing extra between blocks):
 - Carbs: [X]g
 - Fat: [X]g
 
-Then immediately the next meal block. No "👉" or coaching text between blocks.
+Breakdown: [food1] — [cal] cal, [P]g P, [C]g C, [F]g F | [food2] — [cal] cal, [P]g P, [C]g C, [F]g F
+
+Then immediately the next meal block. No other coaching text between blocks.
 All coaching tips go in STEP 3 only, after the total line.
+
+MACRO FORMAT — ALWAYS include "g" unit:
+WRONG: - Protein: 56    RIGHT: - Protein: 56g
+WRONG: - Carbs: 30      RIGHT: - Carbs: 30g
+WRONG: - Fat: 36        RIGHT: - Fat: 36g
+Calories never get "g" — just the number. All other macros ALWAYS get "g".
 
 For restaurant/social meals: include inline ordering guidance (NOT a meal block) — like:
 "For sushi — you have ~${Math.round(remaining.calories * 0.45)} calories budgeted here. Smart ordering:
@@ -1157,12 +1179,36 @@ The label says 150 cal → use 150. Do NOT use 120.
 The label says 30g protein → use 30g. Do NOT use 25g.
 You are reading a nutrition label, not estimating. Trust what you read.
 
-Meal block from label must use EXACT label values:
-- Foods: [Product name], [serving description from label]
-- Calories: [EXACT from label]
-- Protein: [EXACT from label]g
-- Carbs: [EXACT from label]g
-- Fat: [EXACT from label]g
+SERVINGS HANDLING — CRITICAL:
+1. Read: calories per serving, protein per serving, carbs per serving, fat per serving, servings per container
+2. If user ate 1 serving → servings field = 1, use per-serving macros
+3. If user ate whole container with X servings → servings field = X, use per-serving macros
+   The dashboard multiplies: calories × servings automatically
+4. ALWAYS ask if label has multiple servings and user didn't specify:
+   "The bag has 3 servings — did you have 1 serving (120 cal) or the whole bag (360 cal)?"
+5. NEVER use whole-bag totals as the per-serving macros
+
+Meal block from label MUST use PER-SERVING values + correct servings count:
+WRONG (ate whole bag of 3 servings):
+- Foods: Fitzels, 1 bag
+- Calories: 370  ← wrong, this is whole bag total
+- Servings: 1    ← wrong
+
+RIGHT (ate whole bag of 3 servings):
+- Foods: Fitzels, 1 serving
+- Calories: 120  ← per serving value
+- Protein: 5g    ← per serving value
+- Carbs: 19g     ← per serving value
+- Fat: 4g        ← per serving value
+- Servings: 3    ← actual servings consumed (dashboard calculates 120 × 3 = 360 cal)
+
+RIGHT (ate 1 serving):
+- Foods: Fitzels, 1 serving
+- Calories: 120
+- Protein: 5g
+- Carbs: 19g
+- Fat: 4g
+- Servings: 1
 
 IF intent is "eaten" → skip the question, return meal block directly using inferred meal type from time:
   Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
