@@ -390,21 +390,20 @@ LONG WORK DAY STRATEGY:
 
     let systemMessage = `STOP — READ THIS FIRST — NO MARKDOWN EVER
 ══════════════════════════════════════════
-NEVER use ** or ## or * or _ or any markdown. EVER.
+NEVER use ** or ## or * or _ or any markdown. EVER. In ANY response.
+This includes: nutrition questions, Q&A, general advice, comparisons, lists.
 Write plain text only. Markdown breaks the app display.
 
 MOST COMMON VIOLATIONS — NEVER DO THESE:
-WRONG: **Pre-Workout Snack**     RIGHT: (nothing — just write the meal block)
-WRONG: **Post-Workout Recovery** RIGHT: (nothing — just write the meal block)
-WRONG: **Lunch**                 RIGHT: Lunch
-WRONG: **Breakfast**             RIGHT: Breakfast
-WRONG: **Dinner**                RIGHT: Dinner
+WRONG: **Healthy Fats**        RIGHT: Healthy Fats
+WRONG: **Breakfast**           RIGHT: Breakfast
+WRONG: **Pre-Workout Snack**   RIGHT: (just write the meal block)
+WRONG: **Option 1**            RIGHT: 1.
+WRONG: **Summary**             RIGHT: Summary
 
-Do NOT add descriptive labels before meal blocks. Just write the meal type alone.
-WRONG: **Pre-Tennis Snack**\nSnack     RIGHT: Snack
-WRONG: **Recovery Dinner**\nDinner     RIGHT: Dinner
-
-This rule overrides everything else. No exceptions.
+For lists and sections — use numbers (1. 2. 3.) or plain text headers with a colon.
+NEVER bold anything. NEVER use asterisks for any reason.
+This rule applies to EVERY response — meal plans, nutrition questions, comparisons, everything.
 ══════════════════════════════════════════
 
 You are ${userName}'s personal AI nutrition coach, health advisor, and supportive friend.
@@ -483,7 +482,10 @@ ${missingEventTimes && !hasAnyEvent ? "⚠️ EVENTS MENTIONED BUT NO TIMES PROV
 ══════════════════════════════════════════
 CRITICAL: ASK BEFORE ASSUMING
 ══════════════════════════════════════════
-${nothingEatenYet ? `
+${hasTomorrowEvent || (message || "").toLowerCase().includes("tomorrow") ? `
+PLANNING FOR TOMORROW — do NOT ask about today's meals.
+Just plan the full day for tomorrow. No questions about what was eaten today.
+` : nothingEatenYet ? `
 NOTHING IS LOGGED TODAY and it's ${hour}:00.
 NEVER assume the user hasn't eaten just because nothing is logged.
 ${unloggedPrompt || ""}

@@ -19,11 +19,11 @@ function addDays(dateStr, days) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-function extractTargetDate(text) {
-  if (!text) return getLocalDate();
-  const lower = text.toLowerCase();
-  if (lower.includes("tomorrow")) return addDays(getLocalDate(), 1);
-  if (lower.includes("yesterday")) return addDays(getLocalDate(), -1);
+function extractTargetDate(text, surroundingTexts) {
+  // Check all provided texts for tomorrow/yesterday
+  const allTexts = [text, ...(surroundingTexts || [])].join(" ").toLowerCase();
+  if (allTexts.includes("tomorrow")) return addDays(getLocalDate(), 1);
+  if (allTexts.includes("yesterday")) return addDays(getLocalDate(), -1);
   return getLocalDate();
 }
 
@@ -120,6 +120,11 @@ function isConfirmation(text) {
 function isMealSwap(text) {
   if (!text) return false;
   return /i ran out|don'?t have|out of|no more|something else|another option|another suggestion|swap|give me another|can'?t make|different option|instead of|instead|no (salmon|chicken|beef|fish|meat|that)/i.test(text);
+}
+
+function isFutureMeal(text) {
+  if (!text) return false;
+  return /\b(i'?ll have|i will have|i'?m (going to|gonna) have|i'?m planning (to have|on having)|planning to eat|going to eat|will eat|i'?ll eat|having .* (tonight|later|for dinner|for lunch|for breakfast|after|tomorrow))\b/i.test(text);
 }
 
 function detectPhotoIntent(text) {
@@ -535,6 +540,11 @@ export default function HomePage() {
         };
         setActiveMealLog(newActiveMealLog);
         context = newActiveMealLog;
+      } else if (isFutureMeal(trimmed) && !isMealPlanningRequest(trimmed)) {
+        // Future tense food statement → treat as planned meal
+        newActiveMealLog = null;
+        setActiveMealLog(null);
+        context = { type: "meal_planning", request: trimmed, isFutureMeal: true };
       } else if (imagesToSend.length > 0) {
         const photoIntent = detectPhotoIntent(trimmed);
         newActiveMealLog = null;
@@ -705,282 +715,383 @@ export default function HomePage() {
     setPendingImages([]);
   }
 
+  // ── CURA Theme ──────────────────────────────────────────────────
+  const dark = typeof window !== "undefined"
+    ? localStorage.getItem("cura_dark") !== "false"
+    : true;
+
+  const T = dark ? {
+    bg:      "#1c1c1e",
+    surface: "#242424",
+    border:  "#2c2c2c",
+    text:    "#f0f0f0",
+    sub:     "#888888",
+    muted:   "#3a3a3a",
+    input:   "#2c2c2c",
+    userBubble: "#2563eb",
+    aiBubble:   "#242424",
+    aiBorder:   "#2c2c2c",
+  } : {
+    bg:      "#f5f5f5",
+    surface: "#ffffff",
+    border:  "#ebebeb",
+    text:    "#111111",
+    sub:     "#aaaaaa",
+    muted:   "#f0f0f0",
+    input:   "#f5f5f5",
+    userBubble: "#2563eb",
+    aiBubble:   "#ffffff",
+    aiBorder:   "#ebebeb",
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-white">
-      <HamburgerMenu />
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
+        * { box-sizing: border-box; }
+        body { background: ${T.bg}; font-family: 'DM Sans', sans-serif; }
+      `}</style>
 
-      {/* ── Header ── */}
-      <div className="px-4 pt-14 pb-4 border-b border-gray-100 bg-white">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">AI Coach</h1>
-            {userName && (
-              <p className="text-sm text-gray-400 mt-0.5">Hey {userName} 👋</p>
-            )}
-          </div>
-          <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-2xl px-3 py-2">
-            <div className="text-right">
-              <p className="text-sm font-bold text-blue-700 leading-tight">
-                {totals.calories}{" "}
-                <span className="font-normal text-blue-400">/ {goals.calories}</span>
-              </p>
-              <p className="text-xs text-blue-400">cal today · {calPct}%</p>
-            </div>
-          </div>
-        </div>
-
-        {todayMeals.length > 0 && (
-          <div className="flex gap-4">
-            <MacroBar label="Protein" value={totals.protein} goal={goals.protein} color="#3b82f6" />
-            <MacroBar label="Carbs"   value={totals.carbs}   goal={goals.carbs}   color="#10b981" />
-            <MacroBar label="Fat"     value={totals.fat}     goal={goals.fat}     color="#f59e0b" />
-          </div>
-        )}
-      </div>
-
-      {/* ── Messages ── */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 bg-gray-50">
-
-        {history.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center px-4 pb-16">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 bg-blue-600 shadow-lg shadow-blue-200">
-              🧠
-            </div>
-            <p className="font-bold text-gray-800 text-lg">Your AI Health Coach</p>
-            <p className="text-sm text-gray-400 mt-2 leading-relaxed max-w-xs">
-              Tell me what you ate, ask for a meal plan, or get nutrition advice.
-            </p>
-            <div className="mt-5 flex flex-col gap-2 w-full max-w-xs">
-              {[
-                "I had 8oz chicken and 1 cup rice for lunch",
-                "Create a meal plan for tomorrow",
-                "What should I eat for dinner?",
-                "I want to drop 10 pounds",
-              ].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setMessage(s)}
-                  className="text-left text-sm px-4 py-3 rounded-2xl border border-gray-200 bg-white text-gray-600 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-all shadow-sm"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {history.map((msg, idx) => {
-          const isUser = msg.role === "user";
-
-          const meals = !isUser ? parseAllMeals(msg.content) : [];
-          const triggerText = !isUser && history[idx - 1]?.role === "user"
-            ? history[idx - 1].content
-            : "";
-          // Button shows after user confirms — check next user message OR the one after that
-          // (in case AI gave a text-only recap after the plan before user said yes)
-          const nextUserMsg  = history[idx + 1]?.role === "user" ? history[idx + 1].content : null;
-          const nextNextUserMsg = history[idx + 3]?.role === "user" ? history[idx + 3].content : null;
-          const userConfirmed = (nextUserMsg && isConfirmation(nextUserMsg)) ||
-                                (nextNextUserMsg && isConfirmation(nextNextUserMsg));
-          const showButtons = meals.length > 0 && userConfirmed;
-          const targetDate = extractTargetDate(triggerText);
-          const allSaved = meals.length > 0 &&
-            meals.every((m) => savedPlanKeys.includes(getMealKey(idx, m)));
-
-          return (
-            <div
-              key={idx}
-              className={`flex ${isUser ? "justify-end" : "justify-start"} items-end gap-2`}
-            >
-              {!isUser && (
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 mb-1 bg-blue-600 shadow-sm shadow-blue-200">
-                  🧠
-                </div>
-              )}
-
-              <div className="max-w-[82%] flex flex-col gap-2">
-                {/* Image previews in message bubble */}
-                {msg.imagePreviews && msg.imagePreviews.length > 0 && (
-                  <div className="flex gap-2 flex-wrap">
-                    {msg.imagePreviews.map((preview, i) => (
-                      <img key={i} src={preview} alt={`Photo ${i+1}`}
-                        className="h-24 w-24 object-cover rounded-xl border border-gray-200" />
-                    ))}
-                  </div>
-                )}
-                <div
-                  className={`rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap leading-relaxed ${
-                    isUser
-                      ? "text-white rounded-br-sm shadow-sm"
-                      : "bg-white text-gray-800 border border-gray-100 rounded-bl-sm shadow-sm"
-                  }`}
-                  style={
-                    isUser ? { background: "linear-gradient(135deg,#2563eb,#1d4ed8)" } : {}
-                  }
-                >
-                  {msg.content}
-                </div>
-
-                {showButtons && (
-                  <div className="space-y-2 ml-1">
-                    {meals.length > 1 && (
-                      <button
-                        onClick={() => handleAddAllToPlan(meals, idx, targetDate)}
-                        disabled={allSaved}
-                        className={`w-full text-xs py-2.5 px-4 rounded-xl font-bold transition-all border ${
-                          allSaved
-                            ? "bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
-                            : "bg-emerald-500 text-white border-emerald-500 hover:bg-emerald-600 active:scale-95 shadow-sm"
-                        }`}
-                      >
-                        {allSaved
-                          ? "✅ All meals added to plan"
-                          : `+ Add all ${meals.length} meals to plan`}
-                      </button>
-                    )}
-
-                    {meals.map((meal) => {
-                      const key     = getMealKey(idx, meal);
-                      const isSaved = savedPlanKeys.includes(key);
-                      const label   = getMealLabel(meal.displayType);
-                      const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
-                        pm => pm.meal_type === meal.mealType && pm.date === targetDate
-                      );
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => handleAddToPlan(meal, idx, targetDate)}
-                          disabled={isSaved}
-                          className={`w-full text-xs py-2 px-4 rounded-xl font-medium transition-all border ${
-                            isSaved
-                              ? "bg-emerald-50 text-emerald-600 border-emerald-200 cursor-default"
-                              : hasExisting
-                              ? "bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100 active:scale-95"
-                              : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50 active:scale-95"
-                          }`}
-                        >
-                          {isSaved
-                            ? `✅ ${label} added`
-                            : hasExisting
-                            ? `↺ Replace ${label} · ${meal.calories} cal`
-                            : `+ Add ${label} · ${meal.calories} cal`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {isLoading && (
-          <div className="flex items-end gap-2">
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center text-base flex-shrink-0 bg-blue-600 shadow-sm shadow-blue-200">
-              🧠
-            </div>
-            <div className="bg-white border border-gray-100 shadow-sm rounded-2xl rounded-bl-sm px-4 py-3">
-              <div className="flex gap-1 items-center">
-                {[0, 150, 300].map((d) => (
-                  <div
-                    key={d}
-                    className="w-2 h-2 rounded-full animate-bounce bg-blue-400"
-                    style={{ animationDelay: `${d}ms` }}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* ── Input ── */}
-      <div className="px-4 py-3 border-t border-gray-100 bg-white">
+      <div style={{ display:"flex", flexDirection:"column", height:"100vh",
+        background: T.bg, fontFamily:"'DM Sans', sans-serif",
+        maxWidth: 430, margin:"0 auto" }}>
 
         {/* Hidden file inputs */}
         <input ref={cameraInputRef} type="file" accept="image/*" capture="environment"
-          onChange={handleImageSelected} style={{ display: "none" }} />
+          onChange={handleImageSelected} style={{ display:"none" }} />
         <input ref={libraryInputRef} type="file" accept="image/*"
-          onChange={handleImageSelected} style={{ display: "none" }} />
+          onChange={handleImageSelected} style={{ display:"none" }} />
 
-        {/* Photo menu popup */}
-        {showPhotoMenu && (
-          <div className="mb-2 flex gap-2">
-            <button onClick={() => { setShowPhotoMenu(false); cameraInputRef.current?.click(); }}
-              className="flex-1 text-sm py-2.5 px-3 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 font-semibold hover:bg-blue-100 transition-colors">
-              📷 Take Photo
-            </button>
-            <button onClick={() => { setShowPhotoMenu(false); libraryInputRef.current?.click(); }}
-              className="flex-1 text-sm py-2.5 px-3 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 font-semibold hover:bg-blue-100 transition-colors">
-              🖼️ Choose from Library
-            </button>
-            <button onClick={() => setShowPhotoMenu(false)}
-              className="text-sm py-2.5 px-3 rounded-xl bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors">
-              ✕
-            </button>
+        {/* ── Sticky Header ── */}
+        <div style={{ position:"sticky", top:0, zIndex:50, background: T.surface,
+          borderBottom:`1px solid ${T.border}`, padding:"52px 20px 14px" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div>
+              <p style={{ fontSize:11, fontWeight:700, color:"#2563eb",
+                textTransform:"uppercase", letterSpacing:".1em", margin:0 }}>CURA</p>
+              <h1 style={{ fontSize:20, fontWeight:800, color: T.text,
+                margin:"2px 0 0", letterSpacing:"-.02em" }}>
+                {userName ? `Hey ${userName} 👋` : "AI Coach"}
+              </h1>
+            </div>
+            <div style={{ background:"#2563eb22", border:"1px solid #2563eb44",
+              borderRadius:16, padding:"8px 12px", textAlign:"right" }}>
+              <p style={{ fontSize:15, fontWeight:800, color:"#2563eb",
+                margin:0, lineHeight:1.2 }}>
+                {totals.calories} <span style={{ fontWeight:400, color:"#3b82f6", fontSize:12 }}>/ {goals.calories}</span>
+              </p>
+              <p style={{ fontSize:10, color:"#3b82f6", margin:0, fontWeight:600 }}>
+                cal today · {calPct}%
+              </p>
+            </div>
           </div>
-        )}
-
-        {/* Image thumbnails row */}
-        {pendingImages.length > 0 && (
-          <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
-            {pendingImages.map((img, idx) => (
-              <div key={idx} className="relative flex-shrink-0">
-                <img src={img.preview} alt={`Photo ${idx + 1}`}
-                  className="h-20 w-20 object-cover rounded-xl border border-gray-200" />
-                <button onClick={() => removeImage(idx)}
-                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-gray-700 text-white text-xs flex items-center justify-center hover:bg-red-500 transition-colors">
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex gap-2 items-end">
-          {/* Camera button */}
-          <button
-            onClick={() => pendingImages.length < 4 && setShowPhotoMenu(!showPhotoMenu)}
-            disabled={isLoading || pendingImages.length >= 4}
-            className="rounded-2xl px-3 transition-all active:scale-95 disabled:opacity-40 flex-shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-600 flex flex-col items-center justify-center gap-0.5"
-            style={{ minHeight: "60px", minWidth: "52px" }}>
-            <span className="text-xl">📷</span>
-            {pendingImages.length > 0 && (
-              <span className="text-xs font-bold text-blue-600">{pendingImages.length}/4</span>
-            )}
-          </button>
-          <textarea
-            ref={textareaRef}
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={pendingImages.length > 1 ? "Compare these or add a message..." : pendingImages.length === 1 ? "Add a message or just send the photo..." : "Ask your coach..."}
-            rows={2}
-            className="flex-1 resize-none rounded-2xl px-4 py-3 text-sm focus:outline-none border transition-all bg-gray-50"
-            style={{
-              minHeight:   "60px",
-              maxHeight:   "140px",
-              borderColor: message ? "#3b82f6" : "#e5e7eb",
-            }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || (!message.trim() && pendingImages.length === 0)}
-            className="rounded-2xl px-5 text-sm font-bold text-white transition-all active:scale-95 disabled:opacity-40 flex-shrink-0 shadow-sm shadow-blue-200"
-            style={{
-              minHeight:  "60px",
-              background: "linear-gradient(135deg,#2563eb,#1d4ed8)",
-            }}
-          >
-            Send
-          </button>
+          {todayMeals.length > 0 && (
+            <div style={{ display:"flex", gap:8, marginTop:12 }}>
+              {[
+                { label:"P", value:totals.protein, goal:goals.protein, color:"#3b82f6" },
+                { label:"C", value:totals.carbs,   goal:goals.carbs,   color:"#10b981" },
+                { label:"F", value:totals.fat,     goal:goals.fat,     color:"#f59e0b" },
+              ].map(m => {
+                const pct = Math.min(100, Math.round((m.value/m.goal)*100));
+                return (
+                  <div key={m.label} style={{ flex:1 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                      <span style={{ fontSize:10, fontWeight:600, color: T.sub,
+                        textTransform:"uppercase", letterSpacing:".05em" }}>{m.label}</span>
+                      <span style={{ fontSize:10, fontWeight:700, color: T.text }}>
+                        {Math.round(m.value)}g
+                      </span>
+                    </div>
+                    <div style={{ height:3, background: T.muted, borderRadius:9999, overflow:"hidden" }}>
+                      <div style={{ height:"100%", width:`${pct}%`, background: m.color,
+                        borderRadius:9999, transition:"width .5s ease" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
-        <p className="text-xs text-gray-400 mt-1.5 text-center">
-          Press Enter to send · Shift+Enter for new line
-        </p>
+
+        {/* ── Messages ── */}
+        <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 8px",
+          display:"flex", flexDirection:"column", gap:12, background: T.bg }}>
+
+          {history.length === 0 && (
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
+              justifyContent:"center", height:"100%", textAlign:"center", padding:"0 16px 80px" }}>
+              <div style={{ width:64, height:64, borderRadius:20, background:"#2563eb",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:28, marginBottom:16, boxShadow:"0 8px 24px #2563eb44" }}>
+                💬
+              </div>
+              <p style={{ fontWeight:800, color: T.text, fontSize:18, margin:"0 0 8px" }}>CURA</p>
+              <p style={{ fontSize:13, color: T.sub, lineHeight:1.5, maxWidth:260, margin:0 }}>
+                Tell me what you ate, ask for a meal plan, or get nutrition advice.
+              </p>
+              <div style={{ marginTop:20, display:"flex", flexDirection:"column",
+                gap:8, width:"100%", maxWidth:280 }}>
+                {[
+                  "I had 8oz chicken and 1 cup rice for lunch",
+                  "Create a meal plan for tomorrow",
+                  "What should I eat for dinner?",
+                  "I want to drop 10 pounds",
+                ].map(s => (
+                  <button key={s} onClick={() => setMessage(s)}
+                    style={{ textAlign:"left", fontSize:13, padding:"12px 14px",
+                      borderRadius:14, border:`1px solid ${T.border}`,
+                      background: T.surface, color: T.sub, cursor:"pointer",
+                      transition:"all .2s" }}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {history.map((msg, idx) => {
+            const isUser = msg.role === "user";
+            const meals = !isUser ? parseAllMeals(msg.content) : [];
+            const triggerText = !isUser && history[idx - 1]?.role === "user"
+              ? history[idx - 1].content : "";
+            const surroundingTexts = history.slice(Math.max(0, idx - 6), idx).map(m => m.content || "");
+            const nextUserMsg = history[idx + 1]?.role === "user" ? history[idx + 1].content : null;
+            const nextNextUserMsg = history[idx + 3]?.role === "user" ? history[idx + 3].content : null;
+            const userConfirmed = (nextUserMsg && isConfirmation(nextUserMsg)) ||
+                                  (nextNextUserMsg && isConfirmation(nextNextUserMsg));
+            const showButtons = meals.length > 0 && userConfirmed;
+            const targetDate = extractTargetDate(triggerText, surroundingTexts);
+            const allSaved = meals.length > 0 &&
+              meals.every((m) => savedPlanKeys.includes(getMealKey(idx, m)));
+
+            return (
+              <div key={idx} style={{ display:"flex",
+                justifyContent: isUser ? "flex-end" : "flex-start",
+                alignItems:"flex-end", gap:8 }}>
+
+                {!isUser && (
+                  <div style={{ width:32, height:32, borderRadius:10, background:"#2563eb",
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    fontSize:16, flexShrink:0, marginBottom:4,
+                    boxShadow:"0 2px 8px #2563eb44" }}>
+                    💬
+                  </div>
+                )}
+
+                <div style={{ maxWidth:"82%", display:"flex", flexDirection:"column", gap:6 }}>
+                  {/* Image previews */}
+                  {msg.imagePreviews && msg.imagePreviews.length > 0 && (
+                    <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                      {msg.imagePreviews.map((preview, i) => (
+                        <img key={i} src={preview} alt={`Photo ${i+1}`}
+                          style={{ height:90, width:90, objectFit:"cover",
+                            borderRadius:12, border:`1px solid ${T.border}` }} />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Message bubble */}
+                  {msg.content && (
+                    <div style={{
+                      borderRadius: isUser ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                      padding:"12px 14px", fontSize:14, lineHeight:1.5,
+                      whiteSpace:"pre-wrap",
+                      background: isUser ? T.userBubble : T.aiBubble,
+                      color: isUser ? "#fff" : T.text,
+                      border: isUser ? "none" : `1px solid ${T.aiBorder}`,
+                    }}>
+                      {msg.content}
+                    </div>
+                  )}
+
+                  {/* Add to plan buttons */}
+                  {showButtons && (
+                    <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      {meals.length > 1 && (
+                        <button onClick={() => handleAddAllToPlan(meals, idx, targetDate)}
+                          disabled={allSaved}
+                          style={{ fontSize:12, padding:"10px 16px", borderRadius:12, fontWeight:700,
+                            background: allSaved ? "#10b98122" : "#10b981",
+                            color: allSaved ? "#10b981" : "#fff", border:"none", cursor:"pointer",
+                            opacity: allSaved ? 1 : 1 }}>
+                          {allSaved ? "✅ All meals added" : `+ Add all ${meals.length} meals to plan`}
+                        </button>
+                      )}
+                      {meals.map(meal => {
+                        const key = getMealKey(idx, meal);
+                        const isSaved = savedPlanKeys.includes(key);
+                        const label = getMealLabel(meal.displayType);
+                        const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
+                          pm => pm.meal_type === meal.mealType && pm.date === targetDate
+                        );
+                        return (
+                          <button key={key}
+                            onClick={() => handleAddToPlan(meal, idx, targetDate)}
+                            disabled={isSaved}
+                            style={{ fontSize:12, padding:"9px 16px", borderRadius:12, fontWeight:600,
+                              border: isSaved ? "none" : `1px solid ${hasExisting ? "#f59e0b" : "#2563eb"}`,
+                              background: isSaved ? "#10b98122" : hasExisting ? "#f59e0b22" : "#2563eb22",
+                              color: isSaved ? "#10b981" : hasExisting ? "#f59e0b" : "#2563eb",
+                              cursor: isSaved ? "default" : "pointer" }}>
+                            {isSaved ? `✅ ${label} added`
+                              : hasExisting ? `↺ Replace ${label} · ${meal.calories} cal`
+                              : `+ Add ${label} · ${meal.calories} cal`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {isLoading && (
+            <div style={{ display:"flex", alignItems:"flex-end", gap:8 }}>
+              <div style={{ width:32, height:32, borderRadius:10, background:"#2563eb",
+                display:"flex", alignItems:"center", justifyContent:"center",
+                fontSize:16, flexShrink:0, boxShadow:"0 2px 8px #2563eb44" }}>
+                💬
+              </div>
+              <div style={{ background: T.aiBubble, border:`1px solid ${T.aiBorder}`,
+                borderRadius:"18px 18px 18px 4px", padding:"14px 16px" }}>
+                <div style={{ display:"flex", gap:5, alignItems:"center" }}>
+                  {[0,150,300].map(d => (
+                    <div key={d} style={{ width:7, height:7, borderRadius:"50%",
+                      background:"#2563eb", animation:"bounce 1s infinite",
+                      animationDelay:`${d}ms` }} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* ── Input ── */}
+        <div style={{ background: T.surface, borderTop:`1px solid ${T.border}`,
+          padding:"12px 14px", paddingBottom:"calc(12px + env(safe-area-inset-bottom, 0px))" }}>
+
+          {/* Photo menu */}
+          {showPhotoMenu && (
+            <div style={{ display:"flex", gap:8, marginBottom:10 }}>
+              <button onClick={() => { setShowPhotoMenu(false); cameraInputRef.current?.click(); }}
+                style={{ flex:1, fontSize:13, padding:"10px 12px", borderRadius:12,
+                  background:"#2563eb22", color:"#2563eb", border:"1px solid #2563eb44",
+                  fontWeight:600, cursor:"pointer" }}>
+                📷 Take Photo
+              </button>
+              <button onClick={() => { setShowPhotoMenu(false); libraryInputRef.current?.click(); }}
+                style={{ flex:1, fontSize:13, padding:"10px 12px", borderRadius:12,
+                  background:"#2563eb22", color:"#2563eb", border:"1px solid #2563eb44",
+                  fontWeight:600, cursor:"pointer" }}>
+                🖼️ Library
+              </button>
+              <button onClick={() => setShowPhotoMenu(false)}
+                style={{ fontSize:13, padding:"10px 12px", borderRadius:12,
+                  background: T.muted, color: T.sub, border:"none", cursor:"pointer" }}>
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Image thumbnails */}
+          {pendingImages.length > 0 && (
+            <div style={{ display:"flex", gap:8, overflowX:"auto", marginBottom:10, paddingBottom:2 }}>
+              {pendingImages.map((img, i) => (
+                <div key={i} style={{ position:"relative", flexShrink:0 }}>
+                  <img src={img.preview} alt={`Photo ${i+1}`}
+                    style={{ width:72, height:72, objectFit:"cover", borderRadius:10,
+                      border:`1px solid ${T.border}` }} />
+                  <button onClick={() => removeImage(i)}
+                    style={{ position:"absolute", top:-6, right:-6, width:18, height:18,
+                      borderRadius:"50%", background:"#3a3a3a", color:"#fff",
+                      border:"none", cursor:"pointer", fontSize:10,
+                      display:"flex", alignItems:"center", justifyContent:"center" }}>
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display:"flex", gap:8, alignItems:"flex-end" }}>
+            {/* Camera button */}
+            <button onClick={() => pendingImages.length < 4 && setShowPhotoMenu(!showPhotoMenu)}
+              disabled={isLoading || pendingImages.length >= 4}
+              style={{ minHeight:52, minWidth:48, borderRadius:14, background: T.muted,
+                border:"none", cursor:"pointer", display:"flex", flexDirection:"column",
+                alignItems:"center", justifyContent:"center", gap:2, flexShrink:0,
+                opacity: pendingImages.length >= 4 ? .4 : 1 }}>
+              <span style={{ fontSize:20 }}>📷</span>
+              {pendingImages.length > 0 && (
+                <span style={{ fontSize:9, fontWeight:700, color:"#2563eb" }}>
+                  {pendingImages.length}/4
+                </span>
+              )}
+            </button>
+
+            {/* Text input */}
+            <textarea ref={textareaRef} value={message}
+              onChange={e => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={pendingImages.length > 1 ? "Compare these or add a message..." :
+                pendingImages.length === 1 ? "Add a message or just send..." : "Ask your coach..."}
+              rows={1}
+              style={{ flex:1, resize:"none", borderRadius:14, padding:"14px 16px",
+                fontSize:14, border:`1px solid ${message ? "#2563eb" : T.border}`,
+                background: T.input, color: T.text, outline:"none",
+                minHeight:52, maxHeight:120, fontFamily:"'DM Sans', sans-serif",
+                transition:"border-color .2s" }}
+            />
+
+            {/* Send button */}
+            <button onClick={handleSend}
+              disabled={isLoading || (!message.trim() && pendingImages.length === 0)}
+              style={{ minHeight:52, minWidth:52, borderRadius:14,
+                background:"linear-gradient(135deg,#2563eb,#1d4ed8)",
+                border:"none", color:"#fff", fontWeight:700, fontSize:14,
+                cursor:"pointer", flexShrink:0, opacity: (isLoading || (!message.trim() && pendingImages.length === 0)) ? .4 : 1,
+                padding:"0 16px", boxShadow:"0 4px 12px #2563eb44" }}>
+              Send
+            </button>
+          </div>
+        </div>
+
+        {/* ── Bottom Nav ── */}
+        <div style={{ background: T.surface, borderTop:`1px solid ${T.border}`,
+          display:"flex", paddingBottom:"env(safe-area-inset-bottom, 8px)", zIndex:100 }}>
+          {[
+            { id:"coach",     icon:"💬", label:"Coach",     path:"/"          },
+            { id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
+            { id:"plan",      icon:"📋", label:"Plan",      path:"/plan"      },
+            { id:"profile",   icon:"⚙️", label:"Profile",   path:"/profile"   },
+          ].map(tab => (
+            <button key={tab.id}
+              onClick={() => window.location.href = tab.path}
+              style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center",
+                gap:3, padding:"10px 0 4px", border:"none", background:"transparent", cursor:"pointer" }}>
+              <span style={{ fontSize:20 }}>{tab.icon}</span>
+              <span style={{ fontSize:10, fontWeight: tab.id === "coach" ? 700 : 500,
+                color: tab.id === "coach" ? "#2563eb" : T.sub, letterSpacing:".03em" }}>
+                {tab.label}
+              </span>
+              {tab.id === "coach" && (
+                <div style={{ width:18, height:2, background:"#2563eb", borderRadius:9999 }} />
+              )}
+            </button>
+          ))}
+        </div>
       </div>
-    </div>
+
+      <style>{`
+        @keyframes bounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-5px); }
+        }
+      `}</style>
+    </>
   );
+
 }
