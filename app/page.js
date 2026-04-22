@@ -870,9 +870,10 @@ export default function HomePage() {
           {history.map((msg, idx) => {
             const isUser = msg.role === "user";
 
-            // Find meals from the most recent AI message before this point
+            // Find meals from the most recent AI message — only look back 6 messages
             const findRecentMeals = (beforeIdx) => {
-              for (let i = beforeIdx - 1; i >= 0; i--) {
+              const limit = Math.max(0, beforeIdx - 6); // max 6 messages back
+              for (let i = beforeIdx - 1; i >= limit; i--) {
                 if (history[i].role === "assistant") {
                   const m = parseAllMeals(history[i].content);
                   if (m.length > 0) return { meals: m, sourceIdx: i };
