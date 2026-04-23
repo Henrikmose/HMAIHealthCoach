@@ -420,9 +420,9 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - totals.fat),
     };
 
-    // ── DB Food Lookup (for food_log context) ──
+    // ── DB Food Lookup (for food_log AND meal_planning) ──
     let dbFoodResults = null;
-    if (context?.type === "food_log") {
+    if (context?.type === "food_log" || context?.type === "meal_planning") {
       const lookupMsg = context.followUpMessage || context.originalMessage || message;
       dbFoodResults = await lookupFoodMacros(lookupMsg);
       if (dbFoodResults) {
@@ -1026,6 +1026,15 @@ ${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO
 
 🚨 EVENT TIMING RULE — CRITICAL:
 ${events.length === 0 ? "NO EVENTS DETECTED — Do NOT mention games, workouts, or any events in your timing suggestions. Do NOT say 'before your game' or 'after your workout' when no events exist." : "Only mention the events listed above. Do NOT invent additional events."}
+
+${dbFoodResults ? `
+DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA):
+${dbFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
+  Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
+
+CRITICAL: Use the numbers above EXACTLY for these foods. Do not recalculate or estimate.
+For other foods not in the database, estimate as normal.
+` : ""}
 
 ${timingGuide}
 

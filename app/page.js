@@ -629,7 +629,13 @@ export default function HomePage() {
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed };
       } else if (isMealSwap(trimmed) && history.some(m => m.role === "assistant" && parseAllMeals(m.content).length > 0)) {
-        // User is swapping a previously suggested meal — treat as planning continuation
+        // User is swapping a previously suggested meal
+        // Delete the previous AI message with meals to avoid confusion
+        const lastAiMealIdx = history.findLastIndex(m => m.role === "assistant" && parseAllMeals(m.content).length > 0);
+        if (lastAiMealIdx >= 0) {
+          newHistory = [...history.slice(0, lastAiMealIdx), ...history.slice(lastAiMealIdx + 1)];
+        }
+        
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isSwap: true };
