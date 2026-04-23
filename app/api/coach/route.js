@@ -1003,12 +1003,23 @@ MEAL PLANNING MODE
 🚨 MANDATORY: END EVERY MEAL PLAN WITH THIS EXACT LINE:
 Reply "yes" to save this plan, or let me know if you'd like to change anything.
 
+CALORIE TARGET — CRITICAL:
+When user asks to "meet macros", "hit my goal", "reach my target", or similar:
+- Plan to reach 80-105% of daily goal (${Math.round(goal.calories * 0.8)}-${Math.round(goal.calories * 1.05)} cal total)
+- Already eaten today: ${eaten.calories} cal
+- Need to plan: ${Math.max(0, Math.round(goal.calories * 0.8) - eaten.calories)}-${Math.max(0, Math.round(goal.calories * 1.05) - eaten.calories)} more calories
+- Target range is flexible: aim for ~100% but 80-105% is acceptable
+- Don't underplan — getting to 66-71% when they ask to meet macros is too low
+
 Request: "${context.request || message}"
 Local time: ${hour}:00
 Planning for: ${events.some(e => e.isTomorrow) ? "TOMORROW" : "TODAY"}
 ${events.length > 0 ? `Events detected: ${events.map(e => `${e.type} at ${e.hour}:00`).join(", ")}` : "No events detected"}
 ${missingEventTimes && !hasAnyEvent ? "MISSING TIMES: Ask user what time each event is before planning." : ""}
 ${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO NOT create a Dinner block. Plain text guidance only." : ""}
+
+🚨 EVENT TIMING RULE — CRITICAL:
+${events.length === 0 ? "NO EVENTS DETECTED — Do NOT mention games, workouts, or any events in your timing suggestions. Do NOT say 'before your game' or 'after your workout' when no events exist." : "Only mention the events listed above. Do NOT invent additional events."}
 
 ${timingGuide}
 
@@ -1160,7 +1171,13 @@ SNACK RULES:
 
 For weight loss confirmations → plan TOMORROW.
 Each meal type alone on its own line — no parentheses.
+
+TOTAL LINE CALCULATION — CRITICAL:
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat after all meal blocks.
+- X = Sum of ALL meals for the target day (eaten + planned + what you're suggesting now)
+- If planning for tomorrow and user already has planned meals, include them in X
+- If planning for today, include both eaten AND planned in X
+- Example: User has 600 cal already planned for dinner tomorrow, you suggest 1200 cal → total is 1800/2800, not 1200/2800
 
 CRITICAL — ALWAYS END MEAL PLANS WITH THIS EXACT LINE:
 Reply "yes" to save this plan, or let me know if you'd like to change anything.`;

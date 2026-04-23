@@ -124,7 +124,7 @@ function isConfirmation(text) {
 
 function isMealSwap(text) {
   if (!text) return false;
-  return /i ran out|don'?t have|out of|no more|something else|another option|another suggestion|swap|give me another|can'?t make|different option|instead of|instead|no (salmon|chicken|beef|fish|meat|that)/i.test(text);
+  return /i ran out|don'?t have|don'?t want|out of|no more|something else|another option|another suggestion|swap|give me another|can'?t make|different option|instead of|instead|replace|substitute|change it|can you change|no (salmon|chicken|beef|fish|meat|that)/i.test(text);
 }
 
 function isFutureMeal(text) {
@@ -581,18 +581,19 @@ export default function HomePage() {
           message: trimmed,
         };
       } else if (isConfirmation(trimmed) && lastAiHadMeals) {
-        // User confirmed — save meals from previous AI message directly
+        // User confirmed — save meals from previous AI message directly, skip AI call
         const mostRecentAiMsg = recentAiMsgs[0];
         const meals = mostRecentAiMsg ? parseAllMeals(mostRecentAiMsg.content) : [];
         
         if (meals.length > 0) {
           const uid = userId || localStorage.getItem("user_id");
           
-          // Detect target date from context
+          // Detect target date from context (today vs tomorrow)
           const surroundingTexts = history.slice(Math.max(0, history.length - 6)).map(m => m.content || "");
           const targetDate = extractTargetDate(trimmed, surroundingTexts);
           
           let savedCount = 0;
+          
           for (const meal of meals) {
             const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
             if (saved) savedCount++;
@@ -605,6 +606,7 @@ export default function HomePage() {
               : `Done — all ${savedCount} meals added to your plan.`;
             setHistory([...newHistory, { role: "assistant", content: confirmMsg }]);
             
+            // Close the meal plan message so it's never looked up again
             const mostRecentAiIdx = history.lastIndexOf(mostRecentAiMsg);
             if (mostRecentAiIdx >= 0) {
               setClosedPlanIndices(prev => new Set([...prev, mostRecentAiIdx]));
@@ -615,9 +617,10 @@ export default function HomePage() {
           
           setIsLoading(false);
           setLoadingStage("");
-          return;
+          return; // Skip AI call entirely
         }
         
+        // Fallback: if no meals found, route to AI
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isConfirmation: true };
@@ -658,6 +661,7 @@ export default function HomePage() {
       const reply = data.reply || "Sorry, could not get a response.";
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
+      // The AI response index in history — used to close it after saving
       const aiMsgIdx = newHistory.length;
 
       if (newActiveMealLog?.type === "food_log") {
@@ -671,6 +675,7 @@ export default function HomePage() {
           if (saved) {
             setActiveMealLog(null);
             await loadTodayMeals(uid);
+            // Close this message — never look it up again
             setClosedPlanIndices(prev => new Set([...prev, aiMsgIdx]));
           }
         }
@@ -697,6 +702,7 @@ export default function HomePage() {
             const saved = await saveMealViaAPI("actual_meals", meal, uid);
             if (saved) {
               await loadTodayMeals(uid);
+              // Close this message — never look it up again
               setClosedPlanIndices(prev => new Set([...prev, aiMsgIdx]));
               console.log("✅ Photo meal auto-saved to actual_meals");
             }
