@@ -998,8 +998,8 @@ SOCIAL EVENT at ${event.hour}:00 (${event.label}):
       // Calculate calorie target ranges for meal planning
       const calMin = Math.round(goal.calories * 0.8);
       const calMax = Math.round(goal.calories * 1.05);
-      const needMin = Math.max(0, calMin - eaten.calories);
-      const needMax = Math.max(0, calMax - eaten.calories);
+      const needMin = Math.max(0, calMin - totals.calories);
+      const needMax = Math.max(0, calMax - totals.calories);
 
       systemMessage += `
 
@@ -1012,7 +1012,7 @@ Reply "yes" to save this plan, or let me know if you'd like to change anything.
 CALORIE TARGET — CRITICAL:
 When user asks to "meet macros", "hit my goal", "reach my target", or similar:
 - Plan to reach 80-105% of daily goal (${calMin}-${calMax} cal total)
-- Already eaten today: ${eaten.calories} cal
+- Already eaten today: ${totals.calories} cal
 - Need to plan: ${needMin}-${needMax} more calories
 - Target range is flexible: aim for ~100% but 80-105% is acceptable
 - Don't underplan — getting to 66-71% when they ask to meet macros is too low
