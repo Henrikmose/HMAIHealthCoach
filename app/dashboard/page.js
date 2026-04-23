@@ -45,31 +45,19 @@ const MEAL_EMOJI = { breakfast:"🌅", lunch:"☀️", dinner:"🌙", snack:"�
 // ── Theme ───────────────────────────────────────────────────────────
 function getTheme(dark) {
   return dark ? {
-    bg:      "#1c1c1e",
-    surface: "#242424",
-    card:    "#2a2a2a",
-    border:  "#2c2c2c",
-    text:    "#f0f0f0",
-    sub:     "#888888",
-    muted:   "#3a3a3a",
-    input:   "#333333",
+    bg:"#1c1c1e", surface:"#242424", card:"#2a2a2a", border:"#2c2c2c",
+    text:"#f0f0f0", sub:"#888888", muted:"#3a3a3a", input:"#333333",
   } : {
-    bg:      "#f5f5f5",
-    surface: "#ffffff",
-    card:    "#ffffff",
-    border:  "#ebebeb",
-    text:    "#111111",
-    sub:     "#aaaaaa",
-    muted:   "#f0f0f0",
-    input:   "#f8f8f8",
+    bg:"#f5f5f5", surface:"#ffffff", card:"#ffffff", border:"#ebebeb",
+    text:"#111111", sub:"#aaaaaa", muted:"#f0f0f0", input:"#f8f8f8",
   };
 }
 
 // ── Calorie Ring ────────────────────────────────────────────────────
 function CalRing({ eaten, planned, goal, dark, t }) {
   const R = 52, CIRC = 2 * Math.PI * R;
-  const eatenPct   = Math.min(1, eaten / goal);
-  const combinedPct= Math.min(1, (eaten + planned) / goal);
+  const eatenPct    = Math.min(1, eaten / goal);
+  const combinedPct = Math.min(1, (eaten + planned) / goal);
   const pct = Math.round((eaten / goal) * 100);
   return (
     <svg width="136" height="136" viewBox="0 0 136 136">
@@ -131,8 +119,12 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
   const [busy, setBusy]           = useState(false);
   const [showConfirm, setConfirm] = useState(false);
   const [showCopy, setCopy]       = useState(false);
-  const [servings, setServings]   = useState(meal.servings || 1);
-  const [copyDate, setCopyDate]   = useState(() => {
+
+  // BUG 4 FIX: Separate display string from committed value so field can be cleared to retype
+  const [servings, setServings]       = useState(meal.servings || 1);
+  const [servingsInput, setServingsInput] = useState(String(meal.servings || 1));
+
+  const [copyDate, setCopyDate] = useState(() => {
     const d = new Date(); d.setDate(d.getDate()+1); return d.toISOString().split("T")[0];
   });
   const [copyType, setCopyType] = useState(meal.meal_type || "lunch");
@@ -143,12 +135,25 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
     if (!showConfirm) { setConfirm(true); return; }
     await act(() => onDelete(meal.id)); setConfirm(false);
   }
-  async function handleServings(v) {
-    const val = parseFloat(v);
-    if (isNaN(val) || val <= 0) return;
-    setServings(val);
-    if (onUpdateServings) await onUpdateServings(meal.id, val, isActual);
+
+  // Allow field to be empty while typing — only commit on blur
+  function handleServingsChange(v) {
+    setServingsInput(v);
   }
+
+  async function handleServingsBlur() {
+    const val = parseFloat(servingsInput);
+    if (isNaN(val) || val <= 0) {
+      // Invalid — reset display to last valid value
+      setServingsInput(String(servings));
+      return;
+    }
+    const rounded = Math.round(val * 4) / 4; // round to nearest 0.25
+    setServings(rounded);
+    setServingsInput(String(rounded));
+    if (onUpdateServings) await onUpdateServings(meal.id, rounded, isActual);
+  }
+
   async function handleCopy() {
     await act(() => onCopy({ ...meal, meal_type: copyType }, copyDate));
     setCopy(false);
@@ -172,10 +177,17 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
           </div>
           <div style={{ display:"flex", alignItems:"center", gap: 8, marginTop: 8 }}>
             <span style={{ fontSize: 11, color: t.sub }}>Servings</span>
-            <input type="number" min="0.25" step="0.25" value={servings}
-              onChange={e => handleServings(e.target.value)}
-              style={{ width: 56, fontSize: 12, padding:"4px 8px", border:`1px solid ${t.border}`, borderRadius: 8,
-                textAlign:"center", background: t.input, color: t.text, outline:"none" }} />
+            <input
+              type="number"
+              min="0.25"
+              step="0.25"
+              value={servingsInput}
+              onChange={e => handleServingsChange(e.target.value)}
+              onBlur={handleServingsBlur}
+              onFocus={e => e.target.select()}
+              style={{ width: 56, fontSize: 12, padding:"4px 8px", border:`1px solid ${t.border}`,
+                borderRadius: 8, textAlign:"center", background: t.input, color: t.text, outline:"none" }}
+            />
           </div>
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap: 5, flexShrink: 0 }}>
@@ -284,36 +296,21 @@ function BottomNav({ t, dark }) {
 
 // ── Main Component ──────────────────────────────────────────────────
 export default function DashboardPage() {
-  const [dark, setDark]               = useState(true);
+  const [dark, setDark]                 = useState(true);
   const [selectedDate, setSelectedDate] = useState(getLocalDate());
-  const [loading, setLoading]         = useState(true);
-  const [userId, setUserId]           = useState(null);
-  const [userName, setUserName]       = useState("");
-  const [goal, setGoal]               = useState({ calories:2800, protein:220, carbs:305, fat:78 });
-  const [planned, setPlanned]         = useState([]);
-  const [actual, setActual]           = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [userId, setUserId]             = useState(null);
+  const [userName, setUserName]         = useState("");
+  const [goal, setGoal]                 = useState({ calories:2800, protein:220, carbs:305, fat:78 });
+  const [planned, setPlanned]           = useState([]);
+  const [actual, setActual]             = useState([]);
 
   const t = getTheme(dark);
 
-  // Load dark preference
-  useEffect(() => {
-    const saved = localStorage.getItem("cura_dark");
-    if (saved !== null) setDark(saved === "true");
-  }, []);
-  useEffect(() => {
-    localStorage.setItem("cura_dark", dark);
-  }, [dark]);
-
-  useEffect(() => {
-    const uid   = localStorage.getItem("user_id");
-    const uname = localStorage.getItem("user_name");
-    if (uname) setUserName(uname);
-    if (uid)   setUserId(uid);
-  }, []);
-
-  useEffect(() => {
-    if (userId) load(userId, selectedDate);
-  }, [userId, selectedDate]);
+  useEffect(() => { const saved = localStorage.getItem("cura_dark"); if (saved !== null) setDark(saved === "true"); }, []);
+  useEffect(() => { localStorage.setItem("cura_dark", dark); }, [dark]);
+  useEffect(() => { const uid = localStorage.getItem("user_id"); const uname = localStorage.getItem("user_name"); if (uname) setUserName(uname); if (uid) setUserId(uid); }, []);
+  useEffect(() => { if (userId) load(userId, selectedDate); }, [userId, selectedDate]);
 
   async function load(uid, date) {
     setLoading(true);
@@ -399,10 +396,7 @@ export default function DashboardPage() {
               </h1>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap: 10 }}>
-              <span style={{ fontSize: 11, color: t.sub }}>
-                {formatDateLabel(selectedDate)}
-              </span>
-              {/* Dark toggle */}
+              <span style={{ fontSize: 11, color: t.sub }}>{formatDateLabel(selectedDate)}</span>
               <button onClick={() => setDark(!dark)}
                 style={{ width: 42, height: 24, borderRadius: 12,
                   background: dark ? "#2563eb" : "#e5e5e5", border:"none",
@@ -430,7 +424,6 @@ export default function DashboardPage() {
                 <MacroPill label="Fat"     eaten={actualTotals.fat}     goal={goal.fat}     color="#f59e0b" t={t} />
               </div>
             </div>
-            {/* Legend */}
             <div style={{ display:"flex", gap: 16, marginTop: 12, justifyContent:"center" }}>
               {[
                 { label:"Eaten",   color:"#2563eb" },
@@ -447,10 +440,10 @@ export default function DashboardPage() {
 
           {/* ── Summary Cards ── */}
           <div style={{ display:"flex", gap: 8, marginBottom: 14 }}>
-            <SummaryCard label="Goal"      value={goal.calories}                    icon="🎯" accent="#2563eb" t={t} />
-            <SummaryCard label="Eaten"     value={Math.round(actualTotals.calories)} icon="✅" accent="#10b981" t={t} />
-            <SummaryCard label="Planned"   value={Math.round(plannedTotals.calories)} icon="📋" accent="#8b5cf6" t={t} />
-            <SummaryCard label="Left"      value={Math.round(remaining.calories)}   icon="⏳" accent="#f59e0b" t={t} />
+            <SummaryCard label="Goal"    value={goal.calories}                     icon="🎯" accent="#2563eb" t={t} />
+            <SummaryCard label="Eaten"   value={Math.round(actualTotals.calories)} icon="✅" accent="#10b981" t={t} />
+            <SummaryCard label="Planned" value={Math.round(plannedTotals.calories)} icon="📋" accent="#8b5cf6" t={t} />
+            <SummaryCard label="Left"    value={Math.round(remaining.calories)}    icon="⏳" accent="#f59e0b" t={t} />
           </div>
 
           {/* ── Date Nav ── */}
