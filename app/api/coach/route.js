@@ -437,7 +437,11 @@ export async function POST(req) {
     const nothingEatenYet = todayMeals.length === 0;
     const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
 
-    const allText = [...history.map(h => h.content || ""), message || ""].join(" ");
+    // Only scan recent conversation for events (last 6 messages + current)
+    // This prevents stale events from old testing/conversations
+    const recentHistory = history.slice(-6);
+    const allText = [...recentHistory.map(h => h.content || ""), message || ""].join(" ");
+    
     // Multi-event detection
     const events = extractAllEvents(allText);
     const hasMultipleEvents = events.length > 1;

@@ -168,6 +168,13 @@ function extractMealType(text) {
   return null;
 }
 
+function inferMealTypeFromHour(hour) {
+  if (hour < 11) return "breakfast";
+  if (hour < 14) return "lunch";
+  if (hour < 17) return "snack";
+  return "dinner";
+}
+
 // ========================================
 // MEAL PARSER
 // Supports multiple Snacks (pre-game, post-game etc.)
@@ -557,6 +564,62 @@ export default function HomePage() {
       const lastAiHadMeals = anyRecentAiHadMeals;
 
       if (isLogMessage(trimmed)) {
+        // DB-FIRST ARCHITECTURE: Try USDA lookup before calling AI
+        setLoadingStage("Looking up foods in database...");
+        
+        try {
+          const lookupResponse = await fetch("/api/lookup-foods", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: trimmed }),
+          });
+          
+          const lookupData = await lookupResponse.json();
+          
+          // If ALL foods found in DB, skip AI entirely
+          if (lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
+            const uid = userId || localStorage.getItem("user_id");
+            const mealType = extractMealType(trimmed) || inferMealTypeFromHour(hour);
+            
+            // Build meal block from DB results
+            const foods = lookupData.found.map(f => `${f.food}, ${f.amount} ${f.unit}`).join("; ");
+            const totalCals = lookupData.found.reduce((sum, f) => sum + f.calories, 0);
+            const totalProtein = lookupData.found.reduce((sum, f) => sum + f.protein, 0);
+            const totalCarbs = lookupData.found.reduce((sum, f) => sum + f.carbs, 0);
+            const totalFat = lookupData.found.reduce((sum, f) => sum + f.fat, 0);
+            
+            const meal = {
+              mealType: mealType.toLowerCase(),
+              displayType: mealType.toLowerCase(),
+              food: foods,
+              calories: Math.round(totalCals),
+              protein: Math.round(totalProtein),
+              carbs: Math.round(totalCarbs),
+              fat: Math.round(totalFat),
+            };
+            
+            // Save directly
+            const saved = await saveMealViaAPI("actual_meals", meal, uid);
+            
+            if (saved) {
+              await loadTodayMeals(uid);
+              const breakdown = lookupData.found.map(f => 
+                `${f.food} — ${f.calories} cal, ${f.protein}g P, ${f.carbs}g C, ${f.fat}g F`
+              ).join(" | ");
+              
+              const confirmMsg = `Got it — ${mealType}\n\nBreakdown: ${breakdown}\n\n✅ Logged!`;
+              setHistory([...newHistory, { role: "assistant", content: confirmMsg }]);
+              setIsLoading(false);
+              setLoadingStage("");
+              return; // Skip AI call entirely
+            }
+          }
+        } catch (lookupError) {
+          console.log("DB lookup failed, falling back to AI:", lookupError);
+        }
+        
+        // If DB lookup failed or foods missing, proceed with AI
+        setLoadingStage("Asking coach...");
         newActiveMealLog = {
           type:              "food_log",
           originalMessage:   trimmed,
