@@ -581,7 +581,19 @@ export default function HomePage() {
           message: trimmed,
         };
       } else if (isConfirmation(trimmed) && lastAiHadMeals) {
-        // User confirmed a meal suggestion — don't treat as new planning request
+        // User confirmed a meal suggestion
+        const recentMeals = recentAiMsgs.flatMap(m => parseAllMeals(m.content));
+        if (recentMeals.length === 1) {
+          // Single meal — save directly, no need to go back to AI
+          const meal = { ...recentMeals[0], date: getLocalDate() };
+          await saveMealViaAPI("planned_meals", meal, uid);
+          await loadPlannedMeals(uid);
+          setHistory([...newHistory, { role: "assistant", content: "Done — added to your plan." }]);
+          setIsLoading(false);
+          setLoadingStage("");
+          return;
+        }
+        // Multi-meal plan — route to AI for confirmation handling
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isConfirmation: true };
