@@ -1169,20 +1169,29 @@ Each meal type alone on its own line — no parentheses.
 RECIPE MODE
 ══════════════════════════════════════════
 The user is asking what to make or cook with ingredients they have.
-This is NOT a meal plan request — do NOT output a meal block format.
 
 RESPONSE STRUCTURE — follow this order exactly:
 1. Dish name + 1-line description
-2. Nutrition estimate in bullet points (ALWAYS before cooking steps):
+2. Nutrition estimate in bullet points (before cooking steps):
    - Calories: ~X
    - Protein: ~Xg
    - Carbs: ~Xg
    - Fat: ~Xg
 3. Cooking instructions — numbered steps, 5-8 max, plain text
-4. End with: "Want me to add this to your meal plan?"
+4. Then output a properly formatted meal block so the user can save it with one tap:
 
-Do NOT use meal block format (no "- Foods:" / "- Calories:" structured lines).
-Do NOT end with the confirm prompt.`;
+Infer meal type from time: before 11am=Breakfast | 11-2pm=Lunch | 2-5pm=Snack | 5pm+=Dinner
+
+[MealType]
+- Foods: [ingredient 1, amount]; [ingredient 2, amount]
+- Calories: [X]
+- Protein: [X]g
+- Carbs: [X]g
+- Fat: [X]g
+Breakdown: [ingredient 1] — [cal] cal, [P]g P, [C]g C, [F]g F | [ingredient 2] — ...
+
+Do NOT end with the confirm prompt. Do NOT say "Reply yes to save".
+The meal block is what triggers the save button — that's all the user needs.`;
     }
 
     if (context?.type === "photo" && images?.length > 0) {
