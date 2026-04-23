@@ -63,5 +63,5 @@ export async function middleware(req) {
 }
 
 export const config = {
-  matcher: ["/", "/profile/:path*", "/dashboard/:path*"],
+  matcher: [],  // TEMPORARILY DISABLED - will re-enable after testing
 };
