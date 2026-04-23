@@ -1002,6 +1002,9 @@ SOCIAL EVENT at ${event.hour}:00 (${event.label}):
 ══════════════════════════════════════════
 MEAL PLANNING MODE
 ══════════════════════════════════════════
+🚨 MANDATORY: END EVERY MEAL PLAN WITH THIS EXACT LINE:
+Reply "yes" to save this plan, or let me know if you'd like to change anything.
+
 Request: "${context.request || message}"
 Local time: ${hour}:00
 Planning for: ${events.some(e => e.isTomorrow) ? "TOMORROW" : "TODAY"}
@@ -1159,7 +1162,10 @@ SNACK RULES:
 
 For weight loss confirmations → plan TOMORROW.
 Each meal type alone on its own line — no parentheses.
-📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat after all meal blocks.`;
+📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat after all meal blocks.
+
+CRITICAL — ALWAYS END MEAL PLANS WITH THIS EXACT LINE:
+Reply "yes" to save this plan, or let me know if you'd like to change anything.`;
     }
 
     if (context?.isConfirmation) {
@@ -1188,7 +1194,8 @@ The user wants to change one meal in the plan you suggested (swap an ingredient,
 CRITICAL: Output the COMPLETE updated plan with ALL meals (breakfast, lunch, dinner, snacks).
 DO NOT output only the changed meal — output the ENTIRE day's plan with the change applied.
 
-End with the confirm prompt so user can save the complete updated plan.`;
+End with this exact line:
+Reply "yes" to save this plan, or let me know if you'd like to change anything.`;
     }
 
 
