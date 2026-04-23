@@ -1,393 +1,420 @@
 "use client";
-
 import { useState, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
-import { v4 as uuidv4 } from "uuid";
-import HamburgerMenu from "../components/HamburgerMenu";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+function calcCalories(weight, weightUnit, age, gender, activityLevel, goal) {
+  const weightKg = weightUnit === "lbs" ? weight * 0.453592 : weight;
+  const heightCm = 170;
+  const bmr = gender === "female"
+    ? 10 * weightKg + 6.25 * heightCm - 5 * age - 161
+    : 10 * weightKg + 6.25 * heightCm - 5 * age + 5;
+  const multipliers = { sedentary:1.2, light:1.375, moderate:1.55, active:1.725, very_active:1.9 };
+  const tdee = Math.round(bmr * (multipliers[activityLevel] || 1.55));
+  const adjustments = { fat_loss:-400, muscle_gain:300, maintain:0, health:0, performance:200 };
+  return Math.max(1200, tdee + (adjustments[goal] || 0));
+}
+
+function calcMacros(calories, goal) {
+  const macros = {
+    fat_loss:    { protein:0.35, carbs:0.35, fat:0.30 },
+    muscle_gain: { protein:0.30, carbs:0.45, fat:0.25 },
+    maintain:    { protein:0.25, carbs:0.45, fat:0.30 },
+    health:      { protein:0.25, carbs:0.45, fat:0.30 },
+    performance: { protein:0.30, carbs:0.50, fat:0.20 },
+  };
+  const r = macros[goal] || macros.maintain;
+  return {
+    protein: Math.round((calories * r.protein) / 4),
+    carbs:   Math.round((calories * r.carbs)   / 4),
+    fat:     Math.round((calories * r.fat)      / 9),
+  };
+}
+
+function getTheme(dark) {
+  return dark ? {
+    bg:"#1c1c1e", surface:"#242424", card:"#2a2a2a", border:"#2c2c2c",
+    text:"#f0f0f0", sub:"#888888", muted:"#3a3a3a",
+  } : {
+    bg:"#f5f5f5", surface:"#ffffff", card:"#f8f8f8", border:"#ebebeb",
+    text:"#111111", sub:"#aaaaaa", muted:"#f0f0f0",
+  };
+}
 
 export default function ProfilePage() {
-  const [profile, setProfile] = useState({
-    user_id: "henrik-uuid-1111-1111-1111-111111111111",
-    name: "Henrik",
-    email: "Henrikmose@gmail.com",
-    password: "Hm070978",
-    current_weight: "210",
-    target_weight: "190",
-    weight_unit: "lbs",
-    activity_level: "moderately_active",
-  });
+  const router = useRouter();
+  const [dark, setDark]               = useState(true);
+  const [userId, setUserId]           = useState(null);
+  const [loading, setLoading]         = useState(true);
+  const [saving, setSaving]           = useState(false);
+  const [saved, setSaved]             = useState(false);
 
-  const [calculatedMacros, setCalculatedMacros] = useState({
-    goal_type: "",
-    calories: 0,
-    protein: 0,
-    carbs: 0,
-    fat: 0,
-  });
+  // Profile fields
+  const [name, setName]               = useState("");
+  const [age, setAge]                 = useState("");
+  const [gender, setGender]           = useState("male");
+  const [weight, setWeight]           = useState("");
+  const [weightUnit, setWeightUnit]   = useState("lbs");
+  const [goal, setGoal]               = useState("fat_loss");
+  const [activityLevel, setActivity]  = useState("moderate");
+  const [customCals, setCustomCals]   = useState("");
+  const [useCustom, setUseCustom]     = useState(false);
+  const [email, setEmail]             = useState("");
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+  const t = getTheme(dark);
 
-  // Load existing profile on mount
   useEffect(() => {
-    loadProfile();
+    const d = localStorage.getItem("cura_dark");
+    setDark(d !== "false");
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) { router.push("/signin"); return; }
+      const uid = session.user.id;
+      setUserId(uid);
+      setEmail(session.user.email || "");
+
+      const { data: profile } = await supabase
+        .from("user_profiles").select("*").eq("user_id", uid).single();
+      if (profile) {
+        setName(profile.name || "");
+        setAge(String(profile.age || ""));
+        setGender(profile.gender || "male");
+        setWeight(String(profile.current_weight || ""));
+        setWeightUnit(profile.weight_unit || "lbs");
+        setGoal(profile.goal_type || "fat_loss");
+        setActivity(profile.activity_level || "moderate");
+      }
+
+      const { data: goals } = await supabase
+        .from("goals").select("*").eq("user_id", uid).single();
+      if (goals) {
+        const autoCals = profile ? calcCalories(
+          parseFloat(profile.current_weight || 0),
+          profile.weight_unit || "lbs",
+          parseInt(profile.age || 30),
+          profile.gender || "male",
+          profile.activity_level || "moderate",
+          profile.goal_type || "fat_loss"
+        ) : 2000;
+        if (Math.abs(goals.calories - autoCals) > 100) {
+          setCustomCals(String(goals.calories));
+          setUseCustom(true);
+        }
+      }
+      setLoading(false);
+    });
   }, []);
 
-  // Auto-calculate macros when weight/activity changes
-  useEffect(() => {
-    if (profile.current_weight && profile.target_weight) {
-      calculateMacros();
-    }
-  }, [profile.current_weight, profile.target_weight, profile.activity_level, profile.weight_unit]);
-
-  async function loadProfile() {
-    setLoading(true);
-    
-    // Check if user_id exists in localStorage
-    let userId = localStorage.getItem("user_id");
-    
-    if (!userId) {
-      // Generate new user_id
-      userId = uuidv4();
-      localStorage.setItem("user_id", userId);
-    }
-
-    // Try to load existing profile from database
-    const { data, error } = await supabase
-      .from("user_profiles")
-      .select("*")
-      .eq("user_id", userId)
-      .single();
-
-    if (data) {
-      setProfile({
-        user_id: userId,
-        name: data.name || "",
-        email: data.email || "",
-        password: "", // Don't load password
-        current_weight: data.current_weight || "",
-        target_weight: data.target_weight || "",
-        weight_unit: data.weight_unit || "lbs",
-        activity_level: data.activity_level || "moderately_active",
-      });
-    } else {
-      // New user - set user_id
-      setProfile((prev) => ({ ...prev, user_id: userId }));
-    }
-
-    setLoading(false);
+  function handleDarkToggle() {
+    const newDark = !dark;
+    setDark(newDark);
+    localStorage.setItem("cura_dark", newDark ? "true" : "false");
   }
 
-  function calculateMacros() {
-    const current = parseFloat(profile.current_weight);
-    const target = parseFloat(profile.target_weight);
-    
-    if (!current || !target) return;
+  const calculatedCals = (weight && age && activityLevel && goal && gender)
+    ? calcCalories(parseFloat(weight), weightUnit, parseInt(age), gender, activityLevel, goal)
+    : null;
 
-    // Convert to lbs if needed for calculation
-    const currentLbs = profile.weight_unit === "kg" ? current * 2.205 : current;
-    const targetLbs = profile.weight_unit === "kg" ? target * 2.205 : target;
-
-    // Determine goal type
-    let goalType = "";
-    if (targetLbs < currentLbs) goalType = "fat_loss";
-    else if (targetLbs > currentLbs) goalType = "muscle_gain";
-    else goalType = "maintenance";
-
-    // Activity multipliers
-    const activityMultipliers = {
-      sedentary: 11,
-      lightly_active: 12,
-      moderately_active: 13,
-      very_active: 15,
-      extremely_active: 17,
-    };
-
-    const multiplier = activityMultipliers[profile.activity_level] || 13;
-
-    // Calculate calories
-    let calories = 0;
-    if (goalType === "fat_loss") {
-      calories = Math.round(currentLbs * multiplier - 500); // 500 cal deficit
-    } else if (goalType === "muscle_gain") {
-      calories = Math.round(currentLbs * multiplier + 300); // 300 cal surplus
-    } else {
-      calories = Math.round(currentLbs * multiplier); // Maintenance
-    }
-
-    // Calculate protein (1g per lb of body weight)
-    const protein = Math.round(currentLbs);
-
-    // Calculate fat (25% of calories)
-    const fatCalories = Math.round(calories * 0.25);
-    const fat = Math.round(fatCalories / 9); // 9 cal per gram of fat
-
-    // Calculate carbs (remaining calories)
-    const proteinCalories = protein * 4; // 4 cal per gram
-    const remainingCalories = calories - proteinCalories - fatCalories;
-    const carbs = Math.round(remainingCalories / 4); // 4 cal per gram of carbs
-
-    setCalculatedMacros({
-      goal_type: goalType,
-      calories,
-      protein,
-      carbs,
-      fat,
-    });
-  }
+  const finalCals = useCustom && customCals ? parseInt(customCals) : calculatedCals;
+  const macros = finalCals ? calcMacros(finalCals, goal) : null;
 
   async function handleSave() {
+    if (!userId || !finalCals) return;
     setSaving(true);
-    setMessage("");
+    localStorage.setItem("user_name", name);
+    localStorage.setItem("cura_dark", dark ? "true" : "false");
 
-    try {
-      // Save profile to user_profiles table
-      const { error: profileError } = await supabase
-        .from("user_profiles")
-        .upsert([{
-          user_id: profile.user_id,
-          name: profile.name,
-          email: profile.email,
-          current_weight: parseFloat(profile.current_weight),
-          target_weight: parseFloat(profile.target_weight),
-          weight_unit: profile.weight_unit,
-          activity_level: profile.activity_level,
-          updated_at: new Date().toISOString(),
-        }], { onConflict: "user_id" });
+    await supabase.from("user_profiles").upsert({
+      user_id: userId, name, age: parseInt(age), gender,
+      current_weight: parseFloat(weight), weight_unit: weightUnit,
+      goal_type: goal, activity_level: activityLevel,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "user_id" });
 
-      if (profileError) throw profileError;
+    await supabase.from("goals").upsert({
+      user_id: userId, calories: finalCals,
+      protein: macros.protein, carbs: macros.carbs, fat: macros.fat,
+    }, { onConflict: "user_id" });
 
-      // Save/update goals
-      const { error: goalsError } = await supabase
-        .from("goals")
-        .upsert([{
-          user_id: profile.user_id,
-          goal_type: calculatedMacros.goal_type,
-          calories: calculatedMacros.calories,
-          protein: calculatedMacros.protein,
-          carbs: calculatedMacros.carbs,
-          fat: calculatedMacros.fat,
-          updated_at: new Date().toISOString(),
-        }], { onConflict: "user_id" });
-
-      if (goalsError) throw goalsError;
-
-      setMessage("✅ Profile saved successfully!");
-      
-      // Redirect to chat after 1.5 seconds
-      setTimeout(() => {
-        window.location.href = "/";
-      }, 1500);
-
-    } catch (error) {
-      console.error("Error saving profile:", error);
-      setMessage("❌ Error saving profile. Please try again.");
-    } finally {
-      setSaving(false);
-    }
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   }
 
-  function handleInputChange(field, value) {
-    setProfile((prev) => {
-      const updated = { ...prev, [field]: value };
-      
-      // Auto-set target weight to current weight if empty
-      if (field === "current_weight" && !prev.target_weight) {
-        updated.target_weight = value;
-      }
-      
-      return updated;
-    });
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    localStorage.removeItem("user_id");
+    localStorage.removeItem("user_name");
+    router.push("/signin");
   }
 
-  if (loading) {
+  // ── Bottom Nav ──
+  function BottomNav() {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-        <div className="text-xl">Loading profile...</div>
+      <div style={{ position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)",
+        width:"100%", maxWidth:430, background: t.surface,
+        borderTop:`1px solid ${t.border}`, display:"flex",
+        paddingBottom:"env(safe-area-inset-bottom, 8px)", zIndex:100 }}>
+        {[
+          { id:"coach",     icon:"💬", label:"Coach",     path:"/"          },
+          { id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
+          { id:"profile",   icon:"⚙️", label:"Profile",   path:"/profile"   },
+        ].map(tab => (
+          <button key={tab.id} onClick={() => router.push(tab.path)}
+            style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center",
+              gap:3, padding:"10px 0 4px", border:"none",
+              background:"transparent", cursor:"pointer" }}>
+            <span style={{ fontSize:20 }}>{tab.icon}</span>
+            <span style={{ fontSize:10,
+              fontWeight: tab.id === "profile" ? 700 : 500,
+              color: tab.id === "profile" ? "#2563eb" : t.sub,
+              letterSpacing:".03em" }}>
+              {tab.label}
+            </span>
+            {tab.id === "profile" && (
+              <div style={{ width:18, height:2, background:"#2563eb", borderRadius:9999 }} />
+            )}
+          </button>
+        ))}
       </div>
     );
   }
 
+  if (loading) return (
+    <div style={{ minHeight:"100vh", background: t.bg, display:"flex",
+      alignItems:"center", justifyContent:"center" }}>
+      <p style={{ color: t.sub, fontFamily:"'DM Sans', sans-serif" }}>Loading...</p>
+    </div>
+  );
+
+  const SECTION = { marginBottom:24 };
+  const LABEL = { fontSize:12, fontWeight:600, color: t.sub,
+    textTransform:"uppercase", letterSpacing:".05em",
+    display:"block", marginBottom:8 };
+  const INPUT = {
+    width:"100%", background: dark ? "#2c2c2c" : "#f5f5f5",
+    border:`1px solid ${t.border}`, borderRadius:12,
+    padding:"13px 16px", fontSize:15, color: t.text,
+    fontFamily:"'DM Sans', sans-serif",
+  };
+
   return (
     <>
-      <HamburgerMenu />
-      
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
-        <div className="max-w-2xl mx-auto bg-white rounded-2xl shadow-xl p-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Your Profile</h1>
-          <p className="text-gray-600 mb-8">Set up your profile to get personalized nutrition coaching</p>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: ${t.bg}; font-family: 'DM Sans', sans-serif; }
+        input:focus { outline: none; border-color: #2563eb !important; }
+        select:focus { outline: none; }
+      `}</style>
 
-        {/* User ID (read-only) */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            User ID
-          </label>
-          <input
-            type="text"
-            value={profile.user_id}
-            readOnly
-            className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-500 font-mono text-sm"
-          />
+      <div style={{ background: t.bg, minHeight:"100vh", maxWidth:430,
+        margin:"0 auto", fontFamily:"'DM Sans', sans-serif", paddingBottom:100 }}>
+
+        {/* Header */}
+        <div style={{ padding:"52px 20px 20px",
+          background: t.surface, borderBottom:`1px solid ${t.border}`,
+          marginBottom:20 }}>
+          <p style={{ fontSize:11, fontWeight:700, color:"#2563eb",
+            textTransform:"uppercase", letterSpacing:".1em", marginBottom:4 }}>CURA</p>
+          <h1 style={{ fontSize:22, fontWeight:800, color: t.text, letterSpacing:"-.02em" }}>
+            {name || "Profile"}
+          </h1>
+          <p style={{ fontSize:13, color: t.sub, marginTop:4 }}>{email}</p>
         </div>
 
-        {/* Name */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Name *
-          </label>
-          <input
-            type="text"
-            value={profile.name}
-            onChange={(e) => handleInputChange("name", e.target.value)}
-            placeholder="Your name"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-          />
-        </div>
+        <div style={{ padding:"0 20px" }}>
 
-        {/* Email */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Email *
-          </label>
-          <input
-            type="email"
-            value={profile.email}
-            onChange={(e) => handleInputChange("email", e.target.value)}
-            placeholder="your@email.com"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-          />
-        </div>
-
-       
-
-        {/* Current Weight */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Current Weight *
-          </label>
-          <div className="flex gap-3">
-            <input
-              type="number"
-              value={profile.current_weight}
-              onChange={(e) => handleInputChange("current_weight", e.target.value)}
-              placeholder="175"
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              required
-            />
-            <select
-              value={profile.weight_unit}
-              onChange={(e) => handleInputChange("weight_unit", e.target.value)}
-              className="px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="lbs">lbs</option>
-              <option value="kg">kg</option>
-            </select>
-          </div>
-        </div>
-
-        {/* Target Weight */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Target Weight *
-          </label>
-          <input
-            type="number"
-            value={profile.target_weight}
-            onChange={(e) => handleInputChange("target_weight", e.target.value)}
-            placeholder="165"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-          />
-          <p className="text-sm text-gray-500 mt-1">Defaults to current weight, but you can change it</p>
-        </div>
-
-        {/* Activity Level */}
-        <div className="mb-8">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Activity Level *
-          </label>
-          <select
-            value={profile.activity_level}
-            onChange={(e) => handleInputChange("activity_level", e.target.value)}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value="sedentary">Sedentary (little/no exercise)</option>
-            <option value="lightly_active">Lightly Active (1-3 days/week)</option>
-            <option value="moderately_active">Moderately Active (3-5 days/week)</option>
-            <option value="very_active">Very Active (6-7 days/week)</option>
-            <option value="extremely_active">Extremely Active (athlete/physical job)</option>
-          </select>
-        </div>
-
-        {/* Calculated Macros Preview */}
-        {calculatedMacros.calories > 0 && (
-          <div className="mb-8 p-6 bg-blue-50 rounded-lg border border-blue-200">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Your Calculated Goals</h3>
-            
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <div className="text-sm text-gray-600">Goal Type</div>
-                <div className="text-xl font-bold text-blue-600 capitalize">
-                  {calculatedMacros.goal_type.replace("_", " ")}
+          {/* Appearance */}
+          <div style={{ ...SECTION }}>
+            <div style={{ background: t.surface, borderRadius:16,
+              border:`1px solid ${t.border}`, overflow:"hidden" }}>
+              <div style={{ display:"flex", alignItems:"center",
+                justifyContent:"space-between", padding:"16px" }}>
+                <div>
+                  <p style={{ fontSize:14, fontWeight:600, color: t.text, margin:0 }}>Dark mode</p>
+                  <p style={{ fontSize:12, color: t.sub, margin:"2px 0 0" }}>App appearance</p>
                 </div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Daily Calories</div>
-                <div className="text-xl font-bold text-blue-600">
-                  {calculatedMacros.calories} cal
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-4">
-              <div>
-                <div className="text-sm text-gray-600">Protein</div>
-                <div className="text-lg font-semibold text-gray-900">{calculatedMacros.protein}g</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Carbs</div>
-                <div className="text-lg font-semibold text-gray-900">{calculatedMacros.carbs}g</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-600">Fat</div>
-                <div className="text-lg font-semibold text-gray-900">{calculatedMacros.fat}g</div>
+                <button onClick={handleDarkToggle}
+                  style={{ width:48, height:28, borderRadius:14,
+                    background: dark ? "#2563eb" : "#ccc",
+                    border:"none", cursor:"pointer", position:"relative",
+                    transition:"background .2s" }}>
+                  <div style={{ position:"absolute", top:4,
+                    left: dark ? 24 : 4, width:20, height:20,
+                    borderRadius:"50%", background:"#fff",
+                    transition:"left .2s" }} />
+                </button>
               </div>
             </div>
           </div>
-        )}
 
-        {/* Message */}
-        {message && (
-          <div className={`mb-6 p-4 rounded-lg ${message.includes("✅") ? "bg-green-50 text-green-800" : "bg-red-50 text-red-800"}`}>
-            {message}
+          {/* Personal Info */}
+          <div style={{ ...SECTION }}>
+            <p style={{ fontSize:13, fontWeight:700, color: t.sub,
+              textTransform:"uppercase", letterSpacing:".08em", marginBottom:12 }}>
+              Personal Info
+            </p>
+            <div style={{ background: t.surface, borderRadius:16,
+              border:`1px solid ${t.border}`, padding:16, display:"flex",
+              flexDirection:"column", gap:12 }}>
+
+              <div>
+                <label style={LABEL}>Name</label>
+                <input value={name} onChange={e => setName(e.target.value)}
+                  placeholder="Your name" style={INPUT} />
+              </div>
+
+              <div style={{ display:"flex", gap:10 }}>
+                <div style={{ flex:1 }}>
+                  <label style={LABEL}>Age</label>
+                  <input type="number" value={age} onChange={e => setAge(e.target.value)}
+                    placeholder="35" style={INPUT} />
+                </div>
+                <div style={{ flex:1 }}>
+                  <label style={LABEL}>Gender</label>
+                  <select value={gender} onChange={e => setGender(e.target.value)}
+                    style={{ ...INPUT, appearance:"none" }}>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label style={LABEL}>Weight</label>
+                <div style={{ display:"flex", gap:8 }}>
+                  <input type="number" value={weight} onChange={e => setWeight(e.target.value)}
+                    placeholder={weightUnit === "lbs" ? "185" : "84"}
+                    style={{ ...INPUT, flex:1 }} />
+                  <div style={{ display:"flex", borderRadius:12,
+                    border:`1px solid ${t.border}`, overflow:"hidden" }}>
+                    {["lbs","kg"].map(u => (
+                      <button key={u} onClick={() => setWeightUnit(u)}
+                        style={{ padding:"0 16px", border:"none", cursor:"pointer",
+                          background: weightUnit === u ? "#2563eb" : t.surface,
+                          color: weightUnit === u ? "#fff" : t.sub,
+                          fontSize:13, fontWeight:600,
+                          fontFamily:"'DM Sans', sans-serif" }}>
+                        {u}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-        )}
 
-        {/* Save Button */}
-        <button
-          onClick={handleSave}
-          disabled={saving || !profile.name || !profile.email || !profile.current_weight || !profile.target_weight}
-          className="w-full bg-blue-600 text-white py-4 rounded-lg font-semibold hover:bg-blue-700 transition disabled:bg-gray-300 disabled:cursor-not-allowed"
-        >
-          {saving ? "Saving..." : "Save Profile"}
-        </button>
+          {/* Goal */}
+          <div style={{ ...SECTION }}>
+            <p style={{ fontSize:13, fontWeight:700, color: t.sub,
+              textTransform:"uppercase", letterSpacing:".08em", marginBottom:12 }}>
+              Health Goal
+            </p>
+            <div style={{ background: t.surface, borderRadius:16,
+              border:`1px solid ${t.border}`, padding:16 }}>
+              <select value={goal} onChange={e => setGoal(e.target.value)}
+                style={{ ...INPUT, appearance:"none" }}>
+                <option value="fat_loss">Lose weight</option>
+                <option value="muscle_gain">Build muscle</option>
+                <option value="maintain">Maintain weight</option>
+                <option value="health">Improve health</option>
+                <option value="performance">Athletic performance</option>
+              </select>
+            </div>
+          </div>
 
-        {/* Link to Chat */}
-        <div className="mt-6 text-center">
-          <a href="/" className="text-blue-600 hover:underline">
-            ← Back to Chat
-          </a>
+          {/* Activity */}
+          <div style={{ ...SECTION }}>
+            <p style={{ fontSize:13, fontWeight:700, color: t.sub,
+              textTransform:"uppercase", letterSpacing:".08em", marginBottom:12 }}>
+              Activity Level
+            </p>
+            <div style={{ background: t.surface, borderRadius:16,
+              border:`1px solid ${t.border}`, padding:16 }}>
+              <select value={activityLevel} onChange={e => setActivity(e.target.value)}
+                style={{ ...INPUT, appearance:"none" }}>
+                <option value="sedentary">Sedentary (desk job, little exercise)</option>
+                <option value="light">Lightly active (1-3 days/week)</option>
+                <option value="moderate">Moderately active (3-5 days/week)</option>
+                <option value="active">Very active (6-7 days/week)</option>
+                <option value="very_active">Athlete (multiple sessions daily)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Calorie Target */}
+          {finalCals && macros && (
+            <div style={{ ...SECTION }}>
+              <p style={{ fontSize:13, fontWeight:700, color: t.sub,
+                textTransform:"uppercase", letterSpacing:".08em", marginBottom:12 }}>
+                Daily Targets
+              </p>
+              <div style={{ background: t.surface, borderRadius:16,
+                border:`1px solid ${t.border}`, padding:16 }}>
+                <div style={{ display:"flex", justifyContent:"space-between",
+                  alignItems:"center", marginBottom:14 }}>
+                  <span style={{ fontSize:13, color: t.sub }}>Calories</span>
+                  <span style={{ fontSize:20, fontWeight:800, color:"#2563eb" }}>
+                    {finalCals.toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+                  {[
+                    { label:"Protein", val:`${macros.protein}g`, color:"#3b82f6" },
+                    { label:"Carbs",   val:`${macros.carbs}g`,   color:"#10b981" },
+                    { label:"Fat",     val:`${macros.fat}g`,      color:"#f59e0b" },
+                  ].map(m => (
+                    <div key={m.label} style={{ flex:1, background: dark ? "#3a3a3a" : "#f0f0f0",
+                      borderRadius:10, padding:"10px 8px", textAlign:"center" }}>
+                      <p style={{ fontSize:15, fontWeight:700, color: m.color, margin:0 }}>
+                        {m.val}
+                      </p>
+                      <p style={{ fontSize:10, color: t.sub, margin:"2px 0 0",
+                        textTransform:"uppercase" }}>{m.label}</p>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setUseCustom(!useCustom)}
+                  style={{ fontSize:12, color:"#2563eb", background:"none",
+                    border:"none", cursor:"pointer", padding:0,
+                    fontFamily:"'DM Sans', sans-serif" }}>
+                  {useCustom ? "Use auto-calculated target" : "Set custom calorie target"}
+                </button>
+                {useCustom && (
+                  <input type="number" value={customCals}
+                    onChange={e => setCustomCals(e.target.value)}
+                    placeholder={String(calculatedCals || 2000)}
+                    style={{ ...INPUT, marginTop:10 }} />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Save button */}
+          <button onClick={handleSave} disabled={saving}
+            style={{ width:"100%", padding:"16px", borderRadius:14, border:"none",
+              background: saved ? "#10b981" : "linear-gradient(135deg,#2563eb,#1d4ed8)",
+              color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer",
+              marginBottom:12, boxShadow:"0 4px 16px #2563eb33",
+              fontFamily:"'DM Sans', sans-serif",
+              transition:"background .3s" }}>
+            {saving ? "Saving..." : saved ? "✅ Saved!" : "Save Changes"}
+          </button>
+
+          {/* Sign out */}
+          <button onClick={handleSignOut}
+            style={{ width:"100%", padding:"14px", borderRadius:14,
+              border:`1px solid ${t.border}`, background: t.surface,
+              color: t.sub, fontSize:14, fontWeight:600, cursor:"pointer",
+              fontFamily:"'DM Sans', sans-serif" }}>
+            Sign Out
+          </button>
         </div>
+
+        <BottomNav />
       </div>
-    </div>
     </>
   );
 }
