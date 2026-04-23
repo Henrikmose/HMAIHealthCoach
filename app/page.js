@@ -524,7 +524,7 @@ export default function HomePage() {
       content: trimmed || (pendingImages.length > 0 ? `📷 ${pendingImages.length > 1 ? pendingImages.length + " photos" : "Photo"}` : ""),
       imagePreviews: pendingImages.map(img => img.preview),
     };
-    const newHistory = [...history, userMsg];
+    let newHistory = [...history, userMsg];
     setHistory(newHistory);
 
     const imagesToSend = [...pendingImages];
