@@ -35,7 +35,7 @@ export default function SignInPage() {
     localStorage.setItem("user_id", uid);
     // Load profile name
     const { data: profile } = await supabase
-      .from("user_profiles").select("name").eq("user_id", uid).single();
+      .from("user_profiles").select("name").eq("user_id", uid).maybeSingle();
     if (profile?.name) localStorage.setItem("user_name", profile.name);
     router.push("/");
   }
