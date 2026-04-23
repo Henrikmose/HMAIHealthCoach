@@ -763,12 +763,13 @@ WRONG: "Have this at 9:00pm post-game"
 RIGHT: "Have this right after your workout"
 RIGHT: "Have this right after your game — within 1 hour of finishing"
 
-TOTAL FORMAT — plain text only:
-📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
-👉 [one coaching note]
+MEAL PLAN FORMAT — EXACT ORDER:
+1. Meal blocks (with all macros)
+2. 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
+3. 👉 [one coaching tip about the meal plan]
+4. MANDATORY ENDING: Reply "yes" to save this plan, or let me know if you'd like to change anything.
 
-MEAL PLANS ONLY — END WITH THIS EXACT LINE:
-Reply "yes" to save this plan, or let me know if you'd like to change anything.
+CRITICAL: Step 4 (confirm prompt) MUST be the last line. Do not end with the coaching tip.
 
 CUISINE / RESTAURANT AMBIGUITY RULE:
 If the user mentions a cuisine or food type (sushi, Italian, Mexican, etc.) without clearly stating whether they are going OUT or want it planned:
