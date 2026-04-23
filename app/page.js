@@ -1,5 +1,4 @@
 "use client";
-
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "../lib/supabaseClient";
 import HamburgerMenu from "./components/HamburgerMenu";
@@ -7,7 +6,6 @@ import HamburgerMenu from "./components/HamburgerMenu";
 // ========================================
 // DATE UTILITIES
 // ========================================
-
 function getLocalDate() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -20,7 +18,6 @@ function addDays(dateStr, days) {
 }
 
 function extractTargetDate(text, surroundingTexts) {
-  // Check all provided texts for tomorrow/yesterday
   const allTexts = [text, ...(surroundingTexts || [])].join(" ").toLowerCase();
   if (allTexts.includes("tomorrow")) return addDays(getLocalDate(), 1);
   if (allTexts.includes("yesterday")) return addDays(getLocalDate(), -1);
@@ -30,7 +27,6 @@ function extractTargetDate(text, surroundingTexts) {
 // ========================================
 // INTENT DETECTION
 // ========================================
-
 function isLogMessage(text) {
   if (!text) return false;
   return [
@@ -62,7 +58,7 @@ function isMealPlanningRequest(text) {
     /what.*eat.*tonight/i,
     /ideal\s+meal/i,
     /give.*meal/i,
-    /yes\s+please/i,    /yes.*plan/i,
+    /yes\s+please/i, /yes.*plan/i,
     /sure.*plan/i,
     /create.*plan/i,
     /make.*plan/i,
@@ -87,7 +83,6 @@ function isMealPlanningRequest(text) {
     /race\s+day.*eat/i,
     /how.*eat.*race/i,
     /how.*eat.*game/i,
-    // Broader dinner/meal suggestion patterns
     /help.*deciding.*dinner/i,
     /help.*deciding.*lunch/i,
     /help.*deciding.*breakfast/i,
@@ -114,17 +109,17 @@ function isMealPlanningRequest(text) {
 
 function isConfirmation(text) {
   if (!text) return false;
-  return /\b(yes|yeah|yep|yup|yew|yea|ya|ye|sure|perfect|great|sounds good|i like that|let'?s do|that one|i'?ll have|add it|can we do that|looks good|works for me|do that one|i want that|i'?ll take|love it|that works|go with that|do it|let'?s go with|as planned|as actual|for later|plan it|log it|save it|add (it |this )?(to my )?(plan|log)|confirm|correct|right|exactly|absolutely|i'?ll go|i will go|go over|i'?ll take that|i choose|going with|i'?ll have that|that one|the (protein|shake|fitzels|first|second|last|other) one)\b/i.test(text);
+  return /\b(yes|yeah|yep|yup|yew|yea|ya|ye|sure|perfect|great|sounds good|i like that|let'?s do that|as planned|log it|save it|add it|confirm|correct|absolutely|that works|go with that)\b/i.test(text);
 }
 
 function isMealSwap(text) {
   if (!text) return false;
-  return /i ran out|don'?t have|out of|no more|something else|another option|another suggestion|swap|give me another|can'?t make|different option|instead of|instead|no (salmon|chicken|beef|fish|meat|that)/i.test(text);
+  return /i ran out|don'?t have|out of|no more|something else|another option|another suggestion|swap|replace|change it|different meal|alternative/i.test(text);
 }
 
 function isFutureMeal(text) {
   if (!text) return false;
-  return /\b(i'?ll have|i will have|i'?m (going to|gonna) have|i'?m planning (to have|on having)|planning to eat|going to eat|will eat|i'?ll eat|having .* (tonight|later|for dinner|for lunch|for breakfast|after|tomorrow))\b/i.test(text);
+  return /\b(i'?ll have|i will have|i'?m (going to|gonna) have|i'?m planning (to have|on having)|planning to eat|going to eat|gonna eat|will eat)\b/i.test(text);
 }
 
 function detectPhotoIntent(text) {
@@ -165,13 +160,9 @@ function extractMealType(text) {
 
 // ========================================
 // MEAL PARSER
-// Supports multiple Snacks (pre-game, post-game etc.)
-// Only one Breakfast, Lunch, or Dinner per plan.
 // ========================================
-
 function parseAllMeals(text) {
   if (!text) return [];
-
   const meals = [];
   const mealTypes = ["breakfast", "lunch", "dinner", "snack"];
   const mealCounts = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
@@ -181,8 +172,8 @@ function parseAllMeals(text) {
   while (i < lines.length) {
     const line = lines[i];
     const lineLower = line.toLowerCase().trim();
-
     let matchedType = null;
+
     for (const type of mealTypes) {
       const startsWithType =
         lineLower === type ||
@@ -192,7 +183,6 @@ function parseAllMeals(text) {
         !lineLower.includes("total") &&
         !lineLower.includes("calories:") &&
         !line.startsWith("-");
-
       if (startsWithType && isNotDataLine) {
         matchedType = type;
         break;
@@ -206,7 +196,6 @@ function parseAllMeals(text) {
       while (j < lines.length && j < i + 15) {
         const fl = lines[j];
         const fll = fl.toLowerCase().trim();
-
         const isNextMeal = mealTypes.some(
           (t) => fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "(")
         );
@@ -215,15 +204,13 @@ function parseAllMeals(text) {
           fll.includes("📊") ||
           fll.startsWith("this plan") ||
           fll.startsWith("---");
-
         if (isNextMeal || isTotal) break;
 
-        if      (fll.startsWith("- foods:"))    foods    = fl.replace(/^-\s*foods:\s*/i, "").trim();
+        if (fll.startsWith("- foods:")) foods = fl.replace(/^-\s*foods:\s*/i, "").trim();
         else if (fll.startsWith("- calories:")) { const m = fl.match(/[\d.]+/); if (m) calories = parseFloat(m[0]); }
-        else if (fll.startsWith("- protein:"))  { const m = fl.match(/[\d.]+/); if (m) protein  = parseFloat(m[0]); }
-        else if (fll.startsWith("- carbs:"))    { const m = fl.match(/[\d.]+/); if (m) carbs    = parseFloat(m[0]); }
-        else if (fll.startsWith("- fat:"))      { const m = fl.match(/[\d.]+/); if (m) fat      = parseFloat(m[0]); }
-
+        else if (fll.startsWith("- protein:")) { const m = fl.match(/[\d.]+/); if (m) protein = parseFloat(m[0]); }
+        else if (fll.startsWith("- carbs:")) { const m = fl.match(/[\d.]+/); if (m) carbs = parseFloat(m[0]); }
+        else if (fll.startsWith("- fat:")) { const m = fl.match(/[\d.]+/); if (m) fat = parseFloat(m[0]); }
         j++;
       }
 
@@ -231,11 +218,9 @@ function parseAllMeals(text) {
         mealCounts[matchedType]++;
         const count = mealCounts[matchedType];
 
-        // Deduplicate — only one Breakfast, Lunch, Dinner allowed per plan
-        // Snacks can repeat freely
         if (matchedType !== "snack" && count > 1) {
           i = j;
-          continue; // skip duplicate non-snack blocks
+          continue;
         }
 
         const displayType =
@@ -244,16 +229,15 @@ function parseAllMeals(text) {
             : matchedType;
 
         meals.push({
-          mealType:    matchedType,
+          mealType: matchedType,
           displayType,
-          food:        foods,
-          calories:    Math.round(calories),
-          protein:     Math.round(protein || 0),
-          carbs:       Math.round(carbs   || 0),
-          fat:         Math.round(fat     || 0),
+          food: foods,
+          calories: Math.round(calories),
+          protein: Math.round(protein || 0),
+          carbs: Math.round(carbs || 0),
+          fat: Math.round(fat || 0),
         });
       }
-
       i = j;
     } else {
       i++;
@@ -262,7 +246,7 @@ function parseAllMeals(text) {
 
   // Inline fallback
   if (meals.length === 0) {
-    const re = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories?:\s*(\d+)\s*[-–]\s*protein?:\s*(\d+)\s*[-–]\s*carbs?:\s*(\d+)\s*[-–]\s*fat?:\s*(\d+)/gi;
+    const re = /(breakfast|lunch|dinner|snack)\s*[-–]\s*foods?:\s*([^-\n]+?)\s*[-–]\s*calories:\s*([\d.]+)\s*[-–]\s*protein:\s*([\d.]+)g?\s*[-–]\s*carbs:\s*([\d.]+)g?\s*[-–]\s*fat:\s*([\d.]+)g?/gi;
     const inlineCounts = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
     let m;
     while ((m = re.exec(text)) !== null) {
@@ -272,15 +256,14 @@ function parseAllMeals(text) {
         type === "snack" && inlineCounts[type] > 1
           ? `snack_${inlineCounts[type]}`
           : type;
-
       meals.push({
-        mealType:    type,
+        mealType: type,
         displayType,
-        food:        m[2].trim(),
-        calories:    Math.round(parseFloat(m[3])),
-        protein:     Math.round(parseFloat(m[4])),
-        carbs:       Math.round(parseFloat(m[5])),
-        fat:         Math.round(parseFloat(m[6])),
+        food: m[2].trim(),
+        calories: Math.round(parseFloat(m[3])),
+        protein: Math.round(parseFloat(m[4])),
+        carbs: Math.round(parseFloat(m[5])),
+        fat: Math.round(parseFloat(m[6])),
       });
     }
   }
@@ -291,7 +274,6 @@ function parseAllMeals(text) {
 // ========================================
 // MEAL KEY AND LABEL HELPERS
 // ========================================
-
 function getMealKey(msgIdx, meal) {
   const foodKey = meal.food.substring(0, 20).replace(/\s/g, "_");
   return `${msgIdx}-${meal.displayType}-${meal.calories}-${foodKey}`;
@@ -300,11 +282,11 @@ function getMealKey(msgIdx, meal) {
 function getMealLabel(displayType) {
   const labels = {
     breakfast: "Breakfast",
-    lunch:     "Lunch",
-    dinner:    "Dinner",
-    snack:     "Snack",
-    snack_2:   "Snack 2",
-    snack_3:   "Snack 3",
+    lunch: "Lunch",
+    dinner: "Dinner",
+    snack: "Snack",
+    snack_2: "Snack 2",
+    snack_3: "Snack 3",
   };
   return labels[displayType] || displayType.charAt(0).toUpperCase() + displayType.slice(1);
 }
@@ -312,7 +294,6 @@ function getMealLabel(displayType) {
 // ========================================
 // API SAVE (server-side route bypasses RLS)
 // ========================================
-
 async function saveMealViaAPI(table, meal, userId) {
   try {
     const res = await fetch("/api/save-meals", {
@@ -333,48 +314,21 @@ async function saveMealViaAPI(table, meal, userId) {
 }
 
 // ========================================
-// MACRO PROGRESS BAR COMPONENT
-// ========================================
-
-function MacroBar({ label, value, goal, color }) {
-  const pct = goal > 0 ? Math.min(100, Math.round((value / goal) * 100)) : 0;
-  return (
-    <div className="flex-1">
-      <div className="flex justify-between mb-1">
-        <span className="text-xs text-gray-500 font-medium">{label}</span>
-        <span className="text-xs font-bold text-gray-700">
-          {Math.round(value)}
-          <span className="text-gray-400 font-normal">/{goal}g</span>
-        </span>
-      </div>
-      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div
-          className="h-2 rounded-full transition-all duration-500"
-          style={{ width: `${pct}%`, backgroundColor: color }}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ========================================
 // MAIN PAGE COMPONENT
 // ========================================
-
 export default function HomePage() {
-  const [message, setMessage]             = useState("");
-  const [history, setHistory]             = useState([]);
-  const [isLoading, setIsLoading]         = useState(false);
+  const [message, setMessage] = useState("");
+  const [history, setHistory] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [activeMealLog, setActiveMealLog] = useState(null);
-  const [todayMeals, setTodayMeals]       = useState([]);
-  const [plannedMeals, setPlannedMeals]   = useState([]);
-  const [userId, setUserId]               = useState(null);
-  const [userName, setUserName]           = useState("");
-  const [goals, setGoals]                 = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
-  const [pendingImages, setPendingImages]  = useState([]); // max 4: [{ base64, mimeType, preview }]
+  const [todayMeals, setTodayMeals] = useState([]);
+  const [plannedMeals, setPlannedMeals] = useState([]);
+  const [userId, setUserId] = useState(null);
+  const [userName, setUserName] = useState("");
+  const [goals, setGoals] = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
+  const [pendingImages, setPendingImages] = useState([]);
   const [showPhotoMenu, setShowPhotoMenu] = useState(false);
-  const [loadingStage, setLoadingStage]   = useState("");
-
+  const [loadingStage, setLoadingStage] = useState("");
   const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
     if (typeof window !== "undefined") {
       const storedDate = localStorage.getItem("savedPlanKeysDate");
@@ -385,13 +339,11 @@ export default function HomePage() {
     }
     return [];
   });
-
-  // Track which AI message indices have had ALL their meals saved — close them permanently
   const [closedPlanIndices, setClosedPlanIndices] = useState(new Set());
 
-  const messagesEndRef  = useRef(null);
-  const textareaRef     = useRef(null);
-  const cameraInputRef  = useRef(null);
+  const messagesEndRef = useRef(null);
+  const textareaRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const libraryInputRef = useRef(null);
 
   useEffect(() => {
@@ -402,10 +354,10 @@ export default function HomePage() {
   }, [savedPlanKeys]);
 
   useEffect(() => {
-    const uid   = localStorage.getItem("user_id");
+    const uid = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
     if (uname) setUserName(uname);
-    if (uid)   setUserId(uid);
+    if (uid) setUserId(uid);
   }, []);
 
   useEffect(() => {
@@ -436,9 +388,9 @@ export default function HomePage() {
       if (data) {
         setGoals({
           calories: data.calories,
-          protein:  data.protein,
-          carbs:    data.carbs,
-          fat:      data.fat,
+          protein: data.protein,
+          carbs: data.carbs,
+          fat: data.fat,
         });
       }
     } catch (e) {
@@ -472,17 +424,15 @@ export default function HomePage() {
 
   async function loadTodayMessages(uid) {
     try {
-      // Load last 20 messages — no date filter to avoid timezone issues
       const { data } = await supabase
         .from("ai_messages").select("*")
         .eq("user_id", uid)
         .order("created_at", { ascending: false })
         .limit(20);
-
       if (data && data.length > 0) {
         const rebuilt = [];
         for (const row of data.reverse()) {
-          if (row.message)  rebuilt.push({ role: "user",      content: row.message });
+          if (row.message) rebuilt.push({ role: "user", content: row.message });
           if (row.response) rebuilt.push({ role: "assistant", content: row.response });
         }
         setHistory(rebuilt);
@@ -495,9 +445,9 @@ export default function HomePage() {
   const totals = todayMeals.reduce(
     (t, m) => ({
       calories: t.calories + Number(m.calories || 0),
-      protein:  t.protein  + Number(m.protein  || 0),
-      carbs:    t.carbs    + Number(m.carbs    || 0),
-      fat:      t.fat      + Number(m.fat      || 0),
+      protein: t.protein + Number(m.protein || 0),
+      carbs: t.carbs + Number(m.carbs || 0),
+      fat: t.fat + Number(m.fat || 0),
     }),
     { calories: 0, protein: 0, carbs: 0, fat: 0 }
   );
@@ -509,14 +459,13 @@ export default function HomePage() {
   async function handleSend() {
     const trimmed = message.trim();
     if ((!trimmed && pendingImages.length === 0) || isLoading) return;
-
     const uid = userId || localStorage.getItem("user_id");
     setMessage("");
     setIsLoading(true);
 
     const userMsg = {
       role: "user",
-      content: trimmed || (pendingImages.length > 0 ? `📷 ${pendingImages.length > 1 ? pendingImages.length + " photos" : "Photo"}` : ""),
+      content: trimmed || (pendingImages.length > 0 ? `📷 ${pendingImages.length > 1 ? pendingImages.length + " photos" : "photo"}` : ""),
       imagePreviews: pendingImages.map(img => img.preview),
     };
     const newHistory = [...history, userMsg];
@@ -525,7 +474,6 @@ export default function HomePage() {
     const imagesToSend = [...pendingImages];
     setPendingImages([]);
 
-    // Set loading stage based on what's being sent
     if (imagesToSend.length > 1) {
       setLoadingStage("Comparing labels...");
     } else if (imagesToSend.length === 1) {
@@ -534,7 +482,6 @@ export default function HomePage() {
       setLoadingStage("Thinking...");
     }
 
-    // Progressive messages for photo calls
     let stageTimer;
     if (imagesToSend.length > 0) {
       stageTimer = setTimeout(() => setLoadingStage("Reading nutrition values..."), 2500);
@@ -545,23 +492,20 @@ export default function HomePage() {
       let context = {};
       let newActiveMealLog = activeMealLog;
 
-      // Check if user is confirming a previously suggested meal — MUST check before planning detection
-      // Look at last 4 AI messages in case the most recent was a text-only response
       const recentAiMsgs = [...history].reverse().filter(m => m.role === "assistant").slice(0, 4);
       const anyRecentAiHadMeals = recentAiMsgs.some(m => parseAllMeals(m.content).length > 0);
       const lastAiHadMeals = anyRecentAiHadMeals;
 
       if (isLogMessage(trimmed)) {
         newActiveMealLog = {
-          type:              "food_log",
-          originalMessage:   trimmed,
-          mealType:          extractMealType(trimmed),
+          type: "food_log",
+          originalMessage: trimmed,
+          mealType: extractMealType(trimmed),
           conversationStage: "initial",
         };
         setActiveMealLog(newActiveMealLog);
         context = newActiveMealLog;
       } else if (isFutureMeal(trimmed) && !isMealPlanningRequest(trimmed)) {
-        // Future tense food statement → treat as planned meal
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isFutureMeal: true };
@@ -576,7 +520,6 @@ export default function HomePage() {
           message: trimmed,
         };
       } else if (isConfirmation(trimmed) && lastAiHadMeals) {
-        // User confirmed a meal suggestion — don't treat as new planning request
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isConfirmation: true };
@@ -585,14 +528,13 @@ export default function HomePage() {
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed };
       } else if (isMealSwap(trimmed) && history.some(m => m.role === "assistant" && parseAllMeals(m.content).length > 0)) {
-        // User is swapping a previously suggested meal — treat as planning continuation
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isSwap: true };
       } else if (activeMealLog) {
         newActiveMealLog = {
           ...activeMealLog,
-          followUpMessage:   trimmed,
+          followUpMessage: trimmed,
           conversationStage: "followup",
         };
         setActiveMealLog(newActiveMealLog);
@@ -603,17 +545,17 @@ export default function HomePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message:   trimmed,
+          message: trimmed,
           context,
-          history:   newHistory.slice(-8).map((m) => ({ role: m.role, content: m.content })),
-          userId:    uid,
+          history: newHistory.slice(-8).map((m) => ({ role: m.role, content: m.content })),
+          userId: uid,
           localHour: new Date().getHours(),
           localDate: getLocalDate(),
-          images:    imagesToSend.length > 0 ? imagesToSend.map(img => ({ base64: img.base64, mimeType: img.mimeType })) : null,
+          images: imagesToSend.length > 0 ? imagesToSend.map(img => ({ base64: img.base64, mimeType: img.mimeType })) : undefined,
         }),
       });
 
-      const data  = await res.json();
+      const data = await res.json();
       const reply = data.reply || "Sorry, could not get a response.";
       setHistory([...newHistory, { role: "assistant", content: reply }]);
 
@@ -632,17 +574,15 @@ export default function HomePage() {
         }
       }
 
-      // Auto-save photo logs when intent is "eaten" or meal type was specified
+      // Auto-save photo logs when intent is "eaten"
       if (context?.type === "photo" && imagesToSend.length > 0) {
         const photoIntent = context.photoIntent;
         const msgLower = (trimmed || "").toLowerCase();
         const isEaten = photoIntent === "eaten" ||
-          /\b(had|ate|drank|consumed|finished|as a snack|as a lunch|as a breakfast|as a dinner|for snack|for lunch|for breakfast|for dinner)\b/i.test(msgLower);
-
+          /\b(had|ate|drank|consumed|finished|as a snack|as a lunch|as a breakfast|as a dinner)\b/.test(msgLower);
         if (isEaten) {
           const parsed = parseAllMeals(reply);
           if (parsed.length > 0) {
-            // Infer meal type from time if not in meal block
             const hour = new Date().getHours();
             const inferredType = hour < 11 ? "breakfast" : hour < 14 ? "lunch" : hour < 17 ? "snack" : "dinner";
             const meal = {
@@ -667,6 +607,7 @@ export default function HomePage() {
     } finally {
       setIsLoading(false);
       setLoadingStage("");
+      if (stageTimer) clearTimeout(stageTimer);
     }
   }
 
@@ -675,7 +616,6 @@ export default function HomePage() {
     if (savedPlanKeys.includes(key)) return;
     const uid = userId || localStorage.getItem("user_id");
 
-    // Only replace for Breakfast/Lunch/Dinner — Snacks can stack
     if (meal.mealType !== "snack") {
       const { data: existing } = await supabase
         .from("planned_meals")
@@ -683,7 +623,6 @@ export default function HomePage() {
         .eq("user_id", uid)
         .eq("meal_type", meal.mealType)
         .eq("date", targetDate);
-
       if (existing && existing.length > 0) {
         for (const e of existing) {
           await supabase.from("planned_meals").delete().eq("id", e.id);
@@ -695,7 +634,6 @@ export default function HomePage() {
     if (saved) {
       const newKeys = [...savedPlanKeys, key];
       setSavedPlanKeys(newKeys);
-      // Close this plan index — no more looking back at it
       setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
       await loadPlannedMeals(uid);
     } else {
@@ -715,7 +653,6 @@ export default function HomePage() {
     }
     if (newKeys.length > 0) {
       setSavedPlanKeys(prev => [...prev, ...newKeys]);
-      // Close this plan index entirely — conversation is done
       setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
       await loadPlannedMeals(uid);
     }
@@ -733,7 +670,6 @@ export default function HomePage() {
     if (!file) return;
     setShowPhotoMenu(false);
 
-    // Compress image using canvas before sending — prevents Vercel 4.5MB limit
     const compressImage = (file) => new Promise((resolve) => {
       const img = new Image();
       const url = URL.createObjectURL(file);
@@ -767,37 +703,33 @@ export default function HomePage() {
     setPendingImages(prev => prev.filter((_, i) => i !== idx));
   }
 
-  function clearImages() {
-    setPendingImages([]);
-  }
-
   // ── CURA Theme ──────────────────────────────────────────────────
   const dark = typeof window !== "undefined"
     ? localStorage.getItem("cura_dark") !== "false"
     : true;
 
   const T = dark ? {
-    bg:      "#1c1c1e",
+    bg: "#1c1c1e",
     surface: "#242424",
-    border:  "#2c2c2c",
-    text:    "#f0f0f0",
-    sub:     "#888888",
-    muted:   "#3a3a3a",
-    input:   "#2c2c2c",
+    border: "#2c2c2c",
+    text: "#f0f0f0",
+    sub: "#888888",
+    muted: "#3a3a3a",
+    input: "#2c2c2c",
     userBubble: "#2563eb",
-    aiBubble:   "#242424",
-    aiBorder:   "#2c2c2c",
+    aiBubble: "#242424",
+    aiBorder: "#2c2c2c",
   } : {
-    bg:      "#f5f5f5",
+    bg: "#f5f5f5",
     surface: "#ffffff",
-    border:  "#ebebeb",
-    text:    "#111111",
-    sub:     "#aaaaaa",
-    muted:   "#f0f0f0",
-    input:   "#f5f5f5",
+    border: "#ebebeb",
+    text: "#111111",
+    sub: "#aaaaaa",
+    muted: "#f0f0f0",
+    input: "#f5f5f5",
     userBubble: "#2563eb",
-    aiBubble:   "#ffffff",
-    aiBorder:   "#ebebeb",
+    aiBubble: "#ffffff",
+    aiBorder: "#ebebeb",
   };
 
   return (
@@ -841,6 +773,7 @@ export default function HomePage() {
               </p>
             </div>
           </div>
+
           {todayMeals.length > 0 && (
             <div style={{ display:"flex", gap:8, marginTop:12 }}>
               {[
@@ -851,7 +784,7 @@ export default function HomePage() {
                 const pct = Math.min(100, Math.round((m.value/m.goal)*100));
                 return (
                   <div key={m.label} style={{ flex:1 }}>
-                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
                       <span style={{ fontSize:10, fontWeight:600, color: T.sub,
                         textTransform:"uppercase", letterSpacing:".05em" }}>{m.label}</span>
                       <span style={{ fontSize:10, fontWeight:700, color: T.text }}>
@@ -881,7 +814,7 @@ export default function HomePage() {
                 fontSize:28, marginBottom:16, boxShadow:"0 8px 24px #2563eb44" }}>
                 💬
               </div>
-              <p style={{ fontWeight:800, color: T.text, fontSize:18, margin:"0 0 8px" }}>CURA</p>
+              <p style={{ fontWeight:800, color: T.text, fontSize:18, margin:"0 0 8px" }}>CURA Coach</p>
               <p style={{ fontSize:13, color: T.sub, lineHeight:1.5, maxWidth:260, margin:0 }}>
                 Tell me what you ate, ask for a meal plan, or get nutrition advice.
               </p>
@@ -896,8 +829,7 @@ export default function HomePage() {
                   <button key={s} onClick={() => setMessage(s)}
                     style={{ textAlign:"left", fontSize:13, padding:"12px 14px",
                       borderRadius:14, border:`1px solid ${T.border}`,
-                      background: T.surface, color: T.sub, cursor:"pointer",
-                      transition:"all .2s" }}>
+                      background: T.surface, color: T.sub, cursor:"pointer" }}>
                     {s}
                   </button>
                 ))}
@@ -908,12 +840,10 @@ export default function HomePage() {
           {history.map((msg, idx) => {
             const isUser = msg.role === "user";
 
-            // Find meals — only look back 3 messages, skip any closed plan indices
             const findRecentMeals = (beforeIdx) => {
               const limit = Math.max(0, beforeIdx - 3);
               for (let i = beforeIdx - 1; i >= limit; i--) {
                 if (history[i].role === "assistant") {
-                  // Skip if this plan has already been saved — it's closed
                   if (closedPlanIndices.has(i)) continue;
                   const m = parseAllMeals(history[i].content);
                   if (m.length > 0) return { meals: m, sourceIdx: i };
@@ -922,12 +852,14 @@ export default function HomePage() {
               return { meals: [], sourceIdx: -1 };
             };
 
-            const prevUserMsg = !isUser && history[idx - 1]?.role === "user" ? history[idx - 1].content : null;
+            const prevUserMsg = !isUser && history[idx - 1]?.role === "user" ? history[idx - 1].content : "";
             const thisIsPostConfirmAI = !isUser && prevUserMsg && isConfirmation(prevUserMsg);
 
-            // Photo selection — only for specific winner phrases, not general messages
+            // ── BUG 2 FIX: Photo winner pick — check current message for meal block ──
             const isPhotoSelection = !isUser && prevUserMsg && (
-              /\b(whole bag|full bag|all of it|i'?ll go (with|over)|i will go (with|over)|i'?ll take that|i choose|going with)\b/i.test(prevUserMsg)
+              /\b(whole bag|full bag|all of it|i'?ll go (with|over)|i will go (with|over)|i'?m going with|log the winner|log it|add it|save it|yes|sure|log (label|option) [12])\b/i.test(prevUserMsg)
+              || (isConfirmation(prevUserMsg) && history.slice(Math.max(0, idx-4), idx)
+                .some(m => m.role === "assistant" && /want me to log|add it to your plan|log the winner/i.test(m.content || "")))
             );
 
             const { meals: confirmMeals, sourceIdx } = (thisIsPostConfirmAI || isPhotoSelection)
@@ -935,14 +867,18 @@ export default function HomePage() {
 
             const thisMeals = !isUser ? parseAllMeals(msg.content) : [];
 
-            // Only show buttons for multi-meal plans (2+ meals) or explicit photo winner
-            // Never show buttons for single food logs — those auto-save
+            // BUG 2 FIX: If this AI message itself has a meal block after a photo confirm, use it
+            const isPhotoWinnerHere = isPhotoSelection && thisMeals.length > 0 && confirmMeals.length === 0;
+
             const buttonMeals = (thisIsPostConfirmAI && confirmMeals.length >= 2)
               ? confirmMeals
               : (isPhotoSelection && confirmMeals.length > 0)
               ? confirmMeals
+              : isPhotoWinnerHere
+              ? thisMeals
               : [];
-            const buttonSourceIdx = sourceIdx >= 0 ? sourceIdx : idx;
+
+            const buttonSourceIdx = isPhotoWinnerHere ? idx : (sourceIdx >= 0 ? sourceIdx : idx);
 
             const triggerText = !isUser && history[idx - 1]?.role === "user"
               ? history[idx - 1].content : "";
@@ -1017,7 +953,7 @@ export default function HomePage() {
                             onClick={() => handleAddToPlan(meal, buttonSourceIdx, targetDate)}
                             disabled={isSaved}
                             style={{ fontSize:12, padding:"9px 16px", borderRadius:12, fontWeight:600,
-                              border: isSaved ? "none" : `1px solid ${hasExisting ? "#f59e0b" : "#2563eb"}`,
+                              border: isSaved ? "none" : `1px solid ${hasExisting ? "#f59e0b44" : "#2563eb44"}`,
                               background: isSaved ? "#10b98122" : hasExisting ? "#f59e0b22" : "#2563eb22",
                               color: isSaved ? "#10b981" : hasExisting ? "#f59e0b" : "#2563eb",
                               cursor: isSaved ? "default" : "pointer" }}>
@@ -1044,13 +980,11 @@ export default function HomePage() {
               <div style={{ background: T.aiBubble, border:`1px solid ${T.aiBorder}`,
                 borderRadius:"18px 18px 18px 4px", padding:"12px 16px",
                 display:"flex", flexDirection:"column", gap:8 }}>
-                {/* Progressive status text */}
                 {loadingStage && (
                   <p style={{ fontSize:12, color: T.sub, margin:0, fontWeight:500 }}>
                     {loadingStage}
                   </p>
                 )}
-                {/* Bouncing dots */}
                 <div style={{ display:"flex", gap:5, alignItems:"center" }}>
                   {[0,150,300].map(d => (
                     <div key={d} style={{ width:7, height:7, borderRadius:"50%",
@@ -1148,7 +1082,8 @@ export default function HomePage() {
               style={{ minHeight:52, minWidth:52, borderRadius:14,
                 background:"linear-gradient(135deg,#2563eb,#1d4ed8)",
                 border:"none", color:"#fff", fontWeight:700, fontSize:14,
-                cursor:"pointer", flexShrink:0, opacity: (isLoading || (!message.trim() && pendingImages.length === 0)) ? .4 : 1,
+                cursor:"pointer", flexShrink:0,
+                opacity: (isLoading || (!message.trim() && pendingImages.length === 0)) ? .5 : 1,
                 padding:"0 16px", boxShadow:"0 4px 12px #2563eb44" }}>
               Send
             </button>
@@ -1188,5 +1123,4 @@ export default function HomePage() {
       `}</style>
     </>
   );
-
 }
