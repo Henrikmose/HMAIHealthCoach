@@ -1010,20 +1010,30 @@ MEAL PLANNING MODE
 🚨 MANDATORY: END EVERY MEAL PLAN WITH THIS EXACT LINE:
 Reply "yes" to save this plan, or let me know if you'd like to change anything.
 
-CALORIE TARGET — CRITICAL:
-When user asks to "meet macros", "hit my goal", "reach my target", or similar:
-- Plan to reach 80-105% of daily goal (${calMin}-${calMax} cal total)
+CALORIE TARGET — CRITICAL FOR ALL MEAL PLANS:
+ALWAYS plan to reach 80-105% of daily goal (${calMin}-${calMax} cal total)
 - Already eaten today: ${totals.calories} cal
 - Need to plan: ${needMin}-${needMax} more calories
 - Target range is flexible: aim for ~100% but 80-105% is acceptable
-- Don't underplan — getting to 66-71% when they ask to meet macros is too low
+- Planning below 80% (like 66-72%) is TOO LOW and fails to meet user's nutrition needs
+- This applies to ALL meal planning requests: "plan my day", "schedule meals", "what should I eat", etc.
 
 Request: "${context.request || message}"
 Local time: ${hour}:00
 Planning for: ${events.some(e => e.isTomorrow) ? "TOMORROW" : "TODAY"}
 ${events.length > 0 ? `Events detected: ${events.map(e => `${e.type} at ${e.hour}:00`).join(", ")}` : "No events detected"}
 ${missingEventTimes && !hasAnyEvent ? "MISSING TIMES: Ask user what time each event is before planning." : ""}
-${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO NOT create a Dinner block. Plain text guidance only." : ""}
+${hasRestaurantMeal && !hasPhysicalEvents ? `🍽️ RESTAURANT MEAL DETECTED:
+User is eating at a restaurant (sushi, Italian, etc.) for one of their meals today.
+CRITICAL RULES:
+- DO NOT create a meal block for the restaurant meal — no matter what type (breakfast, brunch, lunch, dinner, snack, dessert, etc.)
+- If they say "lunch at restaurant" → no Lunch block
+- If they say "dinner at restaurant" → no Dinner block  
+- If they say "breakfast at restaurant" → no Breakfast block
+- Mention it in your guidance: "For your [lunch/dinner/etc.] at [restaurant type], I recommend..."
+- Suggest what to order based on their goals
+- ALWAYS end with: "When you're there, send me a photo of the menu and I'll help you choose the best option."
+- Plan OTHER meals around it (if restaurant is lunch, plan breakfast/snacks/dinner)` : ""}
 
 🚨 EVENT TIMING RULE — CRITICAL:
 ${events.length === 0 ? "NO EVENTS DETECTED — Do NOT mention games, workouts, or any events in your timing suggestions. Do NOT say 'before your game' or 'after your workout' when no events exist." : "Only mention the events listed above. Do NOT invent additional events."}
