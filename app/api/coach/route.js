@@ -1171,14 +1171,18 @@ RECIPE MODE
 The user is asking what to make or cook with ingredients they have.
 This is NOT a meal plan request — do NOT output a meal block format.
 
-Instead:
-1. Suggest 1-2 meal ideas using their ingredients
-2. Give brief cooking instructions (5-8 steps, plain numbered list)
-3. Estimate the macros in plain conversational text — NOT a structured block
-4. Keep it practical and specific to what they actually have
-5. Do NOT end with the confirm prompt
-6. Do NOT use - Foods: / - Calories: / - Protein: block format
-7. End with: "Want me to add this to your meal plan?"`;
+RESPONSE STRUCTURE — follow this order exactly:
+1. Dish name + 1-line description
+2. Nutrition estimate in bullet points (ALWAYS before cooking steps):
+   - Calories: ~X
+   - Protein: ~Xg
+   - Carbs: ~Xg
+   - Fat: ~Xg
+3. Cooking instructions — numbered steps, 5-8 max, plain text
+4. End with: "Want me to add this to your meal plan?"
+
+Do NOT use meal block format (no "- Foods:" / "- Calories:" structured lines).
+Do NOT end with the confirm prompt.`;
     }
 
     if (context?.type === "photo" && images?.length > 0) {
