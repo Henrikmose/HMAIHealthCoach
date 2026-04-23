@@ -1162,6 +1162,21 @@ Each meal type alone on its own line — no parentheses.
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat after all meal blocks.`;
     }
 
+    if (context?.isConfirmation) {
+      systemMessage += `
+
+══════════════════════════════════════════
+USER CONFIRMED MEAL PLAN
+══════════════════════════════════════════
+The user said "yes" or confirmed they want to save the meal plan you just suggested.
+
+DO NOT say "saved" or "I've added it" — nothing is saved yet.
+RE-OUTPUT the exact same meal block(s) from your previous response.
+The meal block triggers the save button — that's what actually saves it.
+
+Just output the meal block(s) in the standard format, nothing else.`;
+    }
+
 
     if (context?.type === "photo" && images?.length > 0) {
       const photoIntent = context.photoIntent || "unknown";
