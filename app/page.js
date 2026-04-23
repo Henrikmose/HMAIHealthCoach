@@ -40,11 +40,6 @@ function isLogMessage(text) {
   ].some((p) => p.test(text));
 }
 
-function isRecipeRequest(text) {
-  if (!text) return false;
-  return /what\s+should\s+i\s+make|what\s+can\s+i\s+(make|cook)|how\s+(do\s+i\s+)?(cook|make)|recipe\s+for|give\s+me\s+a\s+recipe|what\s+to\s+make\s+with|what\s+can\s+i\s+do\s+with/i.test(text);
-}
-
 function isMealPlanningRequest(text) {
   if (!text) return false;
   return [
@@ -585,10 +580,6 @@ export default function HomePage() {
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isConfirmation: true };
-      } else if (isRecipeRequest(trimmed)) {
-        newActiveMealLog = null;
-        setActiveMealLog(null);
-        context = { type: "recipe", request: trimmed };
       } else if (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed)) {
         newActiveMealLog = null;
         setActiveMealLog(null);
