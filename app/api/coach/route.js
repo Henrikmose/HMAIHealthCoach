@@ -1177,6 +1177,20 @@ The meal block triggers the save button — that's what actually saves it.
 Just output the meal block(s) in the standard format, nothing else.`;
     }
 
+    if (context?.isSwap) {
+      systemMessage += `
+
+══════════════════════════════════════════
+USER REQUESTED SWAP/CHANGE
+══════════════════════════════════════════
+The user wants to change one meal in the plan you suggested (swap an ingredient, change a meal type, etc).
+
+CRITICAL: Output the COMPLETE updated plan with ALL meals (breakfast, lunch, dinner, snacks).
+DO NOT output only the changed meal — output the ENTIRE day's plan with the change applied.
+
+End with the confirm prompt so user can save the complete updated plan.`;
+    }
+
 
     if (context?.type === "photo" && images?.length > 0) {
       const photoIntent = context.photoIntent || "unknown";

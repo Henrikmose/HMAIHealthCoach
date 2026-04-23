@@ -586,10 +586,15 @@ export default function HomePage() {
         
         if (meals.length > 0) {
           const uid = userId || localStorage.getItem("user_id");
+          
+          // Detect target date from context (today vs tomorrow)
+          const surroundingTexts = history.slice(Math.max(0, history.length - 6)).map(m => m.content || "");
+          const targetDate = extractTargetDate(trimmed, surroundingTexts);
+          
           let savedCount = 0;
           
           for (const meal of meals) {
-            const saved = await saveMealViaAPI("planned_meals", { ...meal, date: getLocalDate() }, uid);
+            const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
             if (saved) savedCount++;
           }
           
