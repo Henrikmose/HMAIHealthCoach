@@ -12,6 +12,14 @@ export async function middleware(req) {
     data: { session },
   } = await supabase.auth.getSession();
 
+  // Allow /profile/setup without profile check (needed for onboarding)
+  if (req.nextUrl.pathname === "/profile/setup") {
+    if (!session) {
+      return NextResponse.redirect(new URL("/signin", req.url));
+    }
+    return res; // Allow access to setup page
+  }
+
   // Protect routes that require authentication
   const protectedPaths = ["/profile", "/dashboard"];
   const isProtectedPath = protectedPaths.some((path) =>
