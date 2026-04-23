@@ -37,8 +37,8 @@ export async function middleware(req) {
       const { data: profile, error } = await supabase
         .from("user_profiles")
         .select("id")
-        .eq("id", session.user.id)
-        .maybeSingle();  // Returns null if no profile, doesn't throw error
+        .eq("user_id", session.user.id)  // Fixed: column is user_id, not id
+        .maybeSingle();
 
       if (!profile && !error) {
         return NextResponse.redirect(new URL("/profile/setup", req.url));
