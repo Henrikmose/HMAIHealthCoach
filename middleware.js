@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 export async function middleware(req) {
+  console.log("🔍 Middleware:", req.nextUrl.pathname);
   const res = NextResponse.next();
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -11,12 +12,17 @@ export async function middleware(req) {
   const {
     data: { session },
   } = await supabase.auth.getSession();
+  
+  console.log("👤 Session:", session ? "EXISTS" : "NONE");
 
   // Allow /profile/setup without profile check (needed for onboarding)
   if (req.nextUrl.pathname === "/profile/setup") {
+    console.log("📝 Profile setup requested");
     if (!session) {
+      console.log("❌ No session, redirect to signin");
       return NextResponse.redirect(new URL("/signin", req.url));
     }
+    console.log("✅ Allowing profile setup");
     return res; // Allow access to setup page
   }
 
@@ -28,11 +34,13 @@ export async function middleware(req) {
 
   // Redirect to signin if not authenticated
   if (isProtectedPath && !session) {
+    console.log("🔒 Protected path, no session");
     return NextResponse.redirect(new URL("/signin", req.url));
   }
 
   // Redirect to profile setup if authenticated but no profile
   if (session && req.nextUrl.pathname === "/") {
+    console.log("🏠 Home page, checking for profile");
     try {
       const { data: profile, error } = await supabase
         .from("user_profiles")
@@ -40,7 +48,10 @@ export async function middleware(req) {
         .eq("user_id", session.user.id)  // Fixed: column is user_id, not id
         .maybeSingle();
 
+      console.log("📊 Profile check:", profile ? "FOUND" : "NOT FOUND", error ? `ERROR: ${error.message}` : "");
+      
       if (!profile && !error) {
+        console.log("➡️ Redirecting to profile setup");
         return NextResponse.redirect(new URL("/profile/setup", req.url));
       }
     } catch (error) {
