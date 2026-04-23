@@ -74,7 +74,7 @@ export default function ProfilePage() {
       setEmail(session.user.email || "");
 
       const { data: profile } = await supabase
-        .from("user_profiles").select("*").eq("user_id", uid).single();
+        .from("user_profiles").select("*").eq("user_id", uid).maybeSingle();
       if (profile) {
         setName(profile.name || "");
         setAge(String(profile.age || ""));
@@ -86,7 +86,7 @@ export default function ProfilePage() {
       }
 
       const { data: goals } = await supabase
-        .from("goals").select("*").eq("user_id", uid).single();
+        .from("goals").select("*").eq("user_id", uid).maybeSingle();
       if (goals) {
         const autoCals = profile ? calcCalories(
           parseFloat(profile.current_weight || 0),
