@@ -1,25 +1,48 @@
-import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
+import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 export async function middleware(req) {
   const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req, res });
-  const { data: { session } } = await supabase.auth.getSession();
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
 
-  const { pathname } = req.nextUrl;
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  // Public routes — always accessible
-  const publicRoutes = ["/signin", "/signup", "/profile/setup"];
-  if (publicRoutes.some(r => pathname.startsWith(r))) return res;
+  // Protect routes that require authentication
+  const protectedPaths = ["/profile", "/dashboard"];
+  const isProtectedPath = protectedPaths.some((path) =>
+    req.nextUrl.pathname.startsWith(path)
+  );
 
-  // Protected routes — redirect to signin if not authenticated
-  if (!session) {
+  // Redirect to signin if not authenticated
+  if (isProtectedPath && !session) {
     return NextResponse.redirect(new URL("/signin", req.url));
+  }
+
+  // Redirect to profile setup if authenticated but no profile
+  if (session && req.nextUrl.pathname === "/") {
+    try {
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("id")
+        .eq("id", session.user.id)
+        .single();
+
+      if (!profile) {
+        return NextResponse.redirect(new URL("/profile/setup", req.url));
+      }
+    } catch (error) {
+      console.log("Profile check error:", error);
+    }
   }
 
   return res;
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/", "/profile/:path*", "/dashboard/:path*"],
 };
