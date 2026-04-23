@@ -655,7 +655,14 @@ The user already has ${todayPlanned.length} planned meal(s) for today: ${planned
 ` : ""}
 
 ${events.length > 0 ? `📅 EVENTS DETECTED (${events.length}):
-${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 ${e.isTomorrow ? "(tomorrow)" : "(today)"} — ${e.label}`).join("\n")}` : ""}
+${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 ${e.isTomorrow ? "(tomorrow)" : "(today)"} — ${e.label}`).join("\n")}
+
+🚨 CRITICAL EVENT TIMING RULE:
+- Events marked "(today)" → use for today's meal timing and coaching
+- Events marked "(tomorrow)" → ONLY mention when planning tomorrow's meals
+- When coaching about food eaten TODAY or planning TODAY's meals → IGNORE tomorrow events completely
+- When user eats protein shake TODAY and has tennis TOMORROW → do NOT say "perfect for tennis later"
+` : ""}
 ${hasRestaurantMeal ? "🍽️ RESTAURANT/PARTY MEAL DETECTED" : ""}
 ${missingEventTimes && !hasAnyEvent ? "⚠️ EVENTS MENTIONED BUT NO TIMES PROVIDED — ASK FOR TIMES BEFORE PLANNING" : ""}
 
@@ -897,6 +904,21 @@ ${context.mealType ? `Meal type: ${context.mealType}` : `No meal type given — 
   Use this inferred type in the meal block. NEVER skip logging because meal type is missing.`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
+🚨 ADDING TO EXISTING MEAL — CRITICAL RULE:
+When user adds food to an existing meal ("I also had X", "add Parmesan", "and some cheese"):
+- ONLY create a meal block for the NEW item
+- Do NOT repeat the original foods
+- Do NOT create a combined block with both old and new foods
+- The dashboard automatically sums multiple entries for the same meal type
+
+WRONG (user had beef/sweet potatoes for lunch, then adds Parmesan):
+Lunch — Foods: Beef, 8oz; Sweet potatoes, half cup; Parmesan, 1/4 cup
+Calories: 790... ← This duplicates the original meal
+
+RIGHT (user adds Parmesan):
+Lunch — Foods: Parmesan cheese, 1/4 cup
+Calories: 110... ← ONLY the new item, dashboard sums with original entry
+
 ${dbFoodResults ? `
 DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA):
 ${dbFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
@@ -944,13 +966,6 @@ AFTER the meal block, add a Breakdown line showing per-food contributions:
 Breakdown: Ground beef — 480 cal, 53g P, 0g C, 29g F | Sweet potato — 160 cal, 3g P, 37g C, 0g F
 
 This lets the user see what each food contributed without breaking the parser.
-
-ADDING TO EXISTING MEAL ("I also had X", "I also ate X", "add X to my breakfast"):
-When user adds a food to an existing meal type — ONLY log the NEW item.
-Do NOT repeat the original meal. Do NOT create a combined block.
-WRONG: "Breakfast - Foods: Eggs, 2 large; Avocado, half; Sourdough toast, 1 slice"
-RIGHT: "Breakfast - Foods: Sourdough toast, 1 slice - Calories: 80..."
-The dashboard will sum both entries automatically.
 
 AFTER LOGGING — ALWAYS include:
 1. The meal logged with single total numbers (new item only if adding to existing)
@@ -1011,12 +1026,22 @@ MEAL PLANNING MODE
 Reply "yes" to save this plan, or let me know if you'd like to change anything.
 
 CALORIE TARGET — CRITICAL FOR ALL MEAL PLANS:
-ALWAYS plan to reach 80-105% of daily goal (${calMin}-${calMax} cal total)
+🚨 MANDATORY: Plan to reach 80-105% of daily goal (${calMin}-${calMax} cal total) 🚨
 - Already eaten today: ${totals.calories} cal
-- Need to plan: ${needMin}-${needMax} more calories
-- Target range is flexible: aim for ~100% but 80-105% is acceptable
-- Planning below 80% (like 66-72%) is TOO LOW and fails to meet user's nutrition needs
-- This applies to ALL meal planning requests: "plan my day", "schedule meals", "what should I eat", etc.
+- MUST plan: ${needMin}-${needMax} more calories to hit target
+- Target range: aim for ~100% but 80-105% is acceptable
+- Planning below 80% (like 66-72%) is TOO LOW and FAILS to meet user's nutrition needs
+- This applies to ALL meal planning: "plan my day", "schedule meals", "what should I eat", etc.
+
+EXAMPLE: If goal is 2800 cal and user has eaten 490 cal:
+- ❌ BAD: Plan 1355 cal more (total 1845 = 66%) — TOO LOW
+- ✅ GOOD: Plan 1750-2450 cal more (total 2240-2940 = 80-105%)
+
+VARIETY RULE — AVOID REPETITION:
+- Rotate proteins: chicken, salmon, beef, turkey, pork, tofu, shrimp, white fish, eggs, lamb
+- Don't default to salmon for every dinner — mix it up
+- If planning multiple meals, use different proteins for each
+- Consider: chicken stir-fry, beef tacos, turkey meatballs, pork chops, grilled shrimp, cod, etc.
 
 Request: "${context.request || message}"
 Local time: ${hour}:00
@@ -1269,13 +1294,15 @@ You are reading a nutrition label, not estimating. Trust what you read.
 
 SERVINGS HANDLING — CRITICAL:
 1. Read: calories per serving, protein per serving, carbs per serving, fat per serving, servings per container
-2. If user ate 1 serving → servings field = 1, use per-serving macros
-3. If user ate whole container with X servings → servings field = X, use per-serving macros
-   The dashboard multiplies: calories × servings automatically
-4. ALWAYS ask if label has multiple servings (>1) and user didn't specify how much:
-   "The bag has 3 servings — did you have 1 serving (120 cal) or the whole bag (360 cal)?"
-   EXCEPTION: skip asking if user said "whole bag", "all of it", "I ate this" with clear single-serve context
-5. NEVER use whole-bag totals as the per-serving macros
+2. If label shows "servings per container: 3" (or any number > 1), the user ATE THE WHOLE THING
+3. SERVINGS FIELD RULES:
+   - Label says 1 serving per container → servings: 1
+   - Label says 3 servings per container + user ate it → servings: 3
+   - Label says 2.5 servings per container + user ate it → servings: 2.5
+4. When user says "I ate this" or "I had this" with a photo, they ate the ENTIRE product shown
+5. Use per-serving macros, set servings count to match container
+6. Dashboard multiplies: calories × servings automatically
+7. NEVER use whole-bag totals as the per-serving macros
 
 Meal block from label MUST use PER-SERVING values + correct servings count:
 WRONG (ate whole bag of 3 servings):
