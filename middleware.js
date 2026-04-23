@@ -34,13 +34,13 @@ export async function middleware(req) {
   // Redirect to profile setup if authenticated but no profile
   if (session && req.nextUrl.pathname === "/") {
     try {
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from("user_profiles")
         .select("id")
         .eq("id", session.user.id)
-        .single();
+        .maybeSingle();  // Returns null if no profile, doesn't throw error
 
-      if (!profile) {
+      if (!profile && !error) {
         return NextResponse.redirect(new URL("/profile/setup", req.url));
       }
     } catch (error) {
