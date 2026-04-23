@@ -576,7 +576,41 @@ export default function HomePage() {
           message: trimmed,
         };
       } else if (isConfirmation(trimmed) && lastAiHadMeals) {
-        // User confirmed a meal suggestion — route through AI for proper meal block
+        // User confirmed — save meals from previous AI message directly, skip AI call
+        const mostRecentAiMsg = recentAiMsgs[0];
+        const meals = mostRecentAiMsg ? parseAllMeals(mostRecentAiMsg.content) : [];
+        
+        if (meals.length > 0) {
+          const uid = userId || localStorage.getItem("user_id");
+          let savedCount = 0;
+          
+          for (const meal of meals) {
+            const saved = await saveMealViaAPI("planned_meals", { ...meal, date: getLocalDate() }, uid);
+            if (saved) savedCount++;
+          }
+          
+          if (savedCount > 0) {
+            await loadPlannedMeals(uid);
+            const confirmMsg = savedCount === 1 
+              ? `Done — ${meals[0].displayType} added to your plan.`
+              : `Done — all ${savedCount} meals added to your plan.`;
+            setHistory([...newHistory, { role: "assistant", content: confirmMsg }]);
+            
+            // Close the meal plan message so it's never looked up again
+            const mostRecentAiIdx = history.lastIndexOf(mostRecentAiMsg);
+            if (mostRecentAiIdx >= 0) {
+              setClosedPlanIndices(prev => new Set([...prev, mostRecentAiIdx]));
+            }
+          } else {
+            setHistory([...newHistory, { role: "assistant", content: "Sorry, couldn't save. Please try again." }]);
+          }
+          
+          setIsLoading(false);
+          setLoadingStage("");
+          return; // Skip AI call entirely
+        }
+        
+        // Fallback: if no meals found, route to AI
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isConfirmation: true };
