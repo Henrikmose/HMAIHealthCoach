@@ -624,21 +624,23 @@ export default function HomePage() {
         newActiveMealLog = null;
         setActiveMealLog(null);
         context = { type: "meal_planning", request: trimmed, isConfirmation: true };
-      } else if (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed)) {
-        newActiveMealLog = null;
-        setActiveMealLog(null);
-        context = { type: "meal_planning", request: trimmed };
-      } else if (isMealSwap(trimmed) && history.some(m => m.role === "assistant" && parseAllMeals(m.content).length > 0)) {
-        // User is swapping a previously suggested meal
-        // Delete the previous AI message with meals to avoid confusion
-        const lastAiMealIdx = history.findLastIndex(m => m.role === "assistant" && parseAllMeals(m.content).length > 0);
-        if (lastAiMealIdx >= 0) {
-          newHistory = [...history.slice(0, lastAiMealIdx), ...history.slice(lastAiMealIdx + 1)];
+      } else if (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed) || isMealSwap(trimmed)) {
+        // CRITICAL: Check meal planning/swap BEFORE activeMealLog fallback
+        // This prevents meal planning requests from being treated as food log follow-ups
+        
+        if (isMealSwap(trimmed) && history.some(m => m.role === "assistant" && parseAllMeals(m.content).length > 0)) {
+          // Delete the previous AI message with meals to avoid confusion
+          const lastAiMealIdx = history.findLastIndex(m => m.role === "assistant" && parseAllMeals(m.content).length > 0);
+          if (lastAiMealIdx >= 0) {
+            newHistory = [...history.slice(0, lastAiMealIdx), ...history.slice(lastAiMealIdx + 1)];
+          }
+          context = { type: "meal_planning", request: trimmed, isSwap: true };
+        } else {
+          context = { type: "meal_planning", request: trimmed };
         }
         
         newActiveMealLog = null;
         setActiveMealLog(null);
-        context = { type: "meal_planning", request: trimmed, isSwap: true };
       } else if (activeMealLog) {
         newActiveMealLog = {
           ...activeMealLog,
