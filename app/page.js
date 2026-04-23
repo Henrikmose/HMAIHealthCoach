@@ -1371,4 +1371,4 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     console.error("AI ERROR:", error);
     return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
   }
-}
+} 
