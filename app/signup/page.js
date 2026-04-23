@@ -30,6 +30,8 @@ export default function SignUpPage() {
     // If email confirmation is disabled in Supabase — go straight to profile setup
     if (data.session) {
       localStorage.setItem("user_id", data.user.id);
+      // Wait a moment for session to be fully established
+      await new Promise(resolve => setTimeout(resolve, 500));
       router.push("/profile/setup");
     } else {
       // Email confirmation required — show confirmation screen
