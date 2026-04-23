@@ -51,6 +51,7 @@ function isMealPlanningRequest(text) {
     /what\s+can\s+i\s+make/i,
     /what\s+can\s+i\s+cook/i,
     /what\s+to\s+make/i,
+    /i\s+have\s+(some\s+)?(chicken|beef|fish|salmon|turkey|pork|tofu|eggs|rice|pasta|potatoes|vegetables|veggies)/i,
     /plan\s+my\s+meals/i,
     /meal\s+plan/i,
     /create.*meal/i,
