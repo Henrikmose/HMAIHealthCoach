@@ -135,20 +135,17 @@ export default function ProfileSetupPage() {
   const [userId, setUserId]           = useState(null);
 
   useEffect(() => {
-    // Get user from auth session with retry
+    // Try to get user from session, but don't redirect if not found
     async function loadSession() {
-      for (let i = 0; i < 5; i++) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          setUserId(session.user.id);
-          localStorage.setItem("user_id", session.user.id);
-          return;
-        }
-        // Wait 200ms before retry
-        await new Promise(resolve => setTimeout(resolve, 200));
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setUserId(session.user.id);
+        localStorage.setItem("user_id", session.user.id);
+      } else {
+        // Try localStorage as fallback
+        const storedId = localStorage.getItem("user_id");
+        if (storedId) setUserId(storedId);
       }
-      // After 5 retries (1 second total), redirect to signin
-      router.push("/signin");
     }
     loadSession();
 
