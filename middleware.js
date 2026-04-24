@@ -1,6 +1,4 @@
-
-// Force rebuild v2
-   import { createClient } from "@supabase/supabase-js";
+// Force rebuild v3
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
@@ -48,7 +46,7 @@ export async function middleware(req) {
       const { data: profile, error } = await supabase
         .from("user_profiles")
         .select("id")
-        .eq("user_id", session.user.id)  // Fixed: column is user_id, not id
+        .eq("user_id", session.user.id)
         .maybeSingle();
 
       console.log("📊 Profile check:", profile ? "FOUND" : "NOT FOUND", error ? `ERROR: ${error.message}` : "");
