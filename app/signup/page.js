@@ -1,157 +1,228 @@
 "use client";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import { supabase } from "../lib/supabaseClient";
 
-export default function SignUpPage() {
+export default function SignupPage() {
   const router = useRouter();
-  const [email, setEmail]       = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirm, setConfirm]   = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState("");
-  const [sent, setSent]         = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  async function handleSignUp(e) {
+  const handleSignup = async (e) => {
     e.preventDefault();
     setError("");
-    if (password !== confirm) { setError("Passwords don't match"); return; }
-    if (password.length < 6)  { setError("Password must be at least 6 characters"); return; }
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: { emailRedirectTo: `${window.location.origin}/profile/setup` }
-    });
+    try {
+      // 1. Create Supabase auth user
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
 
-    if (error) { setError(error.message); setLoading(false); return; }
+      if (authError) {
+        setError(authError.message);
+        setLoading(false);
+        return;
+      }
 
-    // If email confirmation is disabled in Supabase — go straight to profile setup
-    if (data.session) {
-      localStorage.setItem("user_id", data.user.id);
-      // Wait a moment for session to be fully established
-      await new Promise(resolve => setTimeout(resolve, 500));
+      if (!authData.user) {
+        setError("Failed to create account");
+        setLoading(false);
+        return;
+      }
+
+      // 2. Save user_id to localStorage as backup
+      localStorage.setItem("user_id", authData.user.id);
+
+      // 3. Wait a moment for session to establish
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // 4. Redirect to setup wizard
       router.push("/profile/setup");
-    } else {
-      // Email confirmation required — show confirmation screen
-      setSent(true);
+    } catch (err) {
+      setError(err.message || "An error occurred");
+      setLoading(false);
     }
-    setLoading(false);
-  }
-
-  const T = {
-    bg: "#1c1c1e", surface: "#242424", border: "#2c2c2c",
-    text: "#f0f0f0", sub: "#888", accent: "#2563eb",
   };
 
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: ${T.bg}; font-family: 'DM Sans', sans-serif; }
-        input::placeholder { color: #555; }
-        input:focus { outline: none; border-color: #2563eb !important; }
-      `}</style>
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#1c1c1e",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "20px",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: "400px",
+          background: "#242424",
+          border: "1px solid #2c2c2c",
+          borderRadius: "16px",
+          padding: "40px",
+        }}
+      >
+        <h1
+          style={{
+            fontSize: "28px",
+            fontWeight: 800,
+            color: "#f0f0f0",
+            marginBottom: "10px",
+            fontFamily: "DM Sans, sans-serif",
+          }}
+        >
+          Create Account
+        </h1>
+        <p
+          style={{
+            color: "#888",
+            marginBottom: "30px",
+            fontFamily: "DM Sans, sans-serif",
+          }}
+        >
+          Let's get you set up with CURA
+        </p>
 
-      <div style={{ minHeight:"100vh", background: T.bg, display:"flex",
-        flexDirection:"column", alignItems:"center", justifyContent:"center",
-        padding:"24px", fontFamily:"'DM Sans', sans-serif" }}>
-
-        {sent ? (
-          // Email sent confirmation screen
-          <div style={{ textAlign:"center", maxWidth:340 }}>
-            <div style={{ fontSize:48, marginBottom:16 }}>📬</div>
-            <h2 style={{ fontSize:22, fontWeight:800, color: T.text, marginBottom:8 }}>
-              Check your email
-            </h2>
-            <p style={{ fontSize:14, color: T.sub, lineHeight:1.6 }}>
-              We sent a verification link to <strong style={{ color: T.text }}>{email}</strong>.
-              Click the link to activate your account.
-            </p>
-            <button onClick={() => router.push("/signin")}
-              style={{ marginTop:24, fontSize:13, color:"#2563eb", fontWeight:600,
-                background:"none", border:"none", cursor:"pointer",
-                fontFamily:"'DM Sans', sans-serif" }}>
-              Back to sign in
-            </button>
+        <form onSubmit={handleSignup}>
+          <div style={{ marginBottom: "20px" }}>
+            <label
+              style={{
+                display: "block",
+                color: "#f0f0f0",
+                fontSize: "14px",
+                fontWeight: 600,
+                marginBottom: "8px",
+                fontFamily: "DM Sans, sans-serif",
+              }}
+            >
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "12px",
+                background: "#1c1c1e",
+                border: "1px solid #2c2c2c",
+                borderRadius: "12px",
+                color: "#f0f0f0",
+                fontSize: "16px",
+                fontFamily: "DM Sans, sans-serif",
+                boxSizing: "border-box",
+              }}
+              placeholder="you@example.com"
+            />
           </div>
-        ) : (
-          <>
-            {/* Logo */}
-            <div style={{ marginBottom:40, textAlign:"center" }}>
-              <div style={{ width:64, height:64, borderRadius:20, background:"#2563eb",
-                display:"flex", alignItems:"center", justifyContent:"center",
-                fontSize:28, margin:"0 auto 16px", boxShadow:"0 8px 32px #2563eb44" }}>
-                💬
-              </div>
-              <p style={{ fontSize:11, fontWeight:700, color:"#2563eb",
-                textTransform:"uppercase", letterSpacing:".15em", marginBottom:4 }}>CURA</p>
-              <h1 style={{ fontSize:26, fontWeight:800, color: T.text, letterSpacing:"-.02em" }}>
-                Create your account
-              </h1>
-              <p style={{ fontSize:14, color: T.sub, marginTop:6 }}>
-                Your personal health coach awaits
-              </p>
+
+          <div style={{ marginBottom: "30px" }}>
+            <label
+              style={{
+                display: "block",
+                color: "#f0f0f0",
+                fontSize: "14px",
+                fontWeight: 600,
+                marginBottom: "8px",
+                fontFamily: "DM Sans, sans-serif",
+              }}
+            >
+              Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "12px",
+                background: "#1c1c1e",
+                border: "1px solid #2c2c2c",
+                borderRadius: "12px",
+                color: "#f0f0f0",
+                fontSize: "16px",
+                fontFamily: "DM Sans, sans-serif",
+                boxSizing: "border-box",
+              }}
+              placeholder="At least 8 characters"
+            />
+          </div>
+
+          {error && (
+            <div
+              style={{
+                background: "rgba(220, 38, 38, 0.1)",
+                border: "1px solid #dc2626",
+                color: "#fca5a5",
+                padding: "12px",
+                borderRadius: "12px",
+                fontSize: "14px",
+                marginBottom: "20px",
+                fontFamily: "DM Sans, sans-serif",
+              }}
+            >
+              {error}
             </div>
+          )}
 
-            {/* Form */}
-            <div style={{ width:"100%", maxWidth:380,
-              background: T.surface, borderRadius:24,
-              border:`1px solid ${T.border}`, padding:28 }}>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: "100%",
+              padding: "14px",
+              background: loading ? "#666" : "#2563eb",
+              color: "#fff",
+              border: "none",
+              borderRadius: "14px",
+              fontSize: "16px",
+              fontWeight: 600,
+              cursor: loading ? "not-allowed" : "pointer",
+              fontFamily: "DM Sans, sans-serif",
+              transition: "background 0.2s",
+            }}
+          >
+            {loading ? "Creating account..." : "Create Account"}
+          </button>
+        </form>
 
-              {error && (
-                <div style={{ background:"#ef444422", border:"1px solid #ef4444",
-                  borderRadius:12, padding:"10px 14px", marginBottom:16,
-                  fontSize:13, color:"#ef4444" }}>
-                  {error}
-                </div>
-              )}
-
-              {[
-                { label:"Email", type:"email", val:email, set:setEmail, ph:"you@example.com" },
-                { label:"Password", type:"password", val:password, set:setPassword, ph:"Min 6 characters" },
-                { label:"Confirm Password", type:"password", val:confirm, set:setConfirm, ph:"Repeat password" },
-              ].map(({ label, type, val, set, ph }) => (
-                <div key={label} style={{ marginBottom:16 }}>
-                  <label style={{ fontSize:12, fontWeight:600, color: T.sub,
-                    textTransform:"uppercase", letterSpacing:".05em",
-                    display:"block", marginBottom:8 }}>{label}</label>
-                  <input type={type} value={val} onChange={e => set(e.target.value)}
-                    placeholder={ph}
-                    style={{ width:"100%", background:"#2c2c2c", border:"1px solid #3a3a3a",
-                      borderRadius:12, padding:"14px 16px", fontSize:15, color: T.text,
-                      fontFamily:"'DM Sans', sans-serif", transition:"border-color .2s" }} />
-                </div>
-              ))}
-
-              <div style={{ marginBottom:24 }} />
-
-              <button onClick={handleSignUp}
-                disabled={loading || !email || !password || !confirm}
-                style={{ width:"100%", padding:"16px", borderRadius:14, border:"none",
-                  background:"linear-gradient(135deg,#2563eb,#1d4ed8)",
-                  color:"#fff", fontSize:15, fontWeight:700, cursor:"pointer",
-                  opacity: (loading || !email || !password || !confirm) ? .5 : 1,
-                  boxShadow:"0 4px 16px #2563eb44",
-                  fontFamily:"'DM Sans', sans-serif" }}>
-                {loading ? "Creating account..." : "Create Account"}
-              </button>
-
-              <div style={{ textAlign:"center", marginTop:20 }}>
-                <span style={{ fontSize:13, color: T.sub }}>Already have an account? </span>
-                <button onClick={() => router.push("/signin")}
-                  style={{ fontSize:13, color:"#2563eb", fontWeight:600,
-                    background:"none", border:"none", cursor:"pointer",
-                    fontFamily:"'DM Sans', sans-serif" }}>
-                  Sign in
-                </button>
-              </div>
-            </div>
-          </>
-        )}
+        <div
+          style={{
+            marginTop: "20px",
+            textAlign: "center",
+            color: "#888",
+            fontSize: "14px",
+            fontFamily: "DM Sans, sans-serif",
+          }}
+        >
+          Already have an account?{" "}
+          <a
+            href="/signin"
+            style={{
+              color: "#2563eb",
+              textDecoration: "none",
+              fontWeight: 600,
+            }}
+          >
+            Sign in
+          </a>
+        </div>
       </div>
-    </>
+    </div>
   );
 }

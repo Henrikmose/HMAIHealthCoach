@@ -414,8 +414,15 @@ export default function HomePage() {
   }, [savedPlanKeys]);
 
   useEffect(() => {
-    const uid   = localStorage.getItem("user_id");
+    let uid   = localStorage.getItem("user_id");
     const uname = localStorage.getItem("user_name");
+    
+    // MVP: Generate temp user_id if it doesn't exist
+    if (!uid) {
+      uid = "temp-user-" + Date.now();
+      localStorage.setItem("user_id", uid);
+    }
+    
     if (uname) setUserName(uname);
     if (uid)   setUserId(uid);
   }, []);
