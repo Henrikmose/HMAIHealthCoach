@@ -65,12 +65,12 @@ export default function ProfileSetupPage() {
 
   // Form state
   const [name, setName] = useState("");
-  const [age, setAge] = useState("");
+  const [birthDate, setBirthDate] = useState("");
   const [gender, setGender] = useState("male");
   const [weight, setWeight] = useState("");
   const [weightUnit, setWeightUnit] = useState("lbs");
-  const [height, setHeight] = useState("");
-  const [heightUnit, setHeightUnit] = useState("inches");
+  const [heightFeet, setHeightFeet] = useState("");
+  const [heightInches, setHeightInches] = useState("");
   const [goal, setGoal] = useState("maintain");
   const [activityLevel, setActivityLevel] = useState("moderate");
   const [calories, setCalories] = useState(0);
@@ -107,24 +107,33 @@ export default function ProfileSetupPage() {
 
   // Calculate calories and macros when goal or activity level changes
   useEffect(() => {
-    if (!weight || !height || !age) return;
+    if (!weight || !heightFeet || !heightInches || !birthDate) return;
+
+    // Calculate age from birthDate
+    const today = new Date();
+    const birth = new Date(birthDate);
+    let age = today.getFullYear() - birth.getFullYear();
+    const monthDiff = today.getMonth() - birth.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+      age--;
+    }
 
     // Convert weight to kg
     const weightKg = weightUnit === "lbs" ? weight / 2.205 : parseFloat(weight);
 
-    // Convert height to cm
-    const heightCm =
-      heightUnit === "inches" ? height * 2.54 : parseFloat(height);
+    // Convert height to cm (feet + inches → total inches → cm)
+    const totalInches = parseInt(heightFeet) * 12 + parseInt(heightInches);
+    const heightCm = totalInches * 2.54;
 
     // Calculate
-    const bmr = calculateBMR(weightKg, heightCm, parseInt(age), gender);
+    const bmr = calculateBMR(weightKg, heightCm, age, gender);
     const tdee = calculateTDEE(bmr, activityLevel);
     const adjusted = applyGoalAdjustment(tdee, goal);
     const macroData = calculateMacros(adjusted, goal);
 
     setCalories(adjusted);
     setMacros(macroData);
-  }, [weight, weightUnit, height, heightUnit, age, gender, goal, activityLevel]);
+  }, [weight, weightUnit, heightFeet, heightInches, birthDate, gender, goal, activityLevel]);
 
   const handleSaveProfile = async () => {
     if (!userId) {
@@ -136,6 +145,15 @@ export default function ProfileSetupPage() {
     setError("");
 
     try {
+      // Calculate age from birthDate
+      const today = new Date();
+      const birth = new Date(birthDate);
+      let age = today.getFullYear() - birth.getFullYear();
+      const monthDiff = today.getMonth() - birth.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+        age--;
+      }
+
       // Convert weight to kg for storage
       const weightKg = weightUnit === "lbs" ? weight / 2.205 : parseFloat(weight);
 
@@ -146,7 +164,7 @@ export default function ProfileSetupPage() {
           {
             user_id: userId,
             name,
-            age: parseInt(age),
+            age,
             gender,
             current_weight: weightKg,
             weight_unit: "kg",
@@ -318,12 +336,12 @@ export default function ProfileSetupPage() {
                   fontFamily: "DM Sans, sans-serif",
                 }}
               >
-                Age
+                Birthday
               </label>
               <input
-                type="number"
-                value={age}
-                onChange={(e) => setAge(e.target.value)}
+                type="date"
+                value={birthDate}
+                onChange={(e) => setBirthDate(e.target.value)}
                 style={{
                   width: "100%",
                   padding: "12px",
@@ -335,7 +353,6 @@ export default function ProfileSetupPage() {
                   fontFamily: "DM Sans, sans-serif",
                   boxSizing: "border-box",
                 }}
-                placeholder="Your age"
               />
             </div>
 
@@ -378,17 +395,17 @@ export default function ProfileSetupPage() {
 
             <button
               onClick={() => setStep(2)}
-              disabled={!name || !age}
+              disabled={!name || !birthDate}
               style={{
                 width: "100%",
                 padding: "14px",
-                background: !name || !age ? "#666" : "#2563eb",
+                background: !name || !birthDate ? "#666" : "#2563eb",
                 color: "#fff",
                 border: "none",
                 borderRadius: "14px",
                 fontSize: "16px",
                 fontWeight: 600,
-                cursor: !name || !age ? "not-allowed" : "pointer",
+                cursor: !name || !birthDate ? "not-allowed" : "pointer",
                 fontFamily: "DM Sans, sans-serif",
               }}
             >
@@ -475,40 +492,47 @@ export default function ProfileSetupPage() {
               >
                 Height
               </label>
-              <div style={{ display: "flex", gap: "10px" }}>
-                <input
-                  type="number"
-                  value={height}
-                  onChange={(e) => setHeight(e.target.value)}
-                  style={{
-                    flex: 1,
-                    padding: "12px",
-                    background: "#1c1c1e",
-                    border: "1px solid #2c2c2c",
-                    borderRadius: "12px",
-                    color: "#f0f0f0",
-                    fontSize: "16px",
-                    fontFamily: "DM Sans, sans-serif",
-                    boxSizing: "border-box",
-                  }}
-                  placeholder="Height"
-                />
-                <select
-                  value={heightUnit}
-                  onChange={(e) => setHeightUnit(e.target.value)}
-                  style={{
-                    padding: "12px",
-                    background: "#1c1c1e",
-                    border: "1px solid #2c2c2c",
-                    borderRadius: "12px",
-                    color: "#f0f0f0",
-                    fontSize: "16px",
-                    fontFamily: "DM Sans, sans-serif",
-                  }}
-                >
-                  <option value="inches">inches</option>
-                  <option value="cm">cm</option>
-                </select>
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <div style={{ flex: 1 }}>
+                  <input
+                    type="number"
+                    value={heightFeet}
+                    onChange={(e) => setHeightFeet(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "12px",
+                      background: "#1c1c1e",
+                      border: "1px solid #2c2c2c",
+                      borderRadius: "12px",
+                      color: "#f0f0f0",
+                      fontSize: "16px",
+                      fontFamily: "DM Sans, sans-serif",
+                      boxSizing: "border-box",
+                    }}
+                    placeholder="Feet"
+                  />
+                  <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>Feet</div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <input
+                    type="number"
+                    value={heightInches}
+                    onChange={(e) => setHeightInches(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "12px",
+                      background: "#1c1c1e",
+                      border: "1px solid #2c2c2c",
+                      borderRadius: "12px",
+                      color: "#f0f0f0",
+                      fontSize: "16px",
+                      fontFamily: "DM Sans, sans-serif",
+                      boxSizing: "border-box",
+                    }}
+                    placeholder="Inches"
+                  />
+                  <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>Inches</div>
+                </div>
               </div>
             </div>
 
@@ -532,17 +556,17 @@ export default function ProfileSetupPage() {
               </button>
               <button
                 onClick={() => setStep(3)}
-                disabled={!weight || !height}
+                disabled={!weight || !heightFeet || !heightInches}
                 style={{
                   flex: 1,
                   padding: "14px",
-                  background: !weight || !height ? "#666" : "#2563eb",
+                  background: !weight || !heightFeet || !heightInches ? "#666" : "#2563eb",
                   color: "#fff",
                   border: "none",
                   borderRadius: "14px",
                   fontSize: "16px",
                   fontWeight: 600,
-                  cursor: !weight || !height ? "not-allowed" : "pointer",
+                  cursor: !weight || !heightFeet || !heightInches ? "not-allowed" : "pointer",
                   fontFamily: "DM Sans, sans-serif",
                 }}
               >

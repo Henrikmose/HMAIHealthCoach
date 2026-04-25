@@ -4,41 +4,48 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 
-export default function SigninPage() {
+export default function SignInPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(true); // Default to true
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSignin = async (e) => {
+  const handleSignIn = async (e) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
     try {
-      // Sign in with email/password
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (signInError) {
-        setError(signInError.message);
+        setError(signInError.message || "Failed to sign in");
         setLoading(false);
         return;
       }
 
-      if (data.user) {
-        // Save user_id to localStorage
+      if (data?.session && data?.user) {
+        // Store the REAL user_id from Supabase auth
         localStorage.setItem("user_id", data.user.id);
+        localStorage.setItem("user_name", data.user.user_metadata?.name || email.split("@")[0]);
+
+        // Save "Remember Me" preference
+        if (rememberMe) {
+          localStorage.setItem("rememberMe", "true");
+          localStorage.setItem("userEmail", email);
+        } else {
+          localStorage.removeItem("rememberMe");
+          localStorage.removeItem("userEmail");
+        }
+
+        // Redirect to coach page
+        router.push("/");
       }
-
-      // Wait for session to establish
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // Redirect to home (coach will handle checking for profile)
-      router.push("/");
     } catch (err) {
       setError(err.message || "An error occurred");
       setLoading(false);
@@ -58,8 +65,8 @@ export default function SigninPage() {
     >
       <div
         style={{
-          width: "100%",
           maxWidth: "400px",
+          width: "100%",
           background: "#242424",
           border: "1px solid #2c2c2c",
           borderRadius: "16px",
@@ -68,26 +75,30 @@ export default function SigninPage() {
       >
         <h1
           style={{
-            fontSize: "28px",
+            fontSize: "32px",
             fontWeight: 800,
             color: "#f0f0f0",
-            marginBottom: "10px",
+            marginBottom: "8px",
             fontFamily: "DM Sans, sans-serif",
+            textAlign: "center",
           }}
         >
-          Welcome Back
+          CURA
         </h1>
+
         <p
           style={{
             color: "#888",
+            fontSize: "14px",
+            textAlign: "center",
             marginBottom: "30px",
             fontFamily: "DM Sans, sans-serif",
           }}
         >
-          Sign in to continue with CURA
+          AI Health Coaching
         </p>
 
-        <form onSubmit={handleSignin}>
+        <form onSubmit={handleSignIn}>
           <div style={{ marginBottom: "20px" }}>
             <label
               style={{
@@ -105,8 +116,8 @@ export default function SigninPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
               required
-              disabled={loading}
               style={{
                 width: "100%",
                 padding: "12px",
@@ -118,11 +129,10 @@ export default function SigninPage() {
                 fontFamily: "DM Sans, sans-serif",
                 boxSizing: "border-box",
               }}
-              placeholder="you@example.com"
             />
           </div>
 
-          <div style={{ marginBottom: "30px" }}>
+          <div style={{ marginBottom: "20px" }}>
             <label
               style={{
                 display: "block",
@@ -139,8 +149,8 @@ export default function SigninPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
               required
-              disabled={loading}
               style={{
                 width: "100%",
                 padding: "12px",
@@ -152,8 +162,41 @@ export default function SigninPage() {
                 fontFamily: "DM Sans, sans-serif",
                 boxSizing: "border-box",
               }}
-              placeholder="Your password"
             />
+          </div>
+
+          {/* ── Remember Me Checkbox ── */}
+          <div
+            style={{
+              marginBottom: "20px",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <input
+              type="checkbox"
+              id="rememberMe"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              style={{
+                width: "18px",
+                height: "18px",
+                cursor: "pointer",
+                accentColor: "#2563eb",
+              }}
+            />
+            <label
+              htmlFor="rememberMe"
+              style={{
+                color: "#f0f0f0",
+                fontSize: "14px",
+                cursor: "pointer",
+                fontFamily: "DM Sans, sans-serif",
+              }}
+            >
+              Remember me
+            </label>
           </div>
 
           {error && (
@@ -182,12 +225,12 @@ export default function SigninPage() {
               background: loading ? "#666" : "#2563eb",
               color: "#fff",
               border: "none",
-              borderRadius: "14px",
+              borderRadius: "12px",
               fontSize: "16px",
               fontWeight: 600,
               cursor: loading ? "not-allowed" : "pointer",
               fontFamily: "DM Sans, sans-serif",
-              transition: "background 0.2s",
+              marginBottom: "10px",
             }}
           >
             {loading ? "Signing in..." : "Sign In"}
@@ -196,24 +239,27 @@ export default function SigninPage() {
 
         <div
           style={{
-            marginTop: "20px",
             textAlign: "center",
-            color: "#888",
-            fontSize: "14px",
-            fontFamily: "DM Sans, sans-serif",
+            marginTop: "20px",
           }}
         >
-          Don't have an account?{" "}
-          <a
-            href="/signup"
+          <span style={{ color: "#888", fontSize: "14px", fontFamily: "DM Sans, sans-serif" }}>
+            Don't have an account?{" "}
+          </span>
+          <button
+            onClick={() => router.push("/signup")}
             style={{
+              background: "none",
+              border: "none",
               color: "#2563eb",
-              textDecoration: "none",
+              cursor: "pointer",
+              fontSize: "14px",
               fontWeight: 600,
+              fontFamily: "DM Sans, sans-serif",
             }}
           >
-            Create one
-          </a>
+            Sign up
+          </button>
         </div>
       </div>
     </div>

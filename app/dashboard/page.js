@@ -160,256 +160,278 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
   }
 
   const cal = Math.round((meal.calories||0) * servings);
-  const P   = Math.round((meal.protein||0)  * servings);
-  const C   = Math.round((meal.carbs||0)    * servings);
-  const F   = Math.round((meal.fat||0)      * servings);
+  const prot = Math.round((meal.protein||0) * servings * 100) / 100;
+  const carb = Math.round((meal.carbs||0) * servings * 100) / 100;
+  const f = Math.round((meal.fat||0) * servings * 100) / 100;
 
   return (
-    <div style={{ background: t.card, border:`1px solid ${t.border}`, borderRadius: 16, padding:"12px 14px", marginBottom: 8 }}>
+    <div style={{ background: t.card, border:`1px solid ${t.border}`, borderRadius: 14, padding: "10px 12px", marginBottom: 10, position:"relative" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap: 10 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontSize: 13, fontWeight: 600, color: t.text, margin: 0, lineHeight: 1.4 }}>{meal.food}</p>
-          <div style={{ display:"flex", gap: 10, marginTop: 6, flexWrap:"wrap", alignItems:"center" }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: t.sub }}>🔥 {cal} cal</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#3b82f6" }}>P {P}g</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#10b981" }}>C {C}g</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: "#f59e0b" }}>F {F}g</span>
-          </div>
-          <div style={{ display:"flex", alignItems:"center", gap: 8, marginTop: 8 }}>
-            <span style={{ fontSize: 11, color: t.sub }}>Servings</span>
-            <input
-              type="number"
-              min="0.25"
-              step="0.25"
-              value={servingsInput}
-              onChange={e => handleServingsChange(e.target.value)}
-              onBlur={handleServingsBlur}
-              onFocus={e => e.target.select()}
-              style={{ width: 56, fontSize: 12, padding:"4px 8px", border:`1px solid ${t.border}`,
-                borderRadius: 8, textAlign:"center", background: t.input, color: t.text, outline:"none" }}
-            />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: t.text, marginBottom: 4 }}>{meal.food}</div>
+          <div style={{ display:"flex", gap: 12, fontSize: 12, color: t.sub }}>
+            <span>{cal} cal</span>
+            <span>P: {prot}g</span>
+            <span>C: {carb}g</span>
+            <span>F: {f}g</span>
           </div>
         </div>
-        <div style={{ display:"flex", flexDirection:"column", gap: 5, flexShrink: 0 }}>
-          {!isActual && (
-            <button onClick={() => act(() => onMarkEaten(meal))} disabled={busy}
-              style={{ fontSize: 11, padding:"6px 10px", borderRadius: 10, background:"#10b981",
-                color:"#fff", border:"none", fontWeight: 700, cursor:"pointer", opacity: busy ? .4 : 1 }}>
-              {busy ? "…" : "✓ Ate"}
-            </button>
-          )}
-          <button onClick={() => { setCopy(!showCopy); setConfirm(false); }} disabled={busy}
-            style={{ fontSize: 11, padding:"6px 8px", borderRadius: 10, background: t.muted,
-              color:"#3b82f6", border:"none", cursor:"pointer", opacity: busy ? .4 : 1 }}>
-            📋
-          </button>
-          {showConfirm ? (
-            <div style={{ display:"flex", gap: 4 }}>
-              <button onClick={handleDelete} disabled={busy}
-                style={{ fontSize: 11, padding:"5px 8px", borderRadius: 9, background:"#ef4444",
-                  color:"#fff", border:"none", fontWeight: 700, cursor:"pointer" }}>
-                {busy ? "…" : "Yes"}
-              </button>
-              <button onClick={() => setConfirm(false)}
-                style={{ fontSize: 11, padding:"5px 8px", borderRadius: 9, background: t.muted,
-                  color: t.sub, border:"none", cursor:"pointer" }}>
-                No
-              </button>
-            </div>
-          ) : (
+        <div style={{ display:"flex", gap: 6, alignItems:"center" }}>
+          <div style={{ display:"flex", alignItems:"center", gap: 4 }}>
+            <input type="text" value={servingsInput} onChange={(e) => handleServingsChange(e.target.value)}
+              onBlur={handleServingsBlur} style={{ width: 40, padding: "4px 6px", background: t.input,
+              border:`1px solid ${t.border}`, borderRadius: 6, color: t.text, fontSize: 12, fontFamily: "inherit" }} />
+            <span style={{ fontSize: 11, color: t.sub }}>×</span>
+          </div>
+          <div style={{ display:"flex", gap: 4 }}>
+            {isActual ? (
+              <>
+                {showCopy ? (
+                  <div style={{ position:"absolute", top: -120, right: 0, background: t.surface, border:`1px solid ${t.border}`,
+                    borderRadius: 10, padding: 10, zIndex: 10, minWidth: 140 }}>
+                    <div style={{ fontSize: 10, color: t.sub, marginBottom: 6 }}>Copy to:</div>
+                    <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)}
+                      style={{ width:"100%", padding: "4px 6px", background: t.input, border:`1px solid ${t.border}`,
+                      borderRadius: 6, color: t.text, fontSize: 11, marginBottom: 6, fontFamily: "inherit" }} />
+                    <select value={copyType} onChange={(e) => setCopyType(e.target.value)}
+                      style={{ width:"100%", padding: "4px 6px", background: t.input, border:`1px solid ${t.border}`,
+                      borderRadius: 6, color: t.text, fontSize: 11, marginBottom: 6, fontFamily: "inherit" }}>
+                      <option value="breakfast">Breakfast</option>
+                      <option value="lunch">Lunch</option>
+                      <option value="dinner">Dinner</option>
+                      <option value="snack">Snack</option>
+                    </select>
+                    <button onClick={handleCopy} disabled={busy}
+                      style={{ width:"100%", padding: "6px", background: "#2563eb", color: "#fff",
+                      border:"none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor:"pointer" }}>
+                      Copy
+                    </button>
+                  </div>
+                ) : null}
+                <button onClick={() => setCopy(!showCopy)} disabled={busy}
+                  style={{ width: 24, height: 24, display:"flex", alignItems:"center", justifyContent:"center",
+                  background:"transparent", border:"none", color: "#2563eb", cursor:"pointer", fontSize: 12 }}>📋</button>
+              </>
+            ) : null}
             <button onClick={handleDelete} disabled={busy}
-              style={{ fontSize: 11, padding:"6px 8px", borderRadius: 10, background: t.muted,
-                color: t.sub, border:"none", cursor:"pointer", opacity: busy ? .4 : 1 }}>
-              ✕
+              style={{ width: 24, height: 24, display:"flex", alignItems:"center", justifyContent:"center",
+              background: showConfirm ? "#dc2626" : "transparent", border:"none", color: showConfirm ? "#fff" : "#888",
+              cursor:"pointer", fontSize: 12, borderRadius: 4 }}>
+              {showConfirm ? "✓" : "✕"}
             </button>
-          )}
+          </div>
         </div>
       </div>
-
-      {showCopy && (
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop:`1px solid ${t.border}` }}>
-          <p style={{ fontSize: 11, fontWeight: 600, color: t.sub, marginBottom: 8 }}>📋 Copy to...</p>
-          <div style={{ display:"flex", gap: 6, marginBottom: 8 }}>
-            <button onClick={() => { const d = new Date(); d.setDate(d.getDate()+1); setCopyDate(d.toISOString().split("T")[0]); }}
-              style={{ fontSize: 11, padding:"6px 10px", borderRadius: 10, background:"#2563eb22",
-                color:"#3b82f6", border:"1px solid #2563eb44", cursor:"pointer", fontWeight: 600 }}>
-              Tomorrow
-            </button>
-            <input type="date" value={copyDate} onChange={e => setCopyDate(e.target.value)}
-              style={{ flex: 1, fontSize: 11, padding:"6px 8px", border:`1px solid ${t.border}`,
-                borderRadius: 10, background: t.input, color: t.text, outline:"none" }} />
-          </div>
-          <div style={{ display:"flex", gap: 6 }}>
-            <select value={copyType} onChange={e => setCopyType(e.target.value)}
-              style={{ flex: 1, fontSize: 11, padding:"6px 8px", border:`1px solid ${t.border}`,
-                borderRadius: 10, background: t.input, color: t.text, outline:"none" }}>
-              <option value="breakfast">Breakfast</option>
-              <option value="lunch">Lunch</option>
-              <option value="dinner">Dinner</option>
-              <option value="snack">Snack</option>
-            </select>
-            <button onClick={handleCopy} disabled={busy}
-              style={{ fontSize: 11, padding:"6px 14px", borderRadius: 10, background:"#2563eb",
-                color:"#fff", border:"none", fontWeight: 700, cursor:"pointer", opacity: busy ? .4 : 1 }}>
-              {busy ? "…" : "Copy"}
-            </button>
-            <button onClick={() => setCopy(false)}
-              style={{ fontSize: 11, padding:"6px 10px", borderRadius: 10, background: t.muted,
-                color: t.sub, border:"none", cursor:"pointer" }}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
 // ── Bottom Nav ──────────────────────────────────────────────────────
-function BottomNav({ t, dark }) {
+function BottomNav({ t }) {
   const router = useRouter();
   const tabs = [
-    { id:"coach",     icon:"💬", label:"Coach",     path:"/"          },
+    { id:"coach", icon:"💬", label:"Coach", path:"/" },
     { id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
-    { id:"profile",   icon:"⚙️", label:"Profile",   path:"/profile"   },
+    { id:"profile", icon:"⚙️", label:"Profile", path:"/profile" },
   ];
   return (
-    <div style={{ position:"fixed", bottom: 0, left:"50%", transform:"translateX(-50%)", width:"100%",
-      maxWidth: 430, background: t.surface, borderTop:`1px solid ${t.border}`,
+    <div style={{ position:"fixed", bottom: 0, left:"50%", transform:"translateX(-50%)",
+      width:"100%", maxWidth: 430, background: t.surface, borderTop:`1px solid ${t.border}`,
       display:"flex", zIndex: 100, paddingBottom:"env(safe-area-inset-bottom, 8px)" }}>
-      {tabs.map(tab => {
-        const active = tab.id === "dashboard";
-        return (
-          <button key={tab.id} onClick={() => router.push(tab.path)}
-            style={{ flex: 1, display:"flex", flexDirection:"column", alignItems:"center",
-              gap: 3, padding:"10px 0 4px", border:"none", background:"transparent", cursor:"pointer" }}>
-            <span style={{ fontSize: 20 }}>{tab.icon}</span>
-            <span style={{ fontSize: 10, fontWeight: active ? 700 : 500,
-              color: active ? "#2563eb" : t.sub, letterSpacing:".03em" }}>{tab.label}</span>
-            {active && <div style={{ width: 18, height: 2, background:"#2563eb", borderRadius: 9999 }} />}
-          </button>
-        );
-      })}
+      {tabs.map(tab => (
+        <button key={tab.id} onClick={() => router.push(tab.path)}
+          style={{ flex: 1, display:"flex", flexDirection:"column", alignItems:"center", gap: 3, padding:"10px 0 4px",
+          border:"none", background:"transparent", cursor:"pointer" }}>
+          <span style={{ fontSize: 20 }}>{tab.icon}</span>
+          <span style={{ fontSize: 10, fontWeight: tab.id === "dashboard" ? 700 : 500,
+            color: tab.id === "dashboard" ? "#2563eb" : t.sub, letterSpacing:".03em", fontFamily:"'DM Sans', sans-serif" }}>
+            {tab.label}
+          </span>
+          {tab.id === "dashboard" && (
+            <div style={{ width: 18, height: 2, background:"#2563eb", borderRadius: 9999 }} />
+          )}
+        </button>
+      ))}
     </div>
   );
 }
 
-// ── Main Component ──────────────────────────────────────────────────
+// ── Main Dashboard Component ────────────────────────────────────────
 export default function DashboardPage() {
-  const [dark, setDark]                 = useState(true);
-  const [selectedDate, setSelectedDate] = useState(getLocalDate());
-  const [loading, setLoading]           = useState(true);
-  const [userId, setUserId]             = useState(null);
-  const [userName, setUserName]         = useState("");
-  const [goal, setGoal]                 = useState({ calories:2800, protein:220, carbs:305, fat:78 });
-  const [planned, setPlanned]           = useState([]);
-  const [actual, setActual]             = useState([]);
-
+  const router = useRouter();
+  const [dark, setDark] = useState(true);
   const t = getTheme(dark);
 
-  useEffect(() => { const saved = localStorage.getItem("cura_dark"); if (saved !== null) setDark(saved === "true"); }, []);
-  useEffect(() => { localStorage.setItem("cura_dark", dark); }, [dark]);
-  useEffect(() => { const uid = localStorage.getItem("user_id"); const uname = localStorage.getItem("user_name"); if (uname) setUserName(uname); if (uid) setUserId(uid); }, []);
-  useEffect(() => { if (userId) load(userId, selectedDate); }, [userId, selectedDate]);
+  const [userId, setUserId] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(getLocalDate());
+  const [actual, setActual] = useState([]);
+  const [planned, setPlanned] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [goal, setGoal] = useState({ calories: 2800, protein: 220, carbs: 305, fat: 78 }); // Default fallback
 
-  async function load(uid, date) {
-    setLoading(true);
+  // ── Load Goals from Database ──
+  async function loadGoals(uid) {
     try {
-      const [g, p, a] = await Promise.all([
-        supabase.from("goals").select("*").eq("user_id", uid).single(),
-        supabase.from("planned_meals").select("*").eq("user_id", uid).eq("date", date).order("created_at", { ascending:true }),
-        supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", date).order("created_at", { ascending:true }),
-      ]);
-      if (g.data) setGoal(g.data);
-      setPlanned(p.data || []);
-      setActual(a.data  || []);
-    } catch(e) { console.error("Load error:", e); }
-    finally { setLoading(false); }
+      const { data } = await supabase
+        .from("goals")
+        .select("*")
+        .eq("user_id", uid)
+        .single();
+      
+      if (data) {
+        setGoal({
+          calories: data.calories || 2800,
+          protein: data.protein || 220,
+          carbs: data.carbs || 305,
+          fat: data.fat || 78,
+        });
+      }
+    } catch (e) {
+      console.log("Goals load error:", e);
+      // Keep default fallback if load fails
+    }
+  }
+
+  // ── Load Meals for Selected Date ──
+  async function loadMeals(uid, date) {
+    try {
+      setLoading(true);
+      const { data: actualData } = await supabase
+        .from("actual_meals")
+        .select("*")
+        .eq("user_id", uid)
+        .eq("date", date);
+
+      const { data: plannedData } = await supabase
+        .from("planned_meals")
+        .select("*")
+        .eq("user_id", uid)
+        .eq("date", date);
+
+      setActual(actualData || []);
+      setPlanned(plannedData || []);
+      setLoading(false);
+    } catch (e) {
+      console.log("Meals load error:", e);
+      setLoading(false);
+    }
+  }
+
+  // ── Initialize ──
+  useEffect(() => {
+    const uid = localStorage.getItem("user_id");
+    if (!uid) {
+      router.push("/signin");
+      return;
+    }
+    setUserId(uid);
+    loadGoals(uid); // Load user's actual goals
+    loadMeals(uid, getLocalDate());
+  }, [router]);
+
+  // ── Reload Meals When Date Changes ──
+  useEffect(() => {
+    if (userId) {
+      loadMeals(userId, selectedDate);
+    }
+  }, [selectedDate, userId]);
+
+  // ── Helpers ──
+  const actualTotals = sumMeals(actual);
+  const plannedTotals = sumMeals(planned);
+  const remaining = {
+    calories: Math.max(0, goal.calories - actualTotals.calories),
+    protein: Math.max(0, goal.protein - actualTotals.protein),
+    carbs: Math.max(0, goal.carbs - actualTotals.carbs),
+    fat: Math.max(0, goal.fat - actualTotals.fat),
+  };
+
+  async function deleteActual(id) {
+    await supabase.from("actual_meals").delete().eq("id", id);
+    if (userId) loadMeals(userId, selectedDate);
   }
 
   async function deletePlanned(id) {
     await supabase.from("planned_meals").delete().eq("id", id);
-    setPlanned(prev => prev.filter(m => m.id !== id));
-  }
-  async function deleteActual(id) {
-    await supabase.from("actual_meals").delete().eq("id", id);
-    setActual(prev => prev.filter(m => m.id !== id));
-  }
-  async function markEaten(meal) {
-    const uid = userId || localStorage.getItem("user_id");
-    const { error } = await supabase.from("actual_meals").insert([{
-      user_id: uid, date: selectedDate, meal_type: meal.meal_type,
-      food: meal.food, calories: meal.calories, protein: meal.protein,
-      carbs: meal.carbs, fat: meal.fat, servings: meal.servings || 1,
-    }]);
-    if (error) { console.error("Mark eaten:", error); return; }
-    await supabase.from("planned_meals").delete().eq("id", meal.id);
-    await load(uid, selectedDate);
-  }
-  async function updateServings(id, newServings, isActual) {
-    const table = isActual ? "actual_meals" : "planned_meals";
-    await supabase.from(table).update({ servings: newServings }).eq("id", id);
-    const setter = isActual ? setActual : setPlanned;
-    setter(prev => prev.map(m => m.id === id ? { ...m, servings: newServings } : m));
-  }
-  async function copyMeal(meal, targetDate) {
-    const uid = userId || localStorage.getItem("user_id");
-    const { error } = await supabase.from("planned_meals").insert([{
-      user_id: uid, date: targetDate, meal_type: meal.meal_type,
-      food: meal.food, calories: meal.calories, protein: meal.protein,
-      carbs: meal.carbs, fat: meal.fat, servings: meal.servings || 1,
-    }]);
-    if (error) { console.error("Copy meal:", error); alert("Could not copy meal."); return; }
-    if (targetDate === selectedDate) await load(uid, selectedDate);
+    if (userId) loadMeals(userId, selectedDate);
   }
 
-  const actualTotals  = sumMeals(actual);
-  const plannedTotals = sumMeals(planned);
-  const remaining = {
-    calories: Math.max(0, goal.calories - actualTotals.calories - plannedTotals.calories),
-    protein:  Math.max(0, goal.protein  - actualTotals.protein  - plannedTotals.protein),
-    carbs:    Math.max(0, goal.carbs    - actualTotals.carbs    - plannedTotals.carbs),
-    fat:      Math.max(0, goal.fat      - actualTotals.fat      - plannedTotals.fat),
-  };
+  async function markEaten(id) {
+    const meal = planned.find(m => m.id === id);
+    if (!meal) return;
+
+    await supabase.from("actual_meals").insert({
+      user_id: userId,
+      date: selectedDate,
+      meal_type: meal.meal_type,
+      food: meal.food,
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+      servings: meal.servings || 1,
+      source: "plan_marked_eaten",
+    });
+
+    await supabase.from("planned_meals").delete().eq("id", id);
+    if (userId) loadMeals(userId, selectedDate);
+  }
+
+  async function updateServings(id, servings, isActual) {
+    const table = isActual ? "actual_meals" : "planned_meals";
+    await supabase.from(table).update({ servings }).eq("id", id);
+    if (userId) loadMeals(userId, selectedDate);
+  }
+
+  async function copyMeal(meal, copyDate) {
+    await supabase.from("planned_meals").insert({
+      user_id: userId,
+      date: copyDate,
+      meal_type: meal.meal_type,
+      food: meal.food,
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+      servings: meal.servings || 1,
+      status: "suggested",
+    });
+
+    if (userId) loadMeals(userId, selectedDate);
+  }
 
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: ${t.bg}; }
+        * { box-sizing: border-box; }
+        body { background: #1c1c1e; font-family: 'DM Sans', sans-serif; }
       `}</style>
 
-      <div style={{ minHeight:"100vh", background: t.bg, fontFamily:"'DM Sans', sans-serif",
-        maxWidth: 430, margin:"0 auto", position:"relative", transition:"background .3s" }}>
-
+      <div style={{ display:"flex", flexDirection:"column", height:"100vh",
+        background: t.bg, fontFamily:"'DM Sans', sans-serif",
+        maxWidth: 430, margin:"0 auto" }}>
+        
         {/* ── Sticky Header ── */}
-        <div style={{ position:"sticky", top: 0, zIndex: 50, background: t.surface,
+        <div style={{ position:"sticky", top:0, zIndex:50, background: t.surface,
           borderBottom:`1px solid ${t.border}`, padding:"52px 20px 14px" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
             <div>
-              <p style={{ fontSize: 11, fontWeight: 700, color:"#2563eb", textTransform:"uppercase",
-                letterSpacing:".1em", margin: 0 }}>CURA</p>
-              <h1 style={{ fontSize: 20, fontWeight: 800, color: t.text, margin:"2px 0 0",
-                letterSpacing:"-.02em" }}>
-                {userName ? `${userName}'s day` : "Dashboard"}
-              </h1>
+              <p style={{ fontSize:11, fontWeight:700, color:"#2563eb",
+                textTransform:"uppercase", letterSpacing:".1em", margin:0 }}>CURA</p>
+              <h1 style={{ fontSize:20, fontWeight:800, color: t.text,
+                margin:"2px 0 0", letterSpacing:"-.02em" }}>Dashboard</h1>
             </div>
-            <div style={{ display:"flex", alignItems:"center", gap: 10 }}>
-              <span style={{ fontSize: 11, color: t.sub }}>{formatDateLabel(selectedDate)}</span>
-              <button onClick={() => setDark(!dark)}
-                style={{ width: 42, height: 24, borderRadius: 12,
-                  background: dark ? "#2563eb" : "#e5e5e5", border:"none",
-                  cursor:"pointer", position:"relative", transition:"background .3s", flexShrink: 0 }}>
-                <div style={{ position:"absolute", top: 3, left: dark ? 20 : 3, width: 18, height: 18,
-                  borderRadius:"50%", background:"#fff", transition:"left .3s",
-                  boxShadow:"0 1px 3px rgba(0,0,0,.3)" }} />
-              </button>
-            </div>
+            <button onClick={() => setDark(!dark)}
+              style={{ fontSize: 20, background:"transparent", border:"none",
+                cursor:"pointer", padding: "4px 8px", borderRadius: 8 }}>
+              {dark ? "☀️" : "🌙"}
+            </button>
           </div>
         </div>
 
-        <div style={{ padding:"14px 14px 100px" }}>
+        <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 100px",
+          display:"flex", flexDirection:"column", gap:12, background: t.bg }}>
 
           {/* ── Ring + Macros ── */}
           <div style={{ background: t.surface, borderRadius: 20, padding:"18px 14px 14px",
@@ -552,7 +574,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <BottomNav t={t} dark={dark} />
+        <BottomNav t={t} />
       </div>
 
       <style>{`
