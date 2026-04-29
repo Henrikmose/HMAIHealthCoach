@@ -120,7 +120,6 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
   const [showConfirm, setConfirm] = useState(false);
   const [showCopy, setCopy]       = useState(false);
 
-  // BUG 4 FIX: Separate display string from committed value so field can be cleared to retype
   const [servings, setServings]       = useState(meal.servings || 1);
   const [servingsInput, setServingsInput] = useState(String(meal.servings || 1));
 
@@ -136,7 +135,6 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
     await act(() => onDelete(meal.id)); setConfirm(false);
   }
 
-  // Allow field to be empty while typing — only commit on blur
   function handleServingsChange(v) {
     setServingsInput(v);
   }
@@ -144,11 +142,10 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
   async function handleServingsBlur() {
     const val = parseFloat(servingsInput);
     if (isNaN(val) || val <= 0) {
-      // Invalid — reset display to last valid value
       setServingsInput(String(servings));
       return;
     }
-    const rounded = Math.round(val * 4) / 4; // round to nearest 0.25
+    const rounded = Math.round(val * 4) / 4;
     setServings(rounded);
     setServingsInput(String(rounded));
     if (onUpdateServings) await onUpdateServings(meal.id, rounded, isActual);
@@ -157,6 +154,10 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
   async function handleCopy() {
     await act(() => onCopy({ ...meal, meal_type: copyType }, copyDate));
     setCopy(false);
+  }
+
+  async function handleMarkEaten() {
+    await act(() => onMarkEaten(meal.id));
   }
 
   const cal = Math.round((meal.calories||0) * servings);
@@ -184,8 +185,14 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
             <span style={{ fontSize: 11, color: t.sub }}>×</span>
           </div>
           <div style={{ display:"flex", gap: 4 }}>
-            {isActual ? (
+            {!isActual ? (
               <>
+                {/* PLANNED: Mark as Eaten */}
+                <button onClick={handleMarkEaten} disabled={busy}
+                  style={{ width: 24, height: 24, display:"flex", alignItems:"center", justifyContent:"center",
+                  background:"transparent", border:"none", color: "#10b981", cursor:"pointer", fontSize: 12 }}>✓</button>
+                
+                {/* PLANNED: Copy to another date */}
                 {showCopy ? (
                   <div style={{ position:"absolute", top: -120, right: 0, background: t.surface, border:`1px solid ${t.border}`,
                     borderRadius: 10, padding: 10, zIndex: 10, minWidth: 140 }}>
@@ -212,7 +219,38 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
                   style={{ width: 24, height: 24, display:"flex", alignItems:"center", justifyContent:"center",
                   background:"transparent", border:"none", color: "#2563eb", cursor:"pointer", fontSize: 12 }}>📋</button>
               </>
-            ) : null}
+            ) : (
+              <>
+                {/* EATEN: Copy to another date */}
+                {showCopy ? (
+                  <div style={{ position:"absolute", top: -120, right: 0, background: t.surface, border:`1px solid ${t.border}`,
+                    borderRadius: 10, padding: 10, zIndex: 10, minWidth: 140 }}>
+                    <div style={{ fontSize: 10, color: t.sub, marginBottom: 6 }}>Copy to:</div>
+                    <input type="date" value={copyDate} onChange={(e) => setCopyDate(e.target.value)}
+                      style={{ width:"100%", padding: "4px 6px", background: t.input, border:`1px solid ${t.border}`,
+                      borderRadius: 6, color: t.text, fontSize: 11, marginBottom: 6, fontFamily: "inherit" }} />
+                    <select value={copyType} onChange={(e) => setCopyType(e.target.value)}
+                      style={{ width:"100%", padding: "4px 6px", background: t.input, border:`1px solid ${t.border}`,
+                      borderRadius: 6, color: t.text, fontSize: 11, marginBottom: 6, fontFamily: "inherit" }}>
+                      <option value="breakfast">Breakfast</option>
+                      <option value="lunch">Lunch</option>
+                      <option value="dinner">Dinner</option>
+                      <option value="snack">Snack</option>
+                    </select>
+                    <button onClick={handleCopy} disabled={busy}
+                      style={{ width:"100%", padding: "6px", background: "#2563eb", color: "#fff",
+                      border:"none", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor:"pointer" }}>
+                      Copy
+                    </button>
+                  </div>
+                ) : null}
+                <button onClick={() => setCopy(!showCopy)} disabled={busy}
+                  style={{ width: 24, height: 24, display:"flex", alignItems:"center", justifyContent:"center",
+                  background:"transparent", border:"none", color: "#2563eb", cursor:"pointer", fontSize: 12 }}>📋</button>
+              </>
+            )}
+            
+            {/* DELETE - shows for both */}
             <button onClick={handleDelete} disabled={busy}
               style={{ width: 24, height: 24, display:"flex", alignItems:"center", justifyContent:"center",
               background: showConfirm ? "#dc2626" : "transparent", border:"none", color: showConfirm ? "#fff" : "#888",
@@ -267,7 +305,7 @@ export default function DashboardPage() {
   const [actual, setActual] = useState([]);
   const [planned, setPlanned] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [goal, setGoal] = useState({ calories: 2800, protein: 220, carbs: 305, fat: 78 }); // Default fallback
+  const [goal, setGoal] = useState({ calories: 2800, protein: 220, carbs: 305, fat: 78 });
 
   // ── Load Goals from Database ──
   async function loadGoals(uid) {
@@ -288,7 +326,6 @@ export default function DashboardPage() {
       }
     } catch (e) {
       console.log("Goals load error:", e);
-      // Keep default fallback if load fails
     }
   }
 
@@ -317,117 +354,119 @@ export default function DashboardPage() {
     }
   }
 
-  // ── Initialize ──
+  // ── Auth Setup ──
   useEffect(() => {
-    const uid = localStorage.getItem("user_id");
-    if (!uid) {
-      router.push("/signin");
-      return;
+    async function initAuth() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+        await loadGoals(user.id);
+        await loadMeals(user.id, getLocalDate());
+      }
     }
-    setUserId(uid);
-    loadGoals(uid); // Load user's actual goals
-    loadMeals(uid, getLocalDate());
-  }, [router]);
+    initAuth();
+  }, []);
 
-  // ── Reload Meals When Date Changes ──
+  // ── Load Meals on Date Change ──
   useEffect(() => {
     if (userId) {
       loadMeals(userId, selectedDate);
     }
   }, [selectedDate, userId]);
 
-  // ── Helpers ──
+  // ── Delete Actual Meal ──
+  async function deleteActual(mealId) {
+    await supabase.from("actual_meals").delete().eq("id", mealId);
+    setActual(a => a.filter(m => m.id !== mealId));
+  }
+
+  // ── Delete Planned Meal ──
+  async function deletePlanned(mealId) {
+    await supabase.from("planned_meals").delete().eq("id", mealId);
+    setPlanned(p => p.filter(m => m.id !== mealId));
+  }
+
+  // ── Mark Planned as Eaten ──
+  async function markEaten(mealId) {
+    const meal = planned.find(m => m.id === mealId);
+    if (!meal) return;
+
+    await supabase.from("planned_meals").delete().eq("id", mealId);
+    await supabase.from("actual_meals").insert({
+      user_id: userId,
+      food: meal.food,
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+      servings: meal.servings || 1,
+      meal_type: meal.meal_type,
+      date: selectedDate,
+    });
+
+    setPlanned(p => p.filter(m => m.id !== mealId));
+    setActual(a => [...a, { ...meal, id: Math.random(), date: selectedDate }]);
+  }
+
+  // ── Update Servings ──
+  async function updateServings(mealId, newServings, isActualMeal) {
+    const table = isActualMeal ? "actual_meals" : "planned_meals";
+    await supabase.from(table).update({ servings: newServings }).eq("id", mealId);
+    
+    if (isActualMeal) {
+      setActual(a => a.map(m => m.id === mealId ? { ...m, servings: newServings } : m));
+    } else {
+      setPlanned(p => p.map(m => m.id === mealId ? { ...m, servings: newServings } : m));
+    }
+  }
+
+  // ── Copy Meal to Another Date ──
+  async function copyMeal(meal, newDate) {
+    const table = meal.id && actual.find(m => m.id === meal.id) ? "actual_meals" : "planned_meals";
+    
+    await supabase.from(table).insert({
+      user_id: userId,
+      food: meal.food,
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+      servings: meal.servings || 1,
+      meal_type: meal.meal_type,
+      date: newDate,
+    });
+
+    if (newDate === selectedDate) {
+      await loadMeals(userId, selectedDate);
+    }
+  }
+
+  // ── Calculate Totals ──
   const actualTotals = sumMeals(actual);
   const plannedTotals = sumMeals(planned);
   const remaining = {
-    calories: Math.max(0, goal.calories - actualTotals.calories),
-    protein: Math.max(0, goal.protein - actualTotals.protein),
-    carbs: Math.max(0, goal.carbs - actualTotals.carbs),
-    fat: Math.max(0, goal.fat - actualTotals.fat),
+    calories: Math.max(0, goal.calories - actualTotals.calories - plannedTotals.calories),
+    protein: Math.max(0, goal.protein - actualTotals.protein - plannedTotals.protein),
+    carbs: Math.max(0, goal.carbs - actualTotals.carbs - plannedTotals.carbs),
+    fat: Math.max(0, goal.fat - actualTotals.fat - plannedTotals.fat),
   };
-
-  async function deleteActual(id) {
-    await supabase.from("actual_meals").delete().eq("id", id);
-    if (userId) loadMeals(userId, selectedDate);
-  }
-
-  async function deletePlanned(id) {
-    await supabase.from("planned_meals").delete().eq("id", id);
-    if (userId) loadMeals(userId, selectedDate);
-  }
-
-  async function markEaten(id) {
-    const meal = planned.find(m => m.id === id);
-    if (!meal) return;
-
-    await supabase.from("actual_meals").insert({
-      user_id: userId,
-      date: selectedDate,
-      meal_type: meal.meal_type,
-      food: meal.food,
-      calories: meal.calories,
-      protein: meal.protein,
-      carbs: meal.carbs,
-      fat: meal.fat,
-      servings: meal.servings || 1,
-      source: "plan_marked_eaten",
-    });
-
-    await supabase.from("planned_meals").delete().eq("id", id);
-    if (userId) loadMeals(userId, selectedDate);
-  }
-
-  async function updateServings(id, servings, isActual) {
-    const table = isActual ? "actual_meals" : "planned_meals";
-    await supabase.from(table).update({ servings }).eq("id", id);
-    if (userId) loadMeals(userId, selectedDate);
-  }
-
-  async function copyMeal(meal, copyDate) {
-    await supabase.from("planned_meals").insert({
-      user_id: userId,
-      date: copyDate,
-      meal_type: meal.meal_type,
-      food: meal.food,
-      calories: meal.calories,
-      protein: meal.protein,
-      carbs: meal.carbs,
-      fat: meal.fat,
-      servings: meal.servings || 1,
-      status: "suggested",
-    });
-
-    if (userId) loadMeals(userId, selectedDate);
-  }
 
   return (
     <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-        * { box-sizing: border-box; }
-        body { background: #1c1c1e; font-family: 'DM Sans', sans-serif; }
-      `}</style>
+      <div style={{ width: "100%", height: "100vh", maxWidth: 430, margin:"0 auto",
+        background: t.bg, display:"flex", flexDirection:"column", fontFamily:"'DM Sans', sans-serif" }}>
 
-      <div style={{ display:"flex", flexDirection:"column", height:"100vh",
-        background: t.bg, fontFamily:"'DM Sans', sans-serif",
-        maxWidth: 430, margin:"0 auto" }}>
-        
-        {/* ── Sticky Header ── */}
-        <div style={{ position:"sticky", top:0, zIndex:50, background: t.surface,
-          borderBottom:`1px solid ${t.border}`, padding:"52px 20px 14px" }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-            <div>
-              <p style={{ fontSize:11, fontWeight:700, color:"#2563eb",
-                textTransform:"uppercase", letterSpacing:".1em", margin:0 }}>CURA</p>
-              <h1 style={{ fontSize:20, fontWeight:800, color: t.text,
-                margin:"2px 0 0", letterSpacing:"-.02em" }}>Dashboard</h1>
-            </div>
-            <button onClick={() => setDark(!dark)}
-              style={{ fontSize: 20, background:"transparent", border:"none",
-                cursor:"pointer", padding: "4px 8px", borderRadius: 8 }}>
-              {dark ? "☀️" : "🌙"}
-            </button>
+        {/* ── Header ── */}
+        <div style={{ background: t.surface, borderBottom:`1px solid ${t.border}`,
+          padding:"14px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top: 0, zIndex: 50 }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color:"#2563eb", letterSpacing:".1em", textTransform:"uppercase" }}>CURA</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: t.text, lineHeight: 1.1 }}>Dashboard</div>
           </div>
+          <button onClick={() => setDark(!dark)}
+            style={{ background:"transparent", border:"none", cursor:"pointer", fontSize: 20 }}>
+            {dark ? "☀️" : "🌙"}
+          </button>
         </div>
 
         <div style={{ flex:1, overflowY:"auto", padding:"16px 16px 100px",
