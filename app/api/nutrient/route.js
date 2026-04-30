@@ -1,11 +1,11 @@
 // /app/api/nutrient/route.js
 // Nutrient preferences: GET all, POST add, GET progress
 
-import {
-  getNutrientPreferences,
-  addNutrientPreference,
-  calculateNutrientStatus,
-} from "../lib/apiHelpers";
+//import {
+ // getNutrientPreferences,
+ // addNutrientPreference,
+ // calculateNutrientStatus,
+//} from "../lib/apiHelpers";
 
 import {
   validateNutrientPreferenceInput,

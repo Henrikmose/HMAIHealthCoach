@@ -1,10 +1,10 @@
 // /app/api/dietary/route.js
 // Dietary preferences: GET, POST/PATCH update
 
-import {
-  getDietaryPreferences,
-  updateDietaryPreferences,
-} from "../lib/apiHelpers";
+//import {
+ // getDietaryPreferences,
+//  updateDietaryPreferences,
+//} from "../lib/apiHelpers";
 
 import {
   validateDietaryPreferencesInput,

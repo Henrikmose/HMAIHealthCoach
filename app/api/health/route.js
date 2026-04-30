@@ -1,10 +1,10 @@
 // /app/api/health/route.js
 // Health conditions endpoint: GET all, POST add
 
-import {
-  getHealthConditions,
-  addHealthCondition,
-} from "../lib/apiHelpers";
+//import {
+ // getHealthConditions,
+  //addHealthCondition,
+//} from "../lib/apiHelpers";
 
 import {
   validateHealthConditionInput,
