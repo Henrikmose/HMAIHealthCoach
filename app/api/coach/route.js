@@ -41,6 +41,60 @@ function isVeryActive(activityLevel) {
   return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
 }
 
+// ── DATE PARSING (Option A: Load correct date's meals) ──
+function parseDateFromMessage(message, referenceDate) {
+  if (!message) return referenceDate;
+  
+  const lower = message.toLowerCase();
+  const now = new Date(referenceDate + "T12:00:00");
+  
+  // TODAY / TONIGHT
+  if (/\btoday\b|\btonight\b|this evening/.test(lower)) {
+    return referenceDate;
+  }
+  
+  // TOMORROW
+  if (/\btomorrow\b|next day/.test(lower)) {
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,"0")}-${String(tomorrow.getDate()).padStart(2,"0")}`;
+  }
+  
+  // YESTERDAY
+  if (/\byesterday\b|last day|day before/.test(lower)) {
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    return `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,"0")}-${String(yesterday.getDate()).padStart(2,"0")}`;
+  }
+  
+  // NEXT [DAY] (next Monday, next Friday, etc)
+  const nextDayMatch = lower.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i);
+  if (nextDayMatch) {
+    const targetDayName = nextDayMatch[1].toLowerCase();
+    const dayMap = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
+    const targetDay = dayMap[targetDayName];
+    
+    const next = new Date(now);
+    const daysAhead = targetDay - next.getDay();
+    if (daysAhead <= 0) next.setDate(next.getDate() + daysAhead + 7);
+    else next.setDate(next.getDate() + daysAhead);
+    
+    return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}-${String(next.getDate()).padStart(2,"0")}`;
+  }
+  
+  // SPECIFIC DATES: "Dec 15", "12/15", "December 15", etc
+  const dateMatch = lower.match(/(\d{1,2})[\/-](\d{1,2})/); // MM/DD or M/D
+  if (dateMatch) {
+    const month = parseInt(dateMatch[1]);
+    const day = parseInt(dateMatch[2]);
+    const year = now.getFullYear();
+    return `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+  }
+  
+  // DEFAULT: return reference date (today)
+  return referenceDate;
+}
+
 // ── FIX #1: Meal saving function - prevents duplicates ──
 async function saveMealWithoutDuplicates(userId, meal, date) {
   try {
@@ -416,11 +470,20 @@ export async function POST(req) {
   try {
     const body = await req.json();
     const { message, context, history = [], userId, localHour, localDate: clientDate, images } = body;
-    const image = images?.[0] || null; // backward compat for single image checks
+    const image = images?.[0] || null;
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
     const hour = typeof localHour === "number" ? localHour : new Date().getHours();
-    const today = getLocalDate(clientDate);
+    const todayDate = getLocalDate(clientDate);
+    
+    // ── OPTION A: Parse date from user message ──
+    // If user says "tomorrow", "next Monday", "Dec 15", load that date's meals
+    // Otherwise default to today
+    const targetDate = parseDateFromMessage(message, todayDate);
+    const isPlanning = /plan|schedule|suggest|meal|breakfast|lunch|dinner|snack/i.test(message);
+    const isHistorical = /yesterday|last|week ago|month ago/.test(message);
+    
+    console.log(`[DATE PARSE] Today: ${todayDate} | Target: ${targetDate} | Planning: ${isPlanning} | Historical: ${isHistorical}`);
 
     // ── Load profile ──
     let userName = "there", currentWeight = null, targetWeight = null;
@@ -449,25 +512,25 @@ export async function POST(req) {
       if (g) goal = { calories: g.calories||2200, protein: g.protein||180, carbs: g.carbs||220, fat: g.fat||70 };
     } catch (e) { console.log("Goals error:", e.message); }
 
-    // ── FIX #3: Load ONLY today's ACTUAL meals (eaten, not planned) ──
+    // ── FIX #3: Load ONLY target date's ACTUAL meals (eaten, not planned) ──
     let todayMeals = [];
     try {
       const { data: meals } = await supabase
         .from("actual_meals")
         .select("*")
         .eq("user_id", activeUserId)
-        .eq("date", today); // CRITICAL: Must filter by date to prevent wrong totals
+        .eq("date", targetDate); // CRITICAL: Load targetDate, not today
       todayMeals = meals || [];
     } catch (e) { console.log("Meals error:", e.message); }
 
-    // ── Load today's planned meals (separate, for planning context only) ──
+    // ── Load target date's planned meals (separate, for planning context only) ──
     let todayPlanned = [];
     try {
       const { data: planned } = await supabase
         .from("planned_meals")
         .select("*")
         .eq("user_id", activeUserId)
-        .eq("date", today);
+        .eq("date", targetDate); // CRITICAL: Load targetDate, not today
       todayPlanned = planned || [];
     } catch (e) { console.log("Planned meals error:", e.message); }
 
@@ -659,15 +722,38 @@ Use: 🎯 📊 👉 ✅ ⚖️ 💬 🧠 👍 🔍
 Avoid: 🎉 😊 🔥 💪
 
 ══════════════════════════════════════════
-PERSONALITY
+CONVERSATION FLOW — MEAL LOCKING
 ══════════════════════════════════════════
-- Like a knowledgeable friend who truly knows nutrition — not a data entry tool
-- Lead with strategy and insight, then back it up with specifics
-- Confident and direct — give clear recommendations, not vague suggestions
-- Proactive — name the danger zones, flag the key moments, think ahead
-- Honest — push back on unrealistic goals, say "Real Talk" when needed
-- Specific to THIS person's day — reference their actual events, schedule, habits
-- Never generic — "eat healthy" or "stay hydrated" is not coaching
+CRITICAL: Once a meal is logged or added to plan, it is LOCKED — do not mention it again unless user brings it up.
+
+FLOW:
+1. User mentions meal A: "I had a sandwich for lunch"
+2. Coach evaluates meal A, shows breakdown
+3. Coach asks: "Want me to log this?"
+4. User confirms: "Yes"
+5. Coach: "Logged as eaten." ✅ MEAL A IS NOW LOCKED
+6. Coach MUST MOVE ON → do not mention sandwich again
+7. Next response should address NEW topic or plan remaining meals
+
+WHEN PLANNING REST OF DAY:
+- Calculate based on: Goal - (actual eaten meals) - (already planned meals)
+- Show remaining macros for remaining meals
+- Do NOT re-discuss meals already logged/planned
+- Build plan only from available calories left
+
+STALE MEAL RULE:
+If user asks "what about yesterday's dinner?" — that's stale, ignore it.
+If user says "earlier I had...", that meal is now locked if logged.
+Only reference meals from TODAY if they're still in "planned" status.
+
+CONVERSATION EXAMPLE (CORRECT):
+User: "I had a prosciutto sandwich for lunch"
+Coach: [evaluates sandwich] Want me to log it?
+User: Yes
+Coach: Logged. You've eaten 1100 cal so far. You have 900 cal remaining for dinner and snacks. What are you thinking for dinner?
+Coach: [NEVER mentions sandwich again in this conversation thread]
+User: Planning dinner
+Coach: [builds dinner plan using 900 remaining cal, NOT talking about sandwich]
 
 ══════════════════════════════════════════
 USER PROFILE
@@ -680,6 +766,10 @@ ${currentWeight  ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
 ${targetWeight   ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
 ${healthConditions ? `Health Notes: ${healthConditions}` : ""}
 Local Time: ${hour}:00 (${timeOfDay})
+
+MEAL PLANNING DATE:
+${targetDate !== todayDate ? `Planning for: ${targetDate} (NOT today ${todayDate})` : `Planning for: TODAY (${targetDate})`}
+CRITICAL: Only reference meals from ${targetDate}. Ignore other dates' conversation.
 
 DAILY TARGETS — SET BY USER, DO NOT CHANGE:
 Calories: ${goal.calories} | Protein: ${goal.protein}g | Carbs: ${goal.carbs}g | Fat: ${goal.fat}g
@@ -702,20 +792,24 @@ The ${goal.calories} target ALREADY reflects their goals — it is the number th
 When telling the user how many calories they have left, ALWAYS calculate from ${goal.calories}.
 Example: if ${userName} has eaten ${totals.calories} cal, they have ${remaining.calories} cal remaining — not any other number.
 
-TODAY'S INTAKE (${today}):
+⚠️ CRITICAL — USE DATABASE NUMBERS, NOT CONVERSATION MATH ⚠️
+These are the ONLY numbers you should use. Do NOT add up meals from conversation.
+The database already calculated these from ${targetDate}'s actual logged meals:
+
+${targetDate === todayDate ? "TODAY'S INTAKE" : `INTAKE FOR ${targetDate}`} (${targetDate}) — FROM DATABASE:
 Calories: ${totals.calories}/${goal.calories} (${Math.round((totals.calories/goal.calories)*100)}% — ${remaining.calories} remaining)
 Protein:  ${totals.protein}/${goal.protein}g (${Math.round((totals.protein/goal.protein)*100)}%)
 Carbs:    ${totals.carbs}/${goal.carbs}g (${Math.round((totals.carbs/goal.carbs)*100)}%)
 Fat:      ${totals.fat}/${goal.fat}g (${Math.round((totals.fat/goal.fat)*100)}%)
 
-MEALS LOGGED TODAY:
+MEALS LOGGED ${targetDate === todayDate ? "TODAY" : `ON ${targetDate}`}:
 ${mealsSummary}
 
-PLANNED MEALS TODAY:
+PLANNED MEALS ${targetDate === todayDate ? "TODAY" : `ON ${targetDate}`}:
 ${plannedSummary}
 ${hasPlannedMeals ? `
 CRITICAL — PLANNED MEALS ALREADY EXIST:
-The user already has ${todayPlanned.length} planned meal(s) for today: ${plannedTypes.join(", ")}.
+The user already has ${todayPlanned.length} planned meal(s) for ${targetDate === todayDate ? "today" : targetDate}: ${plannedTypes.join(", ")}.
 - Do NOT re-generate or re-suggest these meals
 - Do NOT ask if they want to plan the rest of the day if all major meals are planned
 - Do NOT end with "Reply yes to save this plan" for meals that are already saved
@@ -857,8 +951,16 @@ Clear signals to plan it: "plan me sushi", "I want sushi for lunch", "add sushi 
 Clear signals it's a restaurant: "going out for sushi", "sushi restaurant", "sushi date", "sushi dinner out"
 Ambiguous — always ask: "sushi lunch scheduled", "having sushi", "sushi at 12:30"
 
-COACHING CONTEXT (do NOT add to plan total):
-${userName} has eaten ${totals.calories} cal today. Plan totals are for the planned meals only.
+COACHING CONTEXT — WHAT'S EATEN VS PLANNED:
+${userName} has EATEN today: ${totals.calories} cal | ${totals.protein}g P | ${totals.carbs}g C | ${totals.fat}g F
+${userName} has PLANNED: ${todayPlanned.length > 0 ? sumMeals(todayPlanned).calories : 0} cal (if any)
+
+REMAINING FOR REST OF DAY (use this for planning):
+${remaining.calories} cal | ${remaining.protein}g P | ${remaining.carbs}g C | ${remaining.fat}g F
+
+CRITICAL: When planning remaining meals, ONLY use the REMAINING macros, not the daily goal.
+Do NOT re-discuss meals already logged/planned — they are locked.
+Example: "You've eaten 1100 cal. You have 900 cal left for dinner and snacks."
 
 ══════════════════════════════════════════
 CALORIE TARGETS FOR MEAL PLANS
@@ -1039,8 +1141,10 @@ This lets the user see what each food contributed without breaking the parser.
 
 AFTER LOGGING — ALWAYS include:
 1. The meal logged with single total numbers (new item only if adding to existing)
-2. 📊 Updated totals: [sum]/${goal.calories} cal ([pct]%) | [sum]g protein | [sum]g carbs | [sum]g fat
-3. ONLY DB baseline + this new meal — nothing else
+2. 📊 Updated totals: FORMULA: (Database baseline ${totals.calories}cal) + (this new meal's calories) = NEW TOTAL / ${goal.calories}cal (%)
+   Example: User had eaten 500cal. Logs 400cal meal. Show: 500 + 400 = 900/2000 cal (45%)
+   NEVER add up from conversation. ONLY use database baseline (${totals.calories}cal) + this meal
+3. Show only: total calories | total protein | total carbs | total fat (single numbers each)
 4. 👉 One coaching tip
 5. IF 300+ calories remaining: suggest a specific next meal or snack`;
     }
