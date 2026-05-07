@@ -41,6 +41,65 @@ function isVeryActive(activityLevel) {
   return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
 }
 
+// ── FIX #1: Meal saving function - prevents duplicates ──
+async function saveMealWithoutDuplicates(userId, meal, date) {
+  try {
+    // Check if meal already exists
+    const { data: existing, error: checkError } = await supabase
+      .from("actual_meals")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("date", date)
+      .eq("food", meal.food)
+      .single();
+
+    if (existing?.id) {
+      // UPDATE existing meal instead of creating duplicate
+      const { error: updateError } = await supabase
+        .from("actual_meals")
+        .update({
+          calories: meal.calories,
+          protein: meal.protein,
+          carbs: meal.carbs,
+          fat: meal.fat,
+          meal_type: meal.meal_type,
+          servings: meal.servings || 1,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existing.id);
+
+      if (updateError) throw updateError;
+      console.log(`[MEAL SAVE] Updated existing: ${meal.food}`);
+      return { success: true, action: "updated", id: existing.id };
+    } else {
+      // CREATE new meal only if it doesn't exist
+      const { data: newMeal, error: insertError } = await supabase
+        .from("actual_meals")
+        .insert({
+          user_id: userId,
+          food: meal.food,
+          calories: meal.calories,
+          protein: meal.protein,
+          carbs: meal.carbs,
+          fat: meal.fat,
+          meal_type: meal.meal_type || "snack",
+          date: date,
+          servings: meal.servings || 1,
+          created_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (insertError) throw insertError;
+      console.log(`[MEAL SAVE] Created new: ${meal.food}`);
+      return { success: true, action: "created", id: newMeal?.id };
+    }
+  } catch (error) {
+    console.error("[MEAL SAVE ERROR]", error);
+    return { success: false, error: error.message };
+  }
+}
+
 // ── Food Database Lookup ──────────────────────────────────────────
 
 // Parse food items and quantities from a message
@@ -390,19 +449,25 @@ export async function POST(req) {
       if (g) goal = { calories: g.calories||2200, protein: g.protein||180, carbs: g.carbs||220, fat: g.fat||70 };
     } catch (e) { console.log("Goals error:", e.message); }
 
-    // ── Load today's meals ──
+    // ── FIX #3: Load ONLY today's ACTUAL meals (eaten, not planned) ──
     let todayMeals = [];
     try {
       const { data: meals } = await supabase
-        .from("actual_meals").select("*").eq("user_id", activeUserId).eq("date", today);
+        .from("actual_meals")
+        .select("*")
+        .eq("user_id", activeUserId)
+        .eq("date", today); // CRITICAL: Must filter by date to prevent wrong totals
       todayMeals = meals || [];
     } catch (e) { console.log("Meals error:", e.message); }
 
-    // ── Load today's planned meals ──
+    // ── Load today's planned meals (separate, for planning context only) ──
     let todayPlanned = [];
     try {
       const { data: planned } = await supabase
-        .from("planned_meals").select("*").eq("user_id", activeUserId).eq("date", today);
+        .from("planned_meals")
+        .select("*")
+        .eq("user_id", activeUserId)
+        .eq("date", today);
       todayPlanned = planned || [];
     } catch (e) { console.log("Planned meals error:", e.message); }
 
@@ -412,7 +477,8 @@ export async function POST(req) {
       ? todayPlanned.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal)`).join("\n")
       : "No planned meals yet";
 
-    const totals = sumMeals(todayMeals);
+    // ── FIX #4: Calculate totals from ACTUAL meals only ──
+    const totals = sumMeals(todayMeals); // Only actual_meals, not planned
     const remaining = {
       calories: Math.max(0, goal.calories - totals.calories),
       protein:  Math.max(0, goal.protein  - totals.protein),
@@ -1433,6 +1499,31 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     const reply = completion.choices[0].message.content;
     console.log("=== RESPONSE ===\n", reply);
 
+    // ── FIX #2: Single confirmation logic - check if user confirmed and meal should be logged ──
+    let mealLogged = false;
+    if (dbFoodResults && dbFoodResults.length > 0 && message.toLowerCase().includes('yes')) {
+      if (reply.toLowerCase().includes('log') || context?.type === 'food_log') {
+        try {
+          const firstFood = dbFoodResults[0];
+          const saveResult = await saveMealWithoutDuplicates(activeUserId, {
+            food: firstFood.food,
+            calories: firstFood.calories,
+            protein: firstFood.protein,
+            carbs: firstFood.carbs,
+            fat: firstFood.fat,
+            meal_type: "snack", // infer from context if possible
+          }, today);
+
+          if (saveResult.success) {
+            mealLogged = true;
+            console.log(`[SUCCESS] Meal saved: ${firstFood.food}`);
+          }
+        } catch (e) {
+          console.error("[MEAL LOG ERROR]", e);
+        }
+      }
+    }
+
     try {
       await supabase.from("ai_messages").insert([{
         user_id: activeUserId, message: message || "", response: reply,
@@ -1440,7 +1531,23 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
       }]);
     } catch (e) { console.log("Save error:", e); }
 
-    return Response.json({ reply });
+    // ── FIX #4: Return correct totals so UI can display them ──
+    return Response.json({ 
+      reply,
+      totals: {
+        calories: Math.round(totals.calories),
+        protein: Math.round(totals.protein),
+        carbs: Math.round(totals.carbs),
+        fat: Math.round(totals.fat), // THIS IS THE CORRECT FAT NUMBER
+      },
+      remaining: {
+        calories: Math.round(remaining.calories),
+        protein: Math.round(remaining.protein),
+        carbs: Math.round(remaining.carbs),
+        fat: Math.round(remaining.fat),
+      },
+      mealLogged,
+    });
 
   } catch (error) {
     console.error("AI ERROR:", error);
