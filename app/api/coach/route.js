@@ -4,154 +4,154 @@ import { createClient } from "@supabase/supabase-js";
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+process.env.NEXT_PUBLIC_SUPABASE_URL,
+process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 function getLocalDate(localDate) {
-  if (localDate) return localDate;
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+if (localDate) return localDate;
+const now = new Date();
+return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
 }
 
 function sumMeals(meals) {
-  return (meals || []).reduce(
-    (t, m) => {
-      const s = Number(m.servings || 1);
-      return {
-        calories: t.calories + Number(m.calories||0) * s,
-        protein:  t.protein  + Number(m.protein||0)  * s,
-        carbs:    t.carbs    + Number(m.carbs||0)    * s,
-        fat:      t.fat      + Number(m.fat||0)      * s,
-      };
-    },
-    { calories: 0, protein: 0, carbs: 0, fat: 0 }
-  );
+return (meals || []).reduce(
+(t, m) => {
+const s = Number(m.servings || 1);
+return {
+calories: t.calories + Number(m.calories||0) * s,
+protein: t.protein + Number(m.protein||0) * s,
+carbs: t.carbs + Number(m.carbs||0) * s,
+fat: t.fat + Number(m.fat||0) * s,
+};
+},
+{ calories: 0, protein: 0, carbs: 0, fat: 0 }
+);
 }
 
 function extractWeightFromMessage(message) {
-  if (!message) return null;
-  const match = message.match(/(\d+)\s*(pounds?|lbs?|kg|kilograms?)/i);
-  if (match) return { amount: parseInt(match[1]), unit: match[2].toLowerCase().startsWith("k") ? "kg" : "lbs" };
-  return null;
+if (!message) return null;
+const match = message.match(/(\d+)\s*(pounds?|lbs?|kg|kilograms?)/i);
+if (match) return { amount: parseInt(match[1]), unit: match[2].toLowerCase().startsWith("k") ? "kg" : "lbs" };
+return null;
 }
 
 function isVeryActive(activityLevel) {
-  const level = (activityLevel || "").toLowerCase();
-  return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
+const level = (activityLevel || "").toLowerCase();
+return level.includes("very") || level.includes("extra") || level.includes("athlete") || level.includes("high");
 }
 
 // ── DATE PARSING (Option A: Load correct date's meals) ──
 function parseDateFromMessage(message, referenceDate) {
-  if (!message) return referenceDate;
-  
-  const lower = message.toLowerCase();
-  const now = new Date(referenceDate + "T12:00:00");
-  
-  // TODAY / TONIGHT
-  if (/\btoday\b|\btonight\b|this evening/.test(lower)) {
-    return referenceDate;
-  }
-  
-  // TOMORROW
-  if (/\btomorrow\b|next day/.test(lower)) {
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,"0")}-${String(tomorrow.getDate()).padStart(2,"0")}`;
-  }
-  
-  // YESTERDAY
-  if (/\byesterday\b|last day|day before/.test(lower)) {
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    return `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,"0")}-${String(yesterday.getDate()).padStart(2,"0")}`;
-  }
-  
-  // NEXT [DAY] (next Monday, next Friday, etc)
-  const nextDayMatch = lower.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i);
-  if (nextDayMatch) {
-    const targetDayName = nextDayMatch[1].toLowerCase();
-    const dayMap = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
-    const targetDay = dayMap[targetDayName];
-    
-    const next = new Date(now);
-    const daysAhead = targetDay - next.getDay();
-    if (daysAhead <= 0) next.setDate(next.getDate() + daysAhead + 7);
-    else next.setDate(next.getDate() + daysAhead);
-    
-    return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}-${String(next.getDate()).padStart(2,"0")}`;
-  }
-  
-  // SPECIFIC DATES: "Dec 15", "12/15", "December 15", etc
-  const dateMatch = lower.match(/(\d{1,2})[\/-](\d{1,2})/); // MM/DD or M/D
-  if (dateMatch) {
-    const month = parseInt(dateMatch[1]);
-    const day = parseInt(dateMatch[2]);
-    const year = now.getFullYear();
-    return `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
-  }
-  
-  // DEFAULT: return reference date (today)
-  return referenceDate;
+if (!message) return referenceDate;
+
+const lower = message.toLowerCase();
+const now = new Date(referenceDate + "T12:00:00");
+
+// TODAY / TONIGHT
+if (/\btoday\b|\btonight\b|this evening/.test(lower)) {
+return referenceDate;
+}
+
+// TOMORROW
+if (/\btomorrow\b|next day/.test(lower)) {
+const tomorrow = new Date(now);
+tomorrow.setDate(tomorrow.getDate() + 1);
+return `${tomorrow.getFullYear()}-${String(tomorrow.getMonth()+1).padStart(2,"0")}-${String(tomorrow.getDate()).padStart(2,"0")}`;
+}
+
+// YESTERDAY
+if (/\byesterday\b|last day|day before/.test(lower)) {
+const yesterday = new Date(now);
+yesterday.setDate(yesterday.getDate() - 1);
+return `${yesterday.getFullYear()}-${String(yesterday.getMonth()+1).padStart(2,"0")}-${String(yesterday.getDate()).padStart(2,"0")}`;
+}
+
+// NEXT [DAY] (next Monday, next Friday, etc)
+const nextDayMatch = lower.match(/next\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i);
+if (nextDayMatch) {
+const targetDayName = nextDayMatch[1].toLowerCase();
+const dayMap = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 0 };
+const targetDay = dayMap[targetDayName];
+
+const next = new Date(now);
+const daysAhead = targetDay - next.getDay();
+if (daysAhead <= 0) next.setDate(next.getDate() + daysAhead + 7);
+else next.setDate(next.getDate() + daysAhead);
+
+return `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,"0")}-${String(next.getDate()).padStart(2,"0")}`;
+}
+
+// SPECIFIC DATES: "Dec 15", "12/15", "December 15", etc
+const dateMatch = lower.match(/(\d{1,2})[\/-](\d{1,2})/); // MM/DD or M/D
+if (dateMatch) {
+const month = parseInt(dateMatch[1]);
+const day = parseInt(dateMatch[2]);
+const year = now.getFullYear();
+return `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+}
+
+// DEFAULT: return reference date (today)
+return referenceDate;
 }
 
 // ── FIX #1: Meal saving function - prevents duplicates ──
 async function saveMealWithoutDuplicates(userId, meal, date) {
-  try {
-    // Check if meal already exists
-    const { data: existing, error: checkError } = await supabase
-      .from("actual_meals")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("date", date)
-      .eq("food", meal.food)
-      .single();
+try {
+// Check if meal already exists
+const { data: existing, error: checkError } = await supabase
+.from("actual_meals")
+.select("id")
+.eq("user_id", userId)
+.eq("date", date)
+.eq("food", meal.food)
+.single();
 
-    if (existing?.id) {
-      // UPDATE existing meal instead of creating duplicate
-      const { error: updateError } = await supabase
-        .from("actual_meals")
-        .update({
-          calories: meal.calories,
-          protein: meal.protein,
-          carbs: meal.carbs,
-          fat: meal.fat,
-          meal_type: meal.meal_type,
-          servings: meal.servings || 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", existing.id);
+if (existing?.id) {
+// UPDATE existing meal instead of creating duplicate
+const { error: updateError } = await supabase
+.from("actual_meals")
+.update({
+calories: meal.calories,
+protein: meal.protein,
+carbs: meal.carbs,
+fat: meal.fat,
+meal_type: meal.meal_type,
+servings: meal.servings || 1,
+updated_at: new Date().toISOString(),
+})
+.eq("id", existing.id);
 
-      if (updateError) throw updateError;
-      console.log(`[MEAL SAVE] Updated existing: ${meal.food}`);
-      return { success: true, action: "updated", id: existing.id };
-    } else {
-      // CREATE new meal only if it doesn't exist
-      const { data: newMeal, error: insertError } = await supabase
-        .from("actual_meals")
-        .insert({
-          user_id: userId,
-          food: meal.food,
-          calories: meal.calories,
-          protein: meal.protein,
-          carbs: meal.carbs,
-          fat: meal.fat,
-          meal_type: meal.meal_type || "snack",
-          date: date,
-          servings: meal.servings || 1,
-          created_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+if (updateError) throw updateError;
+console.log(`[MEAL SAVE] Updated existing: ${meal.food}`);
+return { success: true, action: "updated", id: existing.id };
+} else {
+// CREATE new meal only if it doesn't exist
+const { data: newMeal, error: insertError } = await supabase
+.from("actual_meals")
+.insert({
+user_id: userId,
+food: meal.food,
+calories: meal.calories,
+protein: meal.protein,
+carbs: meal.carbs,
+fat: meal.fat,
+meal_type: meal.meal_type || "snack",
+date: date,
+servings: meal.servings || 1,
+created_at: new Date().toISOString(),
+})
+.select()
+.single();
 
-      if (insertError) throw insertError;
-      console.log(`[MEAL SAVE] Created new: ${meal.food}`);
-      return { success: true, action: "created", id: newMeal?.id };
-    }
-  } catch (error) {
-    console.error("[MEAL SAVE ERROR]", error);
-    return { success: false, error: error.message };
-  }
+if (insertError) throw insertError;
+console.log(`[MEAL SAVE] Created new: ${meal.food}`);
+return { success: true, action: "created", id: newMeal?.id };
+}
+} catch (error) {
+console.error("[MEAL SAVE ERROR]", error);
+return { success: false, error: error.message };
+}
 }
 
 // ── Food Database Lookup ──────────────────────────────────────────
@@ -159,260 +159,260 @@ async function saveMealWithoutDuplicates(userId, meal, date) {
 // Parse food items and quantities from a message
 // Returns array of { food, amount, unit }
 function parseFoodItems(message) {
-  if (!message) return [];
-  const items = [];
+if (!message) return [];
+const items = [];
 
-  // Split by common separators: "and", "plus", "with", "also", "&", ","
-  // This allows parsing "2 eggs and half avocado" as two separate items
-  const separators = /\s+(?:and|plus|with|also|&)\s+|,\s+/i;
-  const parts = message.split(separators);
-  
-  // Patterns for each part: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
-  const patterns = [
-    // number + unit + food: "8oz chicken breast", "1 cup oatmeal"
-    /^(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?(.+?)$/i,
-    // number + food (no unit): "2 eggs", "3 chicken wings"
-    /^(\d+\.?\d*)\s+(?:of\s+)?(.+?)$/i,
-    // descriptor + food: "a banana", "half avocado", "whole chicken breast"
-    /^(?:a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?(.+?)$/i,
-  ];
+// Split by common separators: "and", "plus", "with", "also", "&", ","
+// This allows parsing "2 eggs and half avocado" as two separate items
+const separators = /\s+(?:and|plus|with|also|&)\s+|,\s+/i;
+const parts = message.split(separators);
 
-  // Parse each part separately
-  parts.forEach(part => {
-    part = part.trim();
-    if (part.length < 2) return;
+// Patterns for each part: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
+const patterns = [
+// number + unit + food: "8oz chicken breast", "1 cup oatmeal"
+/^(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?(.+?)$/i,
+// number + food (no unit): "2 eggs", "3 chicken wings"
+/^(\d+\.?\d*)\s+(?:of\s+)?(.+?)$/i,
+// descriptor + food: "a banana", "half avocado", "whole chicken breast"
+/^(?:a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?(.+?)$/i,
+];
 
-    let found = false;
+// Parse each part separately
+parts.forEach(part => {
+part = part.trim();
+if (part.length < 2) return;
 
-    // Try each pattern
-    for (const pattern of patterns) {
-      const match = part.match(pattern);
-      if (match) {
-        let amount, unit, food;
-        
-        if (match[1] && !isNaN(match[1])) {
-          // Pattern 1 or 2: has numeric amount
-          amount = parseFloat(match[1]);
-          unit = match[2] ? match[2].toLowerCase() : 'serving';
-          food = (match[3] || match[2] || part).trim();
-        } else {
-          // Pattern 3: descriptor like "half" or "a"
-          amount = match[1] === 'half' ? 0.5 : 1;
-          unit = 'serving';
-          food = match[2] || part;
-          food = food.trim();
-        }
-        
-        items.push({ amount, unit, food });
-        found = true;
-        break;
-      }
-    }
+let found = false;
 
-    // If no pattern matched, treat entire part as food
-    if (!found && part.length > 2) {
-      items.push({ amount: 1, unit: 'serving', food: part });
-    }
-  });
+// Try each pattern
+for (const pattern of patterns) {
+const match = part.match(pattern);
+if (match) {
+let amount, unit, food;
 
-  return items;
+if (match[1] && !isNaN(match[1])) {
+// Pattern 1 or 2: has numeric amount
+amount = parseFloat(match[1]);
+unit = match[2] ? match[2].toLowerCase() : 'serving';
+food = (match[3] || match[2] || part).trim();
+} else {
+// Pattern 3: descriptor like "half" or "a"
+amount = match[1] === 'half' ? 0.5 : 1;
+unit = 'serving';
+food = match[2] || part;
+food = food.trim();
+}
+
+items.push({ amount, unit, food });
+found = true;
+break;
+}
+}
+
+// If no pattern matched, treat entire part as food
+if (!found && part.length > 2) {
+items.push({ amount: 1, unit: 'serving', food: part });
+}
+});
+
+return items;
 }
 
 // Look up a food in the USDA database
 async function lookupFood(foodName) {
-  if (!foodName) return null;
-  try {
-    // Full text search — finds closest match
-    const { data, error } = await supabase
-      .from('foods')
-      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-      .textSearch('name', foodName.split(' ').join(' & '), { type: 'websearch' })
-      .limit(1);
+if (!foodName) return null;
+try {
+// Full text search — finds closest match
+const { data, error } = await supabase
+.from('foods')
+.select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
+.textSearch('name', foodName.split(' ').join(' & '), { type: 'websearch' })
+.limit(1);
 
-    if (!error && data && data.length > 0) return data[0];
+if (!error && data && data.length > 0) return data[0];
 
-    // Fallback: ILIKE search
-    const { data: data2 } = await supabase
-      .from('foods')
-      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-      .ilike('name', `%${foodName}%`)
-      .limit(1);
+// Fallback: ILIKE search
+const { data: data2 } = await supabase
+.from('foods')
+.select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
+.ilike('name', `%${foodName}%`)
+.limit(1);
 
-    return data2?.[0] || null;
-  } catch (e) {
-    console.log('Food lookup error:', e.message);
-    return null;
-  }
+return data2?.[0] || null;
+} catch (e) {
+console.log('Food lookup error:', e.message);
+return null;
+}
 }
 
 // Convert amount + unit to grams
 async function convertToGrams(amount, unit, foodId) {
-  const unitLower = unit.toLowerCase().replace(/s$/, ''); // remove plural
+const unitLower = unit.toLowerCase().replace(/s$/, ''); // remove plural
 
-  // 1. Try food-specific conversion first
-  if (foodId) {
-    const { data } = await supabase
-      .from('food_specific_conversions')
-      .select('grams_per_unit')
-      .eq('food_id', foodId)
-      .ilike('unit_name', `%${unitLower}%`)
-      .limit(1);
-    if (data?.[0]) return amount * data[0].grams_per_unit;
-  }
+// 1. Try food-specific conversion first
+if (foodId) {
+const { data } = await supabase
+.from('food_specific_conversions')
+.select('grams_per_unit')
+.eq('food_id', foodId)
+.ilike('unit_name', `%${unitLower}%`)
+.limit(1);
+if (data?.[0]) return amount * data[0].grams_per_unit;
+}
 
-  // 2. Standard weight/volume conversion
-  const { data } = await supabase
-    .from('unit_conversions')
-    .select('grams_per_unit, ml_per_unit, unit_category')
-    .eq('unit_name', unitLower)
-    .limit(1);
+// 2. Standard weight/volume conversion
+const { data } = await supabase
+.from('unit_conversions')
+.select('grams_per_unit, ml_per_unit, unit_category')
+.eq('unit_name', unitLower)
+.limit(1);
 
-  if (data?.[0]) {
-    if (data[0].grams_per_unit) return amount * data[0].grams_per_unit;
-    // Volume — use water density (1g/ml) as default
-    if (data[0].ml_per_unit) return amount * data[0].ml_per_unit;
-  }
+if (data?.[0]) {
+if (data[0].grams_per_unit) return amount * data[0].grams_per_unit;
+// Volume — use water density (1g/ml) as default
+if (data[0].ml_per_unit) return amount * data[0].ml_per_unit;
+}
 
-  // 3. Can't convert — return null, AI will estimate
-  return null;
+// 3. Can't convert — return null, AI will estimate
+return null;
 }
 
 // Calculate macros from DB food + grams
 function calcMacros(food, grams) {
-  const factor = grams / 100;
-  return {
-    calories: Math.round(food.calories_per_100g * factor),
-    protein:  Math.round(food.protein_per_100g  * factor * 10) / 10,
-    carbs:    Math.round(food.carbs_per_100g     * factor * 10) / 10,
-    fat:      Math.round(food.fat_per_100g       * factor * 10) / 10,
-  };
+const factor = grams / 100;
+return {
+calories: Math.round(food.calories_per_100g * factor),
+protein: Math.round(food.protein_per_100g * factor * 10) / 10,
+carbs: Math.round(food.carbs_per_100g * factor * 10) / 10,
+fat: Math.round(food.fat_per_100g * factor * 10) / 10,
+};
 }
 
 // Main lookup — tries DB, returns null if not found
 async function lookupFoodMacros(message) {
-  const items = parseFoodItems(message);
-  if (items.length === 0) return null;
+const items = parseFoodItems(message);
+if (items.length === 0) return null;
 
-  const results = [];
-  for (const item of items.slice(0, 5)) { // max 5 foods per message
-    const food = await lookupFood(item.food);
-    if (!food) continue;
+const results = [];
+for (const item of items.slice(0, 5)) { // max 5 foods per message
+const food = await lookupFood(item.food);
+if (!food) continue;
 
-    const grams = await convertToGrams(item.amount, item.unit, food.id);
-    if (!grams) continue;
+const grams = await convertToGrams(item.amount, item.unit, food.id);
+if (!grams) continue;
 
-    const macros = calcMacros(food, grams);
-    results.push({
-      food: food.name,
-      amount: item.amount,
-      unit: item.unit,
-      grams: Math.round(grams),
-      ...macros,
-      source: 'usda_db',
-    });
-  }
+const macros = calcMacros(food, grams);
+results.push({
+food: food.name,
+amount: item.amount,
+unit: item.unit,
+grams: Math.round(grams),
+...macros,
+source: 'usda_db',
+});
+}
 
-  return results.length > 0 ? results : null;
+return results.length > 0 ? results : null;
 }
 
 function classifyEventType(text) {
-  const lower = text.toLowerCase();
-  if (/hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket/.test(lower)) return "sport";
-  if (/gym|workout|training|crossfit|weightlift|lifting|exercise|run|running|cycling|swim|yoga|pilates|hiit|cardio/.test(lower)) return "workout";
-  if (/hike|hiking|bike ride|marathon|race|triathlon|spartan|10k|5k|half marathon|full marathon/.test(lower)) return "endurance";
-  if (/dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|lunch date|sushi|italian|chinese|mexican|thai|indian|steakhouse|dinner out|dinner tonight|dinner tomorrow|dinner at/.test(lower)) return "social_dining";
-  if (/drinks|bar|cocktail|wine|beer|happy hour/.test(lower)) return "social_drinks";
-  if (/bbq|barbecue|cookout|potluck|picnic/.test(lower)) return "social_food";
-  if (/long day|work event|conference|meeting|presentation|interview|all.?day/.test(lower)) return "work";
-  if (/travel|flight|airport|long drive|road trip/.test(lower)) return "travel";
-  return null;
+const lower = text.toLowerCase();
+if (/hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket/.test(lower)) return "sport";
+if (/gym|workout|training|crossfit|weightlift|lifting|exercise|run|running|cycling|swim|yoga|pilates|hiit|cardio/.test(lower)) return "workout";
+if (/hike|hiking|bike ride|marathon|race|triathlon|spartan|10k|5k|half marathon|full marathon/.test(lower)) return "endurance";
+if (/dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|lunch date|sushi|italian|chinese|mexican|thai|indian|steakhouse|dinner out|dinner tonight|dinner tomorrow|dinner at/.test(lower)) return "social_dining";
+if (/drinks|bar|cocktail|wine|beer|happy hour/.test(lower)) return "social_drinks";
+if (/bbq|barbecue|cookout|potluck|picnic/.test(lower)) return "social_food";
+if (/long day|work event|conference|meeting|presentation|interview|all.?day/.test(lower)) return "work";
+if (/travel|flight|airport|long drive|road trip/.test(lower)) return "travel";
+return null;
 }
 
 function isPhysicalEvent(type) {
-  return ["sport", "workout", "endurance"].includes(type);
+return ["sport", "workout", "endurance"].includes(type);
 }
 
 function isSocialEvent(type) {
-  return ["social_dining", "social_drinks", "social_food"].includes(type);
+return ["social_dining", "social_drinks", "social_food"].includes(type);
 }
 
 function parseHour(hourStr, ampm) {
-  let h = parseInt(hourStr);
-  const ap = (ampm || "").toLowerCase();
-  if (ap === "pm" && h < 12) h += 12;
-  if (ap === "am" && h === 12) h = 0;
-  if (!ap && h < 6) h += 12; // assume pm for ambiguous small numbers
-  return h;
+let h = parseInt(hourStr);
+const ap = (ampm || "").toLowerCase();
+if (ap === "pm" && h < 12) h += 12;
+if (ap === "am" && h === 12) h = 0;
+if (!ap && h < 6) h += 12; // assume pm for ambiguous small numbers
+return h;
 }
 
 // Extract ALL events from text with their times
 // Returns array sorted by hour: [{ type, hour, label, isTomorrow }]
 function extractAllEvents(text) {
-  if (!text) return [];
-  const lower = text.toLowerCase();
-  const events = [];
+if (!text) return [];
+const lower = text.toLowerCase();
+const events = [];
 
-  // Patterns to find time + event combinations
-  // e.g. "workout at 7am", "tennis at 5pm", "dinner at 8"
-  const timeEventPatterns = [
-    // "X at TIME" pattern
-    /((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date)[^.!?]*?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi,
-    // "TIME + X" pattern  
-    /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date))/gi,
-  ];
+// Patterns to find time + event combinations
+// e.g. "workout at 7am", "tennis at 5pm", "dinner at 8"
+const timeEventPatterns = [
+// "X at TIME" pattern
+/((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date)[^.!?]*?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi,
+// "TIME + X" pattern
+/at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date))/gi,
+];
 
-  // Try pattern 1: "event at time"
-  let match;
-  const re1 = /(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|dinner|sushi|italian|chinese|mexican|thai|indian|steakhouse|restaurant|going out|eating out|birthday|wedding|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|potluck|picnic|lunch)\b[^.!?]{0,30}?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
-  
-  while ((match = re1.exec(lower)) !== null) {
-    const eventText = match[1].trim();
-    const h = parseHour(match[2], match[4]);
-    const type = classifyEventType(eventText);
-    if (type && h >= 0 && h <= 23) {
-      const isTomorrow = lower.includes("tomorrow");
-      events.push({ type, hour: h, label: eventText.trim(), isTomorrow });
-    }
-  }
+// Try pattern 1: "event at time"
+let match;
+const re1 = /(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|dinner|sushi|italian|chinese|mexican|thai|indian|steakhouse|restaurant|going out|eating out|birthday|wedding|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|potluck|picnic|lunch)\b[^.!?]{0,30}?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
 
-  // Try pattern 2: "at time for/event"  
-  const re2 = /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|10k|5k|golf|cycling|dinner|restaurant|brunch|drinks|bar|party|bbq)\b)/gi;
-  
-  while ((match = re2.exec(lower)) !== null) {
-    const h = parseHour(match[1], match[3]);
-    const type = classifyEventType(match[4]);
-    if (type && h >= 0 && h <= 23) {
-      const isTomorrow = lower.includes("tomorrow");
-      // Avoid duplicates at same hour
-      if (!events.find(e => e.hour === h && e.type === type)) {
-        events.push({ type, hour: h, label: match[4].trim(), isTomorrow });
-      }
-    }
-  }
+while ((match = re1.exec(lower)) !== null) {
+const eventText = match[1].trim();
+const h = parseHour(match[2], match[4]);
+const type = classifyEventType(eventText);
+if (type && h >= 0 && h <= 23) {
+const isTomorrow = lower.includes("tomorrow");
+events.push({ type, hour: h, label: eventText.trim(), isTomorrow });
+}
+}
 
-  // Sort by hour
-  events.sort((a, b) => a.hour - b.hour);
-  return events;
+// Try pattern 2: "at time for/event"
+const re2 = /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?(\b(?:workout|gym|run|running|swim|swimming|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|10k|5k|golf|cycling|dinner|restaurant|brunch|drinks|bar|party|bbq)\b)/gi;
+
+while ((match = re2.exec(lower)) !== null) {
+const h = parseHour(match[1], match[3]);
+const type = classifyEventType(match[4]);
+if (type && h >= 0 && h <= 23) {
+const isTomorrow = lower.includes("tomorrow");
+// Avoid duplicates at same hour
+if (!events.find(e => e.hour === h && e.type === type)) {
+events.push({ type, hour: h, label: match[4].trim(), isTomorrow });
+}
+}
+}
+
+// Sort by hour
+events.sort((a, b) => a.hour - b.hour);
+return events;
 }
 
 // Check if we have events but are missing times — need to ask user
 function eventsMissingTimes(text) {
-  const lower = text.toLowerCase();
-  const hasEventKeywords = /workout|gym|tennis|hockey|soccer|football|basketball|marathon|race|triathlon|golf|yoga|run|swim|dinner party|dinner date|restaurant|going out|eating out|birthday|wedding|brunch|drinks|bar/.test(lower);
-  const hasTimeKeywords = /\d+\s*(am|pm)|at\s+\d+|\d+:\d+|morning|afternoon|evening|night/.test(lower);
-  return hasEventKeywords && !hasTimeKeywords;
+const lower = text.toLowerCase();
+const hasEventKeywords = /workout|gym|tennis|hockey|soccer|football|basketball|marathon|race|triathlon|golf|yoga|run|swim|dinner party|dinner date|restaurant|going out|eating out|birthday|wedding|brunch|drinks|bar/.test(lower);
+const hasTimeKeywords = /\d+\s*(am|pm)|at\s+\d+|\d+:\d+|morning|afternoon|evening|night/.test(lower);
+return hasEventKeywords && !hasTimeKeywords;
 }
 
 // Build the day strategy from multiple events
 function buildMultiEventStrategy(events, currentHour, goal) {
-  if (events.length === 0) return "";
+if (events.length === 0) return "";
 
-  const physicalEvents = events.filter(e => isPhysicalEvent(e.type));
-  const socialEvents = events.filter(e => isSocialEvent(e.type));
-  const hasPhysical = physicalEvents.length > 0;
-  const hasSocial = socialEvents.length > 0;
+const physicalEvents = events.filter(e => isPhysicalEvent(e.type));
+const socialEvents = events.filter(e => isSocialEvent(e.type));
+const hasPhysical = physicalEvents.length > 0;
+const hasSocial = socialEvents.length > 0;
 
-  let strategy = `
+let strategy = `
 MULTI-EVENT DAY DETECTED — ${events.length} event(s):
 ${events.map(e => `- ${e.type.toUpperCase()} at ${e.hour}:00 (${e.label})`).join("\n")}
 
@@ -421,34 +421,34 @@ CALORIE TARGET: Aim for 85-95% of ${goal.calories} cal (${Math.round(goal.calori
 MEAL TIMELINE RULES:
 `;
 
-  // Add rules for each event in order
-  events.forEach((event, idx) => {
-    const prevEvent = idx > 0 ? events[idx - 1] : null;
-    const nextEvent = idx < events.length - 1 ? events[idx + 1] : null;
+// Add rules for each event in order
+events.forEach((event, idx) => {
+const prevEvent = idx > 0 ? events[idx - 1] : null;
+const nextEvent = idx < events.length - 1 ? events[idx + 1] : null;
 
-    if (isPhysicalEvent(event.type)) {
-      // Smart timing logic - don't suggest eating at 3-4am for early events!
-      let preEventAdvice;
-      if (event.hour <= 8) {
-        // Early morning event (7am, 8am)
-        preEventAdvice = "30-60 minutes before OR eat after: light snack (banana, toast) 200-300 cal OR have your main meal after the workout";
-      } else if (event.hour <= 12) {
-        // Late morning event  
-        preEventAdvice = "1-2 hours before: light snack — HIGH carbs, LOW fat (banana, rice cakes) 250-350 cal";
-      } else {
-        // Afternoon/evening event
-        preEventAdvice = "2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal) 300-400 cal";
-      }
-      
-      strategy += `
+if (isPhysicalEvent(event.type)) {
+// Smart timing logic - don't suggest eating at 3-4am for early events!
+let preEventAdvice;
+if (event.hour <= 8) {
+// Early morning event (7am, 8am)
+preEventAdvice = "30-60 minutes before OR eat after: light snack (banana, toast) 200-300 cal OR have your main meal after the workout";
+} else if (event.hour <= 12) {
+// Late morning event
+preEventAdvice = "1-2 hours before: light snack — HIGH carbs, LOW fat (banana, rice cakes) 250-350 cal";
+} else {
+// Afternoon/evening event
+preEventAdvice = "2-3 hours before: pre-event Snack — HIGH carbs, LOW fat, easy to digest (banana, rice cakes, oatmeal) 300-400 cal";
+}
+
+strategy += `
 ${event.type.toUpperCase()} at ${event.hour}:00 (${event.label}):
 - ${preEventAdvice}
 - Within 1 hour after: recovery meal — HIGH protein + carbs
 ${nextEvent && isSocialEvent(nextEvent.type) ? `- NOTE: Social event follows at ${nextEvent.hour}:00 — recovery meal should be lighter since social eating comes next` : "- Include a full Dinner block for post-event recovery"}
 `;
-    } else if (isSocialEvent(event.type)) {
-      const eventCalBudget = Math.round(goal.calories * 0.45);
-      strategy += `
+} else if (isSocialEvent(event.type)) {
+const eventCalBudget = Math.round(goal.calories * 0.45);
+strategy += `
 SOCIAL EVENT at ${event.hour}:00 (${event.label}):
 ${prevEvent && isPhysicalEvent(prevEvent.type) ? `- Follows physical event at ${prevEvent.hour}:00 — budget remaining calories for this meal` : "- Keep meals before this event LIGHT (lean protein + veg)"}
 - DO NOT create a meal block for this event — unknown menu
@@ -464,10 +464,10 @@ When you're there, take a photo of the menu and I'll help you pick the best opti
 
 - Budget approximately ${eventCalBudget} cal for this event — state this number explicitly
 `;
-    }
-  });
+}
+});
 
-  strategy += `
+strategy += `
 MEAL BLOCK STRUCTURE FOR THIS DAY:
 Only create blocks for meals YOU control (before events or between events).
 For social dining events: plain text guidance only, NO meal block.
@@ -475,183 +475,190 @@ For physical events: include Dinner block for post-event recovery UNLESS a socia
 Total planned meals should add up to 85-95% of ${goal.calories} cal.
 `;
 
-  return strategy;
+return strategy;
 }
 
 function isRestaurantOrPartyMeal(text) {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return /dinner party|dinner date|restaurant|going out|eating out|party|wedding|birthday|someone('s| else| is).*cook|friend.*cook|family.*cook|steak dinner|sushi|italian|chinese|mexican|thai|indian|at a (restaurant|bar|pub|place)/.test(lower);
+if (!text) return false;
+const lower = text.toLowerCase();
+return /dinner party|dinner date|restaurant|going out|eating out|party|wedding|birthday|someone('s| else| is).*cook|friend.*cook|family.*cook|steak dinner|sushi|italian|chinese|mexican|thai|indian|at a (restaurant|bar|pub|place)/.test(lower);
 }
 
 function getUnloggedMealPrompt(hour, nothingLogged) {
-  if (!nothingLogged) return null;
-  if (hour >= 7  && hour < 11) return "It's morning and nothing is logged yet. Ask: 'Have you had breakfast yet? If so, what did you have? I want to make sure I account for it before planning your day.'";
-  if (hour >= 11 && hour < 14) return "It's late morning/lunchtime and nothing is logged. Ask: 'Before I plan your meals, what have you eaten so far today? Even a rough idea helps me give you accurate advice.'";
-  if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't have any food logged for today. What have you eaten so far? Knowing this is important before I suggest anything for the rest of the day.'";
-  if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see anything logged today. What did you eat earlier? I want to factor that in before suggesting anything for tonight.'";
-  return null;
+if (!nothingLogged) return null;
+if (hour >= 7 && hour < 11) return "It's morning and nothing is logged yet. Ask: 'Have you had breakfast yet? If so, what did you have? I want to make sure I account for it before planning your day.'";
+if (hour >= 11 && hour < 14) return "It's late morning/lunchtime and nothing is logged. Ask: 'Before I plan your meals, what have you eaten so far today? Even a rough idea helps me give you accurate advice.'";
+if (hour >= 14 && hour < 18) return "It's afternoon and nothing is logged. Ask: 'I don't have any food logged for today. What have you eaten so far? Knowing this is important before I suggest anything for the rest of the day.'";
+if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see anything logged today. What did you eat earlier? I want to factor that in before suggesting anything for tonight.'";
+return null;
 }
 
 export async function POST(req) {
-  try {
-    const body = await req.json();
-    const { message, context, history = [], userId, localHour, localDate: clientDate, images } = body;
-    const image = images?.[0] || null;
+try {
+const body = await req.json();
+const { message, context, history = [], userId, localHour, localDate: clientDate, images } = body;
+const image = images?.[0] || null;
 
-    const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
-    const hour = typeof localHour === "number" ? localHour : new Date().getHours();
-    const todayDate = getLocalDate(clientDate);
-    
-    // ── OPTION A: Parse date from user message ──
-    // If user says "tomorrow", "next Monday", "Dec 15", load that date's meals
-    // Otherwise default to today
-    const targetDate = parseDateFromMessage(message, todayDate);
-    const isPlanning = /plan|schedule|suggest|meal|breakfast|lunch|dinner|snack/i.test(message);
-    const isHistorical = /yesterday|last|week ago|month ago/.test(message);
-    
-    console.log(`[DATE PARSE] Today: ${todayDate} | Target: ${targetDate} | Planning: ${isPlanning} | Historical: ${isHistorical}`);
+// IMPORTANT: Coach and Dashboard MUST use the same real userId.
+// Never fall back to a hardcoded user, or the coach may read/write a different dashboard.
+if (!userId) {
+return Response.json(
+{ reply: "I could not load your dashboard because the user ID was missing. Please sign out and back in, then try again." },
+{ status: 400 }
+);
+}
+const activeUserId = userId;
+const hour = typeof localHour === "number" ? localHour : new Date().getHours();
+const todayDate = getLocalDate(clientDate);
 
-    // ── Load profile ──
-    let userName = "there", currentWeight = null, targetWeight = null;
-    let weightUnit = "lbs", activityLevel = "moderately active", goalType = "fat_loss";
-    let healthConditions = "";
+// ── OPTION A: Parse date from user message ──
+// If user says "tomorrow", "next Monday", "Dec 15", load that date's meals
+// Otherwise default to today
+const targetDate = parseDateFromMessage(message, todayDate);
+const isPlanning = /plan|schedule|suggest|meal|breakfast|lunch|dinner|snack/i.test(message);
+const isHistorical = /yesterday|last|week ago|month ago/.test(message);
 
-    try {
-      const { data: profile } = await supabase
-        .from("user_profiles").select("*").eq("user_id", activeUserId).single();
-      if (profile) {
-        userName         = profile.name || "there";
-        currentWeight    = profile.current_weight;
-        targetWeight     = profile.target_weight;
-        weightUnit       = profile.weight_unit || "lbs";
-        activityLevel    = profile.activity_level || "moderately active";
-        goalType         = profile.goal_type || "fat_loss";
-        healthConditions = profile.health_conditions || "";
-      }
-    } catch (e) { console.log("Profile error:", e.message); }
+console.log(`[DATE PARSE] Today: ${todayDate} | Target: ${targetDate} | Planning: ${isPlanning} | Historical: ${isHistorical}`);
 
-    // ── Load goals ──
-    let goal = { calories: 2200, protein: 180, carbs: 220, fat: 70 };
-    try {
-      const { data: g } = await supabase
-        .from("goals").select("*").eq("user_id", activeUserId).single();
-      if (g) goal = { calories: g.calories||2200, protein: g.protein||180, carbs: g.carbs||220, fat: g.fat||70 };
-    } catch (e) { console.log("Goals error:", e.message); }
+// ── Load profile ──
+let userName = "there", currentWeight = null, targetWeight = null;
+let weightUnit = "lbs", activityLevel = "moderately active", goalType = "fat_loss";
+let healthConditions = "";
 
-    // ── FIX #3: Load ONLY target date's ACTUAL meals (eaten, not planned) ──
-    let todayMeals = [];
-    try {
-      const { data: meals } = await supabase
-        .from("actual_meals")
-        .select("*")
-        .eq("user_id", activeUserId)
-        .eq("date", targetDate); // CRITICAL: Load targetDate, not today
-      todayMeals = meals || [];
-    } catch (e) { console.log("Meals error:", e.message); }
+try {
+const { data: profile } = await supabase
+.from("user_profiles").select("*").eq("user_id", activeUserId).single();
+if (profile) {
+userName = profile.name || "there";
+currentWeight = profile.current_weight;
+targetWeight = profile.target_weight;
+weightUnit = profile.weight_unit || "lbs";
+activityLevel = profile.activity_level || "moderately active";
+goalType = profile.goal_type || "fat_loss";
+healthConditions = profile.health_conditions || "";
+}
+} catch (e) { console.log("Profile error:", e.message); }
 
-    // ── Load target date's planned meals (separate, for planning context only) ──
-    let todayPlanned = [];
-    try {
-      const { data: planned } = await supabase
-        .from("planned_meals")
-        .select("*")
-        .eq("user_id", activeUserId)
-        .eq("date", targetDate); // CRITICAL: Load targetDate, not today
-      todayPlanned = planned || [];
-    } catch (e) { console.log("Planned meals error:", e.message); }
+// ── Load goals ──
+let goal = { calories: 2200, protein: 180, carbs: 220, fat: 70 };
+try {
+const { data: g } = await supabase
+.from("goals").select("*").eq("user_id", activeUserId).single();
+if (g) goal = { calories: g.calories||2200, protein: g.protein||180, carbs: g.carbs||220, fat: g.fat||70 };
+} catch (e) { console.log("Goals error:", e.message); }
 
-    const plannedTypes = [...new Set(todayPlanned.map(m => m.meal_type))];
-    const hasPlannedMeals = todayPlanned.length > 0;
-    const plannedSummary = todayPlanned.length > 0
-      ? todayPlanned.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal)`).join("\n")
-      : "No planned meals yet";
+// ── FIX #3: Load ONLY target date's ACTUAL meals (eaten, not planned) ──
+let todayMeals = [];
+try {
+const { data: meals } = await supabase
+.from("actual_meals")
+.select("*")
+.eq("user_id", activeUserId)
+.eq("date", targetDate); // CRITICAL: Load targetDate, not today
+todayMeals = meals || [];
+} catch (e) { console.log("Meals error:", e.message); }
 
-    // ── FIX #4: Calculate totals from ACTUAL meals only ──
-    const totals = sumMeals(todayMeals); // Only actual_meals, not planned
-    const remaining = {
-      calories: Math.max(0, goal.calories - totals.calories),
-      protein:  Math.max(0, goal.protein  - totals.protein),
-      carbs:    Math.max(0, goal.carbs    - totals.carbs),
-      fat:      Math.max(0, goal.fat      - totals.fat),
-    };
+// ── Load target date's planned meals (separate, for planning context only) ──
+let todayPlanned = [];
+try {
+const { data: planned } = await supabase
+.from("planned_meals")
+.select("*")
+.eq("user_id", activeUserId)
+.eq("date", targetDate); // CRITICAL: Load targetDate, not today
+todayPlanned = planned || [];
+} catch (e) { console.log("Planned meals error:", e.message); }
 
-    // ── DB Food Lookup (for food_log AND meal_planning) ──
-    let dbFoodResults = null;
-    if (context?.type === "food_log" || context?.type === "meal_planning") {
-      const lookupMsg = context.followUpMessage || context.originalMessage || message;
-      dbFoodResults = await lookupFoodMacros(lookupMsg);
-      if (dbFoodResults) {
-        console.log(`=== DB FOOD LOOKUP: found ${dbFoodResults.length} food(s) ===`);
-        dbFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
-      } else {
-        console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
-      }
-    }
+const plannedTypes = [...new Set(todayPlanned.map(m => m.meal_type))];
+const hasPlannedMeals = todayPlanned.length > 0;
+const plannedSummary = todayPlanned.length > 0
+? todayPlanned.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal)`).join("\n")
+: "No planned meals yet";
 
-    const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
-    const nothingEatenYet = todayMeals.length === 0;
-    const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
+// ── FIX #4: Calculate totals from ACTUAL meals only ──
+const totals = sumMeals(todayMeals); // Only actual_meals, not planned
+const remaining = {
+calories: Math.max(0, goal.calories - totals.calories),
+protein: Math.max(0, goal.protein - totals.protein),
+carbs: Math.max(0, goal.carbs - totals.carbs),
+fat: Math.max(0, goal.fat - totals.fat),
+};
 
-    // Only scan recent conversation for events (last 6 messages + current)
-    // This prevents stale events from old testing/conversations
-    const recentHistory = history.slice(-6);
-    const allText = [...recentHistory.map(h => h.content || ""), message || ""].join(" ");
-    
-    // Multi-event detection
-    const events = extractAllEvents(allText);
-    const hasMultipleEvents = events.length > 1;
-    const hasAnyEvent = events.length > 0;
-    const hasPhysicalEvents = events.some(e => isPhysicalEvent(e.type));
-    const hasSocialEvents = events.some(e => isSocialEvent(e.type));
-    const hasRestaurantMeal = isRestaurantOrPartyMeal(allText);
-    const missingEventTimes = eventsMissingTimes(allText);
+// ── DB Food Lookup (for food_log AND meal_planning) ──
+let dbFoodResults = null;
+if (context?.type === "food_log" || context?.type === "meal_planning") {
+const lookupMsg = context.followUpMessage || context.originalMessage || message;
+dbFoodResults = await lookupFoodMacros(lookupMsg);
+if (dbFoodResults) {
+console.log(`=== DB FOOD LOOKUP: found ${dbFoodResults.length} food(s) ===`);
+dbFoodResults.forEach(r => console.log(` ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
+} else {
+console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
+}
+}
 
-    // Legacy single-event vars for backward compat with prompt sections
-    const primaryEvent = events[0] || null;
-    const eventType = primaryEvent?.type || null;
-    const eventHour = primaryEvent?.hour || null;
-    const hoursUntilEvent = eventHour !== null ? eventHour - hour : null;
-    const hasEventToday = events.some(e => !e.isTomorrow && e.hour > hour);
-    const hasTomorrowEvent = events.some(e => e.isTomorrow);
+const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
+const nothingEatenYet = todayMeals.length === 0;
+const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
 
-    const goalLabel = {
-      fat_loss: "Fat Loss", muscle_gain: "Muscle Gain", maintain: "Maintain Weight",
-      health: "General Health", blood_pressure: "Heart Health / Blood Pressure",
-      performance: "Athletic Performance",
-    }[goalType] || "General Health";
+// IMPORTANT: Use ONLY the current message for event/restaurant detection.
+// Old chat history can contain stale test meals/events and should not affect today's coaching.
+const allText = message || "";
 
-    const mentionedWeight = extractWeightFromMessage(message);
-    const weightToLose = mentionedWeight?.amount || null;
-    const weeksToGoal = weightToLose ? Math.ceil(weightToLose) : null;
-    const veryActive = isVeryActive(activityLevel);
-    const foodCutAmount = veryActive ? 500 : 300;
-    const weightLossCals = goal.calories - foodCutAmount;
+// Multi-event detection
+const events = extractAllEvents(allText);
+const hasMultipleEvents = events.length > 1;
+const hasAnyEvent = events.length > 0;
+const hasPhysicalEvents = events.some(e => isPhysicalEvent(e.type));
+const hasSocialEvents = events.some(e => isSocialEvent(e.type));
+const hasRestaurantMeal = isRestaurantOrPartyMeal(allText);
+const missingEventTimes = eventsMissingTimes(allText);
 
-    // Only show weight loss deficit coaching if user is explicitly asking about losing weight
-    const allLower = (message || "").toLowerCase();
-    const isWeightLossConversation = weightToLose !== null ||
-      /lose weight|losing weight|lose \d|drop \d|cut calories|deficit|slim down/.test(allLower);
+// Legacy single-event vars for backward compat with prompt sections
+const primaryEvent = events[0] || null;
+const eventType = primaryEvent?.type || null;
+const eventHour = primaryEvent?.hour || null;
+const hoursUntilEvent = eventHour !== null ? eventHour - hour : null;
+const hasEventToday = events.some(e => !e.isTomorrow && e.hour > hour);
+const hasTomorrowEvent = events.some(e => e.isTomorrow);
 
-    const mealsSummary = todayMeals.length > 0
-      ? todayMeals.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal, ${m.protein}g P, ${m.carbs}g C, ${m.fat}g F)`).join("\n")
-      : "Nothing logged yet today";
+const goalLabel = {
+fat_loss: "Fat Loss", muscle_gain: "Muscle Gain", maintain: "Maintain Weight",
+health: "General Health", blood_pressure: "Heart Health / Blood Pressure",
+performance: "Athletic Performance",
+}[goalType] || "General Health";
 
-    // Build event strategy
-    let eventStrategy = "";
+const mentionedWeight = extractWeightFromMessage(message);
+const weightToLose = mentionedWeight?.amount || null;
+const weeksToGoal = weightToLose ? Math.ceil(weightToLose) : null;
+const veryActive = isVeryActive(activityLevel);
+const foodCutAmount = veryActive ? 500 : 300;
+const weightLossCals = goal.calories - foodCutAmount;
 
-    // If user mentioned events but no times — ask for times
-    if (missingEventTimes && !hasAnyEvent) {
-      eventStrategy = `
+// Only show weight loss deficit coaching if user is explicitly asking about losing weight
+const allLower = (message || "").toLowerCase();
+const isWeightLossConversation = weightToLose !== null ||
+/lose weight|losing weight|lose \d|drop \d|cut calories|deficit|slim down/.test(allLower);
+
+const mealsSummary = todayMeals.length > 0
+? todayMeals.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal, ${m.protein}g P, ${m.carbs}g C, ${m.fat}g F)`).join("\n")
+: "Nothing logged yet today";
+
+// Build event strategy
+let eventStrategy = "";
+
+// If user mentioned events but no times — ask for times
+if (missingEventTimes && !hasAnyEvent) {
+eventStrategy = `
 MISSING EVENT TIMES:
 The user mentioned events but didn't provide specific times.
 Ask them: "What time is each event? I need the times to plan your meals properly around them."
 Do NOT guess or plan without times. Just ask.`;
-    } else if (hasMultipleEvents) {
-      // Multi-event day — use new timeline builder
-      eventStrategy = buildMultiEventStrategy(events, hour, goal);
-    } else if (hasRestaurantMeal && !hasPhysicalEvents) {
-      eventStrategy = `
+} else if (hasMultipleEvents) {
+// Multi-event day — use new timeline builder
+eventStrategy = buildMultiEventStrategy(events, hour, goal);
+} else if (hasRestaurantMeal && !hasPhysicalEvents) {
+eventStrategy = `
 RESTAURANT / UNKNOWN MENU STRATEGY — MANDATORY:
 The user is eating at a restaurant, dinner party, or someone's home.
 You DO NOT know the menu. You CANNOT guess what they will eat.
@@ -660,19 +667,19 @@ RULES — NO EXCEPTIONS:
 1. Create meal blocks ONLY for meals BEFORE the event (Breakfast, Lunch, Snack)
 2. Do NOT create a Dinner block. Not even an estimate. Not steak, not anything.
 3. After the pre-event meal blocks, write this in plain text:
-   "For the dinner itself — I don't know the exact menu, so here's what to look for:
-   - Go for grilled or baked protein over fried
-   - Skip heavy cream sauces and rich sides
-   - Go easy on bread and appetizers
-   - Watch portion sizes on starches
-   When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
+"For the dinner itself — I don't know the exact menu, so here's what to look for:
+- Go for grilled or baked protein over fried
+- Skip heavy cream sauces and rich sides
+- Go easy on bread and appetizers
+- Watch portion sizes on starches
+When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
 4. Tell them how many calories they have budgeted for the event in plain text only
 5. Keep pre-event meals light — lean protein + vegetables
 6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event
 7. When logging a restaurant meal after the fact: always add "Note: these are estimates based on typical restaurant portions — actual macros will vary."`;
-    } else if ((hasEventToday || hasTomorrowEvent) && eventType) {
-      if (["sport", "workout", "endurance"].includes(eventType)) {
-        eventStrategy = `
+} else if ((hasEventToday || hasTomorrowEvent) && eventType) {
+if (["sport", "workout", "endurance"].includes(eventType)) {
+eventStrategy = `
 PHYSICAL EVENT STRATEGY (${eventType} at ${eventHour !== null ? eventHour + ":00" : "scheduled time"}, ${hoursUntilEvent !== null ? hoursUntilEvent + "h away" : ""}):
 
 CALORIE RULE FOR SPORT/RACE DAY: Aim for 85-95% of the ${goal.calories} calorie target (${Math.round(goal.calories * 0.85)}-${Math.round(goal.calories * 0.95)} cal minimum). Athletes need solid fuel. Never plan below 80% (${Math.round(goal.calories * 0.8)} cal) on a race or game day unless user explicitly asks for a deficit.
@@ -681,13 +688,13 @@ MEAL STRUCTURE FOR THE FULL DAY:
 1. Breakfast: balanced, good carbs + protein (up at ${hour}:00 so plan accordingly)
 2. Lunch: high carbs, moderate protein, low fat — fuel loading
 3. Pre-event timing (smart approach based on event time):
-   ${eventHour <= 8 ? "Early event — eat 30-60 min before OR after the event" : eventHour <= 12 ? "Mid-morning — eat 1-2 hours before" : "Afternoon/evening — eat 2-3 hours before"}
-   HIGH carbs, LOW fat, easy to digest (300-400 cal) — banana, rice cakes, oatmeal
+${eventHour <= 8 ? "Early event — eat 30-60 min before OR after the event" : eventHour <= 12 ? "Mid-morning — eat 1-2 hours before" : "Afternoon/evening — eat 2-3 hours before"}
+HIGH carbs, LOW fat, easy to digest (300-400 cal) — banana, rice cakes, oatmeal
 4. Post-event Dinner (within 1-2 hours after): HIGH protein + carbs for recovery — this is MANDATORY, do not skip it
 
 ATHLETIC EVENT FOOD EXAMPLES — USE THESE FOR RECOVERY DINNER:
 - Grilled chicken with pasta or quinoa
-- Salmon with sweet potato and rice  
+- Salmon with sweet potato and rice
 - Turkey with mashed potato
 - Lean beef with rice and vegetables
 - NOT steak or heavy/fatty foods — keep it digestible for recovery
@@ -697,29 +704,29 @@ IMPORTANT:
 - Total across all meals should reach ${goal.calories} cal
 - Add timing notes AFTER each meal block in plain text
 - You CAN use two Snack blocks (pre-event + post-event if needed)`;
-      } else if (eventType === "work") {
-        eventStrategy = `
+} else if (eventType === "work") {
+eventStrategy = `
 LONG WORK DAY STRATEGY:
 - Steady energy, avoid sugar crashes
 - Breakfast: complex carbs + protein
 - Lunch: balanced, not too heavy
 - Afternoon Snack: light focus food`;
-      }
-    }
+}
+}
 
-    let systemMessage = `STOP — READ THIS FIRST — NO MARKDOWN EVER
+let systemMessage = `STOP — READ THIS FIRST — NO MARKDOWN EVER
 ══════════════════════════════════════════
 NEVER use ** or ## or * or _ or any markdown. EVER. In ANY response.
 This includes: nutrition questions, Q&A, general advice, comparisons, lists.
 Write plain text only. Markdown breaks the app display.
 
 MOST COMMON VIOLATIONS — NEVER DO THESE:
-WRONG: **Breakfast — 7:30am**           RIGHT: Breakfast — 7:30am
-WRONG: **Lunch — 12:00pm**             RIGHT: Lunch — 12:00pm
-WRONG: **Pre-event Snack — 5:00pm**    RIGHT: Snack — 5:00pm (2hrs before games)
-WRONG: **Post-event Recovery Snack**   RIGHT: Snack — right after your second game
-WRONG: **Healthy Fats**                RIGHT: Healthy Fats
-WRONG: **Summary**                     RIGHT: Summary
+WRONG: **Breakfast — 7:30am** RIGHT: Breakfast — 7:30am
+WRONG: **Lunch — 12:00pm** RIGHT: Lunch — 12:00pm
+WRONG: **Pre-event Snack — 5:00pm** RIGHT: Snack — 5:00pm (2hrs before games)
+WRONG: **Post-event Recovery Snack** RIGHT: Snack — right after your second game
+WRONG: **Healthy Fats** RIGHT: Healthy Fats
+WRONG: **Summary** RIGHT: Summary
 
 THE MEAL BLOCK HEADER MUST BE EXACTLY:
 [MealType] — [Time] ([context])
@@ -789,8 +796,8 @@ Name: ${userName}
 Health Goal: ${goalLabel}
 Activity Level: ${activityLevel}
 Very Active: ${veryActive ? "YES" : "NO"}
-${currentWeight  ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
-${targetWeight   ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
+${currentWeight ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
+${targetWeight ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
 ${healthConditions ? `Health Notes: ${healthConditions}` : ""}
 Local Time: ${hour}:00 (${timeOfDay})
 
@@ -846,9 +853,9 @@ The database already calculated these from ${targetDate}'s actual logged meals:
 
 ${targetDate === todayDate ? "TODAY'S INTAKE" : `INTAKE FOR ${targetDate}`} (${targetDate}) — FROM DATABASE:
 Calories: ${totals.calories}/${goal.calories} (${Math.round((totals.calories/goal.calories)*100)}% — ${remaining.calories} remaining)
-Protein:  ${totals.protein}/${goal.protein}g (${Math.round((totals.protein/goal.protein)*100)}%)
-Carbs:    ${totals.carbs}/${goal.carbs}g (${Math.round((totals.carbs/goal.carbs)*100)}%)
-Fat:      ${totals.fat}/${goal.fat}g (${Math.round((totals.fat/goal.fat)*100)}%)
+Protein: ${totals.protein}/${goal.protein}g (${Math.round((totals.protein/goal.protein)*100)}%)
+Carbs: ${totals.carbs}/${goal.carbs}g (${Math.round((totals.carbs/goal.carbs)*100)}%)
+Fat: ${totals.fat}/${goal.fat}g (${Math.round((totals.fat/goal.fat)*100)}%)
 
 MEALS LOGGED ${targetDate === todayDate ? "TODAY" : `ON ${targetDate}`}:
 ${mealsSummary}
@@ -917,12 +924,12 @@ The user is eating at a restaurant, dinner party, or someone's home.
 - DO NOT guess specific dishes
 - Plan only Breakfast, Lunch, Snack blocks (meals BEFORE the event)
 - After the meal blocks, add plain text guidance:
-  "For the dinner itself — I don't know the exact menu, so here's what to look for:
-  - Lean protein: grilled or baked over fried
-  - Light on heavy sauces and sides
-  - Go easy on bread and alcohol
-  - Watch portion sizes
-  When you're there, take a photo of the menu and I'll help you choose."
+"For the dinner itself — I don't know the exact menu, so here's what to look for:
+- Lean protein: grilled or baked over fried
+- Light on heavy sauces and sides
+- Go easy on bread and alcohol
+- Watch portion sizes
+When you're there, take a photo of the menu and I'll help you choose."
 - Say how many calories remain for the event in plain text only — no meal block` : ""}
 
 ══════════════════════════════════════════
@@ -971,9 +978,9 @@ Breakdown: Protein shake — 120 cal, 25g P, 3g C, 2g F | Milk — 150 cal, 8g P
 👉 Have this right after your game for recovery.
 
 WRONG:
-Snack (pre-game)     FORBIDDEN — no parentheses
-Snack (post-game)    FORBIDDEN — no parentheses
-**Snack**            FORBIDDEN — no markdown
+Snack (pre-game) FORBIDDEN — no parentheses
+Snack (post-game) FORBIDDEN — no parentheses
+**Snack** FORBIDDEN — no markdown
 
 POST-EVENT TIMING RULE:
 NEVER guess a specific time after an event. You don't know how long it lasts.
@@ -1045,7 +1052,7 @@ TIME-AWARE PLANNING
 Current local time: ${hour}:00
 CRITICAL: Only suggest meals for remaining time today.
 
-${hour < 10  ? "All meals available: Breakfast, Lunch, Snack, Dinner" : ""}
+${hour < 10 ? "All meals available: Breakfast, Lunch, Snack, Dinner" : ""}
 ${hour >= 10 && hour < 14 ? "Breakfast time has passed. Available: Lunch, Snack, Dinner. DO NOT suggest Breakfast." : ""}
 ${hour >= 14 && hour < 17 ? "Breakfast and Lunch time have passed. Available: Snack, Dinner. DO NOT suggest Breakfast or Lunch." : ""}
 ${hour >= 17 && hour < 20 ? "Available: Dinner, Snack only. DO NOT suggest Breakfast, Lunch, or afternoon Snacks." : ""}
@@ -1060,8 +1067,8 @@ WEIGHT GOAL COACHING
 ${isWeightLossConversation ? `Use weight amount THEY SAID — not profile target.
 Push back if unrealistic (max 2 lbs/week safely).
 ${veryActive
-  ? `Very active — just reduce food by ${foodCutAmount} cal. New target: ${weightLossCals} cal.`
-  : `Split: eat ${foodCutAmount} cal less + burn 200 more (20-30 min walk). New target: ${weightLossCals} cal.`}
+? `Very active — just reduce food by ${foodCutAmount} cal. New target: ${weightLossCals} cal.`
+: `Split: eat ${foodCutAmount} cal less + burn 200 more (20-30 min walk). New target: ${weightLossCals} cal.`}
 ${weightToLose ? `Timeline: ${weightToLose} lbs ÷ 1/week = ${weeksToGoal} weeks.` : ""}
 Ask: "Want a meal plan for tomorrow at ${weightLossCals} cal? Or a 2-3 day plan?"
 When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.` : `If user asks about losing weight or mentions lbs to lose, THEN calculate a deficit plan. Otherwise use ${goal.calories} cal for all plans.`}
@@ -1075,44 +1082,44 @@ Only return meal block when ALL quantities are known.
 ══════════════════════════════════════════
 MACRO REFERENCE
 ══════════════════════════════════════════
-Chicken breast:    1oz = 46 cal, 8.7g P, 0g C, 1g F
-Ground beef lean:  1oz = 55 cal, 7g P, 0g C, 3g F
-Salmon:            1oz = 58 cal, 8g P, 0g C, 3g F
-Tuna canned:       1oz = 30 cal, 7g P, 0g C, 0g F
-Turkey breast:     1oz = 35 cal, 7g P, 0g C, 0.5g F
-Shrimp:            1oz = 28 cal, 6g P, 0g C, 0g F
-Eggs:              1 large = 70 cal, 6g P, 0g C, 5g F
-Egg whites:        1 large = 17 cal, 4g P, 0g C, 0g F
+Chicken breast: 1oz = 46 cal, 8.7g P, 0g C, 1g F
+Ground beef lean: 1oz = 55 cal, 7g P, 0g C, 3g F
+Salmon: 1oz = 58 cal, 8g P, 0g C, 3g F
+Tuna canned: 1oz = 30 cal, 7g P, 0g C, 0g F
+Turkey breast: 1oz = 35 cal, 7g P, 0g C, 0.5g F
+Shrimp: 1oz = 28 cal, 6g P, 0g C, 0g F
+Eggs: 1 large = 70 cal, 6g P, 0g C, 5g F
+Egg whites: 1 large = 17 cal, 4g P, 0g C, 0g F
 White rice cooked: 1 cup = 200 cal, 4g P, 44g C, 0g F
 Brown rice cooked: 1 cup = 215 cal, 5g P, 45g C, 2g F
-Pasta cooked:      1 cup = 220 cal, 8g P, 43g C, 1g F
-Oatmeal cooked:    1 cup = 150 cal, 5g P, 27g C, 3g F
+Pasta cooked: 1 cup = 220 cal, 8g P, 43g C, 1g F
+Oatmeal cooked: 1 cup = 150 cal, 5g P, 27g C, 3g F
 Bread whole wheat: 1 slice = 80 cal, 4g P, 15g C, 1g F
-Sweet potato:      1 medium = 130 cal, 3g P, 30g C, 0g F
-Banana:            1 medium = 105 cal, 1g P, 27g C, 0g F
-Apple:             1 medium = 95 cal, 0g P, 25g C, 0g F
-Blueberries:       1 cup = 85 cal, 1g P, 21g C, 0g F
-Greek yogurt:      1 cup = 130 cal, 22g P, 9g C, 0g F
-Cottage cheese:    1 cup = 200 cal, 28g P, 8g C, 4g F
-Milk whole:        1 cup = 150 cal, 8g P, 12g C, 8g F
-Protein shake:     1 scoop = 120 cal, 25g P, 3g C, 2g F
-Broccoli:          1 cup = 55 cal, 4g P, 11g C, 0g F
-Spinach:           1 cup = 7 cal, 1g P, 1g C, 0g F
-Avocado:           1 medium = 240 cal, 3g P, 13g C, 22g F
-Almonds:           1oz = 165 cal, 6g P, 6g C, 14g F
-Peanut butter:     2 tbsp = 190 cal, 8g P, 6g C, 16g F
-Olive oil:         1 tbsp = 120 cal, 0g P, 0g C, 14g F
-Quinoa cooked:     1 cup = 222 cal, 8g P, 39g C, 4g F
-Lentils cooked:    1 cup = 230 cal, 18g P, 40g C, 1g F
-Rice cakes:        1 cake = 35 cal, 1g P, 7g C, 0g F
-Cheddar cheese:    1oz = 113 cal, 7g P, 0g C, 9g F
-Walnuts:           1oz = 185 cal, 4g P, 4g C, 18g F
-Hummus:            2 tbsp = 70 cal, 2g P, 6g C, 4g F
+Sweet potato: 1 medium = 130 cal, 3g P, 30g C, 0g F
+Banana: 1 medium = 105 cal, 1g P, 27g C, 0g F
+Apple: 1 medium = 95 cal, 0g P, 25g C, 0g F
+Blueberries: 1 cup = 85 cal, 1g P, 21g C, 0g F
+Greek yogurt: 1 cup = 130 cal, 22g P, 9g C, 0g F
+Cottage cheese: 1 cup = 200 cal, 28g P, 8g C, 4g F
+Milk whole: 1 cup = 150 cal, 8g P, 12g C, 8g F
+Protein shake: 1 scoop = 120 cal, 25g P, 3g C, 2g F
+Broccoli: 1 cup = 55 cal, 4g P, 11g C, 0g F
+Spinach: 1 cup = 7 cal, 1g P, 1g C, 0g F
+Avocado: 1 medium = 240 cal, 3g P, 13g C, 22g F
+Almonds: 1oz = 165 cal, 6g P, 6g C, 14g F
+Peanut butter: 2 tbsp = 190 cal, 8g P, 6g C, 16g F
+Olive oil: 1 tbsp = 120 cal, 0g P, 0g C, 14g F
+Quinoa cooked: 1 cup = 222 cal, 8g P, 39g C, 4g F
+Lentils cooked: 1 cup = 230 cal, 18g P, 40g C, 1g F
+Rice cakes: 1 cake = 35 cal, 1g P, 7g C, 0g F
+Cheddar cheese: 1oz = 113 cal, 7g P, 0g C, 9g F
+Walnuts: 1oz = 185 cal, 4g P, 4g C, 18g F
+Hummus: 2 tbsp = 70 cal, 2g P, 6g C, 4g F
 
 UNITS: Always use US units — oz, cups, tbsp, tsp, slices, pieces`;
 
-    if (context?.type === "food_log") {
-      systemMessage += `
+if (context?.type === "food_log") {
+systemMessage += `
 
 ══════════════════════════════════════════
 FOOD LOGGING MODE
@@ -1120,8 +1127,8 @@ FOOD LOGGING MODE
 ${userName} is logging food they ate.
 Original: "${context.originalMessage}"
 ${context.mealType ? `Meal type: ${context.mealType}` : `No meal type given — infer from time of day:
-  Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
-  Use this inferred type in the meal block. NEVER skip logging because meal type is missing.`}
+Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
+Use this inferred type in the meal block. NEVER skip logging because meal type is missing.`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
 🚨 ADDING TO EXISTING MEAL — CRITICAL RULE:
@@ -1142,7 +1149,7 @@ Calories: 110... ← ONLY the new item, dashboard sums with original entry
 ${dbFoodResults ? `
 DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA):
 ${dbFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
-  Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
+Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
 
 CRITICAL: Use the numbers above EXACTLY. Do not recalculate or estimate.
 Return a meal block with these exact macro values.
@@ -1173,14 +1180,14 @@ KEY RULE: "half", "a", "an", "some", "whole" are ALL valid quantities. Never ask
 MEAL BLOCK FORMAT — CRITICAL:
 Use SINGLE TOTAL NUMBERS ONLY. Never breakdown math in the meal block.
 WRONG: - Calories: 368 (chicken) + 130 (sweet potato) = 498
-RIGHT:  - Calories: 498
+RIGHT: - Calories: 498
 WRONG: - Protein: 56g (chicken) + 3g (sweet potato) = 59g
-RIGHT:  - Protein: 59g
+RIGHT: - Protein: 59g
 
 ALWAYS include "g" on protein, carbs, fat:
-WRONG: - Protein: 56    RIGHT: - Protein: 56g
-WRONG: - Carbs: 30      RIGHT: - Carbs: 30g
-WRONG: - Fat: 36        RIGHT: - Fat: 36g
+WRONG: - Protein: 56 RIGHT: - Protein: 56g
+WRONG: - Carbs: 30 RIGHT: - Carbs: 30g
+WRONG: - Fat: 36 RIGHT: - Fat: 36g
 
 AFTER the meal block, add a Breakdown line showing per-food contributions:
 Breakdown: Ground beef — 480 cal, 53g P, 0g C, 29g F | Sweet potato — 160 cal, 3g P, 37g C, 0g F
@@ -1197,18 +1204,18 @@ AFTER LOGGING A MEAL — DO THIS ONLY:
 CRITICAL: You do NOT calculate totals. The database and dashboard do that.
 Your only job: acknowledge the meal, give feedback, ask what's next.
 NEVER show "Updated totals" — that's wrong and breaks the app.`;
-    }
+}
 
-    if (context?.type === "meal_planning") {
-      // Calculate suggested eating times based on events
-      let timingGuide = "";
-      if (events.length > 0) {
-        const sortedEvents = [...events].sort((a, b) => a.hour - b.hour);
-        sortedEvents.forEach((event, idx) => {
-          if (isPhysicalEvent(event.type)) {
-            if (event.hour <= 8) {
-              // Early morning workout — light snack before OR fasted, post-workout breakfast after
-              timingGuide += `
+if (context?.type === "meal_planning") {
+// Calculate suggested eating times based on events
+let timingGuide = "";
+if (events.length > 0) {
+const sortedEvents = [...events].sort((a, b) => a.hour - b.hour);
+sortedEvents.forEach((event, idx) => {
+if (isPhysicalEvent(event.type)) {
+if (event.hour <= 8) {
+// Early morning workout — light snack before OR fasted, post-workout breakfast after
+timingGuide += `
 ${event.type.toUpperCase()} at ${event.hour}:00:
 - If eating before: light snack at ${event.hour - 1}:30 (30 min before) — banana or toast ~150 cal only
 - Post-workout: Breakfast right after your workout (do NOT assign a specific time)
@@ -1216,32 +1223,32 @@ ${event.type.toUpperCase()} at ${event.hour}:00:
 - DO NOT present Option A / Option B choices — just include a light pre-workout Snack block + a Breakfast block labeled as post-workout
 - NEVER write "Option A" or "Option B" or "Fasted Workout" — just present the single plan
 `;
-            } else {
-              const preEventTime = event.hour - 2;
-              timingGuide += `
+} else {
+const preEventTime = event.hour - 2;
+timingGuide += `
 ${event.type.toUpperCase()} at ${event.hour}:00:
 - Pre-event snack: ${preEventTime}:00 (2 hours before)
 - Post-event recovery: right after your ${event.type} — do NOT assign a specific time
 `;
-            }
-          } else if (isSocialEvent(event.type)) {
-            timingGuide += `
+}
+} else if (isSocialEvent(event.type)) {
+timingGuide += `
 SOCIAL EVENT at ${event.hour}:00 (${event.label}):
 - Keep meals before this LIGHT
 - Budget ${Math.round(goal.calories * 0.4)}-${Math.round(goal.calories * 0.5)} cal for this event
 - NO meal block — give plain text guidance only
 `;
-          }
-        });
-      }
+}
+});
+}
 
-      // Calculate calorie target ranges for meal planning
-      const calMin = Math.round(goal.calories * 0.8);
-      const calMax = Math.round(goal.calories * 1.05);
-      const needMin = Math.max(0, calMin - totals.calories);
-      const needMax = Math.max(0, calMax - totals.calories);
+// Calculate calorie target ranges for meal planning
+const calMin = Math.round(goal.calories * 0.8);
+const calMax = Math.round(goal.calories * 1.05);
+const needMin = Math.max(0, calMin - totals.calories);
+const needMax = Math.max(0, calMax - totals.calories);
 
-      systemMessage += `
+systemMessage += `
 
 ══════════════════════════════════════════
 MEAL PLANNING MODE
@@ -1277,7 +1284,7 @@ User is eating at a restaurant (sushi, Italian, etc.) for one of their meals tod
 CRITICAL RULES:
 - DO NOT create a meal block for the restaurant meal — no matter what type (breakfast, brunch, lunch, dinner, snack, dessert, etc.)
 - If they say "lunch at restaurant" → no Lunch block
-- If they say "dinner at restaurant" → no Dinner block  
+- If they say "dinner at restaurant" → no Dinner block
 - If they say "breakfast at restaurant" → no Breakfast block
 - Mention it in your guidance: "For your [lunch/dinner/etc.] at [restaurant type], I recommend..."
 - Suggest what to order based on their goals
@@ -1290,7 +1297,7 @@ ${events.length === 0 ? "NO EVENTS DETECTED — Do NOT mention games, workouts, 
 ${dbFoodResults ? `
 DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA):
 ${dbFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
-  Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
+Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
 
 CRITICAL: Use the numbers above EXACTLY for these foods. Do not recalculate or estimate.
 For other foods not in the database, estimate as normal.
@@ -1306,9 +1313,9 @@ RIGHT: Just write the plain meal block — Snack / Breakfast / Lunch / Dinner on
 CALORIE FORMAT — CRITICAL:
 NEVER use breakdown math format for macros. Always use single totals.
 WRONG: - Calories: 150 (oatmeal) + 105 (banana) + 165 (almonds) = 420
-RIGHT:  - Calories: 420
+RIGHT: - Calories: 420
 WRONG: - Protein: 5g (oatmeal) + 1g (banana) + 6g (almonds) = 12g
-RIGHT:  - Protein: 12g
+RIGHT: - Protein: 12g
 This applies to ALL meals in the plan. Single number only. No math shown.
 
 NO OPTIONS FORMAT:
@@ -1359,9 +1366,9 @@ Then the next meal block immediately. No other text between blocks.
 All coaching tips go in STEP 3 only.
 
 MACRO FORMAT — ALWAYS include "g" on protein, carbs, fat:
-WRONG: - Protein: 56    RIGHT: - Protein: 56g
-WRONG: - Carbs: 30      RIGHT: - Carbs: 30g
-WRONG: - Fat: 36        RIGHT: - Fat: 36g
+WRONG: - Protein: 56 RIGHT: - Protein: 56g
+WRONG: - Carbs: 30 RIGHT: - Carbs: 30g
+WRONG: - Fat: 36 RIGHT: - Fat: 36g
 Calories = number only (no "g"). All other macros always get "g".
 
 For restaurant/social meals: include inline ordering guidance (NOT a meal block) — like:
@@ -1412,18 +1419,18 @@ Do NOT assume they just woke up. Read the context.
 
 STEP 2: Calculate meal times from schedule:
 - First meal: at the START of their day (7am off work = eat at 7:00am, not 7:30am)
-  → If morning walk/workout AFTER start: eat BEFORE the activity
-  → "get off at 7am, walk before work at 9am" = eat at 7:00am, walk 8:00am
-  → Label: "Breakfast — 7:00am (fuel up after your shift, before your walk)"
+→ If morning walk/workout AFTER start: eat BEFORE the activity
+→ "get off at 7am, walk before work at 9am" = eat at 7:00am, walk 8:00am
+→ Label: "Breakfast — 7:00am (fuel up after your shift, before your walk)"
 - Lunch: ~4-5hrs after first meal
-  → Label: "Lunch — 12:00pm"
+→ Label: "Lunch — 12:00pm"
 - Pre-event meal: 2-2.5hrs before physical event
-  → "hockey at 7:00pm" = eat at 4:30-5:00pm
-  → Label: "Dinner — 4:30pm (2.5hrs before your 7pm games)"
+→ "hockey at 7:00pm" = eat at 4:30-5:00pm
+→ Label: "Dinner — 4:30pm (2.5hrs before your 7pm games)"
 - Pre-game snack: 45-60min before event
-  → Label: "Snack — 6:00pm (1hr before puck drop)"
+→ Label: "Snack — 6:00pm (1hr before puck drop)"
 - Post-event recovery: NEVER a specific time
-  → Label: "Snack — right after your second game"
+→ Label: "Snack — right after your second game"
 
 STEP 3: Every meal block title includes the time AND context:
 WRONG: "Breakfast"
@@ -1432,12 +1439,12 @@ WRONG: "Snack"
 RIGHT: "Snack — 6:00pm (1hr before puck drop)"
 
 Example for: off work 7am, walk before 9am work, hockey 7pm-10:30pm:
-  Breakfast → 7:00am (fuel up right after your shift)
-  Walk → ~8:00am
-  Lunch → 12:00pm
-  Dinner → 4:30pm (2.5hrs before your 7pm games)
-  Pre-game snack → 6:00pm (1hr before puck drop)
-  Post-game recovery → right after your second game
+Breakfast → 7:00am (fuel up right after your shift)
+Walk → ~8:00am
+Lunch → 12:00pm
+Dinner → 4:30pm (2.5hrs before your 7pm games)
+Pre-game snack → 6:00pm (1hr before puck drop)
+Post-game recovery → right after your second game
 
 SNACK RULES:
 - For athletic events: suggest TWO Snacks (pre-event + post-event recovery)
@@ -1456,10 +1463,10 @@ TOTAL LINE CALCULATION — CRITICAL:
 
 CRITICAL — ALWAYS END MEAL PLANS WITH THIS EXACT LINE:
 Reply "yes" to save this plan, or let me know if you'd like to change anything.`;
-    }
+}
 
-    if (context?.isConfirmation) {
-      systemMessage += `
+if (context?.isConfirmation) {
+systemMessage += `
 
 ══════════════════════════════════════════
 USER CONFIRMED MEAL PLAN
@@ -1471,10 +1478,10 @@ RE-OUTPUT the exact same meal block(s) from your previous response.
 The meal block triggers the save button — that's what actually saves it.
 
 Just output the meal block(s) in the standard format, nothing else.`;
-    }
+}
 
-    if (context?.isSwap) {
-      systemMessage += `
+if (context?.isSwap) {
+systemMessage += `
 
 ══════════════════════════════════════════
 USER REQUESTED SWAP/CHANGE
@@ -1486,13 +1493,13 @@ DO NOT output only the changed meal — output the ENTIRE day's plan with the ch
 
 End with this exact line:
 Reply "yes" to save this plan, or let me know if you'd like to change anything.`;
-    }
+}
 
 
-    if (context?.type === "photo" && images?.length > 0) {
-      const photoIntent = context.photoIntent || "unknown";
-      const imageCount = images.length;
-      systemMessage += `
+if (context?.type === "photo" && images?.length > 0) {
+const photoIntent = context.photoIntent || "unknown";
+const imageCount = images.length;
+systemMessage += `
 
 ══════════════════════════════════════════
 PHOTO MODE — ${imageCount} image(s) received
@@ -1520,9 +1527,9 @@ SERVINGS HANDLING — CRITICAL:
 1. Read: calories per serving, protein per serving, carbs per serving, fat per serving, servings per container
 2. If label shows "servings per container: 3" (or any number > 1), the user ATE THE WHOLE THING
 3. SERVINGS FIELD RULES:
-   - Label says 1 serving per container → servings: 1
-   - Label says 3 servings per container + user ate it → servings: 3
-   - Label says 2.5 servings per container + user ate it → servings: 2.5
+- Label says 1 serving per container → servings: 1
+- Label says 3 servings per container + user ate it → servings: 3
+- Label says 2.5 servings per container + user ate it → servings: 2.5
 4. When user says "I ate this" or "I had this" with a photo, they ate the ENTIRE product shown
 5. Use per-serving macros, set servings count to match container
 6. Dashboard multiplies: calories × servings automatically
@@ -1531,16 +1538,16 @@ SERVINGS HANDLING — CRITICAL:
 Meal block from label MUST use PER-SERVING values + correct servings count:
 WRONG (ate whole bag of 3 servings):
 - Foods: Fitzels, 1 bag
-- Calories: 370  ← wrong, this is whole bag total
-- Servings: 1    ← wrong
+- Calories: 370 ← wrong, this is whole bag total
+- Servings: 1 ← wrong
 
 RIGHT (ate whole bag of 3 servings):
 - Foods: Fitzels, 1 serving
-- Calories: 120  ← per serving value
-- Protein: 5g    ← per serving value
-- Carbs: 19g     ← per serving value
-- Fat: 4g        ← per serving value
-- Servings: 3    ← actual servings consumed (dashboard calculates 120 × 3 = 360 cal)
+- Calories: 120 ← per serving value
+- Protein: 5g ← per serving value
+- Carbs: 19g ← per serving value
+- Fat: 4g ← per serving value
+- Servings: 3 ← actual servings consumed (dashboard calculates 120 × 3 = 360 cal)
 
 RIGHT (ate 1 serving):
 - Foods: Fitzels, 1 serving
@@ -1551,8 +1558,8 @@ RIGHT (ate 1 serving):
 - Servings: 1
 
 IF intent is "eaten" → skip the question, return meal block directly using inferred meal type from time:
-  Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
-  NEVER skip logging because meal type is missing — always infer it
+Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
+NEVER skip logging because meal type is missing — always infer it
 
 IF intent is "planned" / "for later" / "as planned" → skip question, return meal block for planned
 
@@ -1562,9 +1569,9 @@ IF user asks "can I eat this?" / "is this okay?" / "should I have this?" / "good
 1. Answer the question first — yes/no with brief reasoning based on remaining macros
 2. ALWAYS end with: "Want me to log it or add it to your plan?"
 3. When user confirms (yes/sure/log it/add it) → return a meal block immediately
-   Use inferred meal type from time of day
-   Use EXACT label values for macros
-   Do NOT loop back to asking again
+Use inferred meal type from time of day
+Use EXACT label values for macros
+Do NOT loop back to asking again
 
 IF it's a RESTAURANT MENU:
 1. Read EVERY item on the menu carefully
@@ -1595,120 +1602,157 @@ NEVER give generic advice like "lean proteins are good choices" — always name 
 1. Read each label carefully — label them Label 1, Label 2, etc.
 2. Read BOTH per-serving AND total container values. This is critical coaching context.
 3. Build a comparison showing BOTH serving and full container:
-   Label 1: [name if visible]
-   Per serving: X cal | Xg P | Xg C | Xg F
-   Servings per container: X (full container = X cal total)
+Label 1: [name if visible]
+Per serving: X cal | Xg P | Xg C | Xg F
+Servings per container: X (full container = X cal total)
 
-   Label 2: [name if visible]
-   Per serving: X cal | Xg P | Xg C | Xg F
-   Servings per container: X (full container = X cal total)
+Label 2: [name if visible]
+Per serving: X cal | Xg P | Xg C | Xg F
+Servings per container: X (full container = X cal total)
 
 4. COACHING NOTE on servings — always flag if container has multiple servings:
-   "Note: Fitzels has 3 servings per bag — if you eat the whole bag that's 360 cal, not 120."
-   This is key coaching — many people eat the whole container assuming it's one serving.
+"Note: Fitzels has 3 servings per bag — if you eat the whole bag that's 360 cal, not 120."
+This is key coaching — many people eat the whole container assuming it's one serving.
 
 5. Ask: "Are you planning to have 1 serving or the full [container/bag/bottle]?"
-   Then base your recommendation on their actual intended portion.
+Then base your recommendation on their actual intended portion.
 
 6. Based on ${userName}'s remaining macros today:
-   Remaining: ${remaining.calories} cal | ${remaining.protein}g protein | ${remaining.carbs}g carbs | ${remaining.fat}g fat
+Remaining: ${remaining.calories} cal | ${remaining.protein}g protein | ${remaining.carbs}g carbs | ${remaining.fat}g fat
 7. Declare a winner with clear reasoning — which fits best for their goals at the portion they intend
 8. End with: "Want me to log the winner? And did you eat it or saving for later?"`}
 
 NEVER make up macro numbers. Only report what you can clearly read on the label.`;
-    }
+}
 
-    const conversationMessages = [{ role: "system", content: systemMessage }];
-    if (history?.length > 0) {
-      for (const msg of history.slice(-10)) {
-        if (msg.role && msg.content) conversationMessages.push({ role: msg.role, content: msg.content });
-      }
-    }
+const conversationMessages = [{ role: "system", content: systemMessage }];
 
-    // Build final user message — with images if present
-    if (images?.length > 0) {
-      const contentParts = images.map(img => ({
-        type: "image_url",
-        image_url: {
-          url: `data:${img.mimeType};base64,${img.base64}`,
-          detail: "high",
-        },
-      }));
-      if (message) contentParts.push({ type: "text", text: message });
-      conversationMessages.push({ role: "user", content: contentParts });
-    } else {
-      conversationMessages.push({ role: "user", content: message || "" });
-    }
+// IMPORTANT: Do NOT pass stale meal/calorie history into the model.
+// The database/dashboard is the only source of truth for meals, totals, and remaining macros.
+// We keep only light conversational context and remove anything that looks like food state.
+const safeHistory = (history || [])
+.slice(-4)
+.filter((msg) => {
+const text = (msg.content || "").toLowerCase();
 
-    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+const looksLikeMealState =
+text.includes("logged") ||
+text.includes("you ate") ||
+text.includes("you've eaten") ||
+text.includes("you have eaten") ||
+text.includes("updated totals") ||
+text.includes("total planned") ||
+text.includes("cal remaining") ||
+text.includes("remaining calories") ||
+text.includes("breakdown:") ||
+text.includes("breakfast") ||
+text.includes("lunch") ||
+text.includes("dinner") ||
+text.includes("snack") ||
+text.includes("protein") ||
+text.includes("carbs") ||
+text.includes("fat") ||
+text.includes("calories");
 
-    const model = images?.length > 0 ? "gpt-4o" : "gpt-4o-mini";
+return !looksLikeMealState;
+});
 
-    const completion = await client.chat.completions.create({
-      model,
-      messages: conversationMessages,
-      temperature: 0.7,
-    });
+for (const msg of safeHistory) {
+if (msg.role && msg.content) conversationMessages.push({ role: msg.role, content: msg.content });
+}
 
-    const reply = completion.choices[0].message.content;
-    console.log("=== RESPONSE ===\n", reply);
+// Build final user message — with images if present
+if (images?.length > 0) {
+const contentParts = images.map(img => ({
+type: "image_url",
+image_url: {
+url: `data:${img.mimeType};base64,${img.base64}`,
+detail: "high",
+},
+}));
+if (message) contentParts.push({ type: "text", text: message });
+conversationMessages.push({ role: "user", content: contentParts });
+} else {
+conversationMessages.push({ role: "user", content: message || "" });
+}
 
-    // ── FIX #2: Single confirmation logic - check if user confirmed and meal should be logged ──
-    let mealLogged = false;
-    // ── FIX: Combine ALL food items into ONE meal ──
-    if (dbFoodResults && dbFoodResults.length > 0 && message.toLowerCase().includes('yes')) {
-      if (reply.toLowerCase().includes('log') || context?.type === 'food_log') {
-        try {
-          // COMBINE all foods into single meal entry
-          // Example: "2 eggs and half avocado" → save as ONE lunch with combined macros
-          const combinedMeal = {
-            food: dbFoodResults.map(r => r.food).join('; '), // "Eggs, large; Avocado"
-            calories: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.calories || 0), 0)),
-            protein: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.protein || 0), 0) * 10) / 10,
-            carbs: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.carbs || 0), 0) * 10) / 10,
-            fat: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.fat || 0), 0) * 10) / 10,
-            meal_type: "snack", // infer from context if possible
-          };
+console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
-          const saveResult = await saveMealWithoutDuplicates(activeUserId, combinedMeal, targetDate);
+const model = images?.length > 0 ? "gpt-4o" : "gpt-4o-mini";
 
-          if (saveResult.success) {
-            mealLogged = true;
-            console.log(`[SUCCESS] Combined meal saved: ${combinedMeal.food} (${combinedMeal.calories} cal)`);
-          }
-        } catch (e) {
-          console.error("[MEAL LOG ERROR]", e);
-        }
-      }
-    }
+const completion = await client.chat.completions.create({
+model,
+messages: conversationMessages,
+temperature: 0.7,
+});
 
-    try {
-      await supabase.from("ai_messages").insert([{
-        user_id: activeUserId, message: message || "", response: reply,
-        created_at: new Date().toISOString(),
-      }]);
-    } catch (e) { console.log("Save error:", e); }
+const reply = completion.choices[0].message.content;
+console.log("=== RESPONSE ===\n", reply);
 
-    // ── FIX #4: Return correct totals so UI can display them ──
-    return Response.json({ 
-      reply,
-      totals: {
-        calories: Math.round(totals.calories),
-        protein: Math.round(totals.protein),
-        carbs: Math.round(totals.carbs),
-        fat: Math.round(totals.fat), // THIS IS THE CORRECT FAT NUMBER
-      },
-      remaining: {
-        calories: Math.round(remaining.calories),
-        protein: Math.round(remaining.protein),
-        carbs: Math.round(remaining.carbs),
-        fat: Math.round(remaining.fat),
-      },
-      mealLogged,
-    });
+// ── FIX #2: Single confirmation logic - check if user confirmed and meal should be logged ──
+let mealLogged = false;
+// ── FIX: Combine ALL food items into ONE meal ──
+if (dbFoodResults && dbFoodResults.length > 0 && message.toLowerCase().includes('yes')) {
+if (reply.toLowerCase().includes('log') || context?.type === 'food_log') {
+try {
+// COMBINE all foods into single meal entry
+// Example: "2 eggs and half avocado" → save as ONE lunch with combined macros
+const combinedMeal = {
+food: dbFoodResults.map(r => r.food).join('; '), // "Eggs, large; Avocado"
+calories: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.calories || 0), 0)),
+protein: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.protein || 0), 0) * 10) / 10,
+carbs: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.carbs || 0), 0) * 10) / 10,
+fat: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.fat || 0), 0) * 10) / 10,
+meal_type: "snack", // infer from context if possible
+};
 
-  } catch (error) {
-    console.error("AI ERROR:", error);
-    return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
-  }
+const saveResult = await saveMealWithoutDuplicates(activeUserId, combinedMeal, targetDate);
+
+if (saveResult.success) {
+mealLogged = true;
+console.log(`[SUCCESS] Combined meal saved: ${combinedMeal.food} (${combinedMeal.calories} cal)`);
+}
+} catch (e) {
+console.error("[MEAL LOG ERROR]", e);
+}
+}
+}
+
+try {
+await supabase.from("ai_messages").insert([{
+user_id: activeUserId, message: message || "", response: reply,
+created_at: new Date().toISOString(),
+}]);
+} catch (e) { console.log("Save error:", e); }
+
+// ── FIX #4: Return correct totals so UI can display them ──
+return Response.json({
+reply,
+totals: {
+calories: Math.round(totals.calories),
+protein: Math.round(totals.protein),
+carbs: Math.round(totals.carbs),
+fat: Math.round(totals.fat), // THIS IS THE CORRECT FAT NUMBER
+},
+remaining: {
+calories: Math.round(remaining.calories),
+protein: Math.round(remaining.protein),
+carbs: Math.round(remaining.carbs),
+fat: Math.round(remaining.fat),
+},
+mealLogged,
+debug: {
+activeUserId,
+targetDate,
+actualMealsLoaded: todayMeals.length,
+plannedMealsLoaded: todayPlanned.length,
+mealsSummary,
+plannedSummary,
+},
+});
+
+} catch (error) {
+console.error("AI ERROR:", error);
+return Response.json({ reply: "Something went wrong. Please try again." }, { status: 500 });
+}
 }
