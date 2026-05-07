@@ -825,9 +825,22 @@ You are FORBIDDEN from adding meals from conversation.
 You are FORBIDDEN from saying "Updated totals: X"
 You are FORBIDDEN from doing any math on meal calories.
 
+🚨 CRITICAL — DATABASE IS ONLY SOURCE OF TRUTH 🚨
+IGNORE conversation history for meal totals.
+If the conversation says "you've eaten 365 cal" but the database says "0 cal", ALWAYS use "0 cal".
+The conversation is STALE. The database is FRESH and CORRECT.
+
+EXAMPLE:
+- Conversation mentions: "You ate eggs (140) and avocado (120) = 260 cal"
+- But user deleted those meals
+- Database now shows: 0 cal
+- YOU MUST SAY: 0 cal (not 260 from conversation)
+- Never reference old conversation about deleted meals
+
 THE ONLY NUMBERS YOU MAY USE ARE FROM THE DATABASE BELOW.
 If you calculate totals, you will be breaking the app.
 Do NOT calculate. Only use the provided numbers.
+Do NOT trust conversation. Always trust the database.
 
 The database already calculated these from ${targetDate}'s actual logged meals:
 
