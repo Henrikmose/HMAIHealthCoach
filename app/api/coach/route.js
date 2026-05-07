@@ -792,8 +792,16 @@ The ${goal.calories} target ALREADY reflects their goals — it is the number th
 When telling the user how many calories they have left, ALWAYS calculate from ${goal.calories}.
 Example: if ${userName} has eaten ${totals.calories} cal, they have ${remaining.calories} cal remaining — not any other number.
 
-⚠️ CRITICAL — USE DATABASE NUMBERS, NOT CONVERSATION MATH ⚠️
-These are the ONLY numbers you should use. Do NOT add up meals from conversation.
+🚨 CRITICAL — BLOCKING RULE: DO NOT CALCULATE TOTALS 🚨
+YOU CANNOT AND WILL NOT CALCULATE TOTALS FROM CONVERSATION.
+You are FORBIDDEN from adding meals from conversation.
+You are FORBIDDEN from saying "Updated totals: X"
+You are FORBIDDEN from doing any math on meal calories.
+
+THE ONLY NUMBERS YOU MAY USE ARE FROM THE DATABASE BELOW.
+If you calculate totals, you will be breaking the app.
+Do NOT calculate. Only use the provided numbers.
+
 The database already calculated these from ${targetDate}'s actual logged meals:
 
 ${targetDate === todayDate ? "TODAY'S INTAKE" : `INTAKE FOR ${targetDate}`} (${targetDate}) — FROM DATABASE:
@@ -1139,14 +1147,16 @@ Breakdown: Ground beef — 480 cal, 53g P, 0g C, 29g F | Sweet potato — 160 ca
 
 This lets the user see what each food contributed without breaking the parser.
 
-AFTER LOGGING — ALWAYS include:
-1. The meal logged with single total numbers (new item only if adding to existing)
-2. 📊 Updated totals: FORMULA: (Database baseline ${totals.calories}cal) + (this new meal's calories) = NEW TOTAL / ${goal.calories}cal (%)
-   Example: User had eaten 500cal. Logs 400cal meal. Show: 500 + 400 = 900/2000 cal (45%)
-   NEVER add up from conversation. ONLY use database baseline (${totals.calories}cal) + this meal
-3. Show only: total calories | total protein | total carbs | total fat (single numbers each)
-4. 👉 One coaching tip
-5. IF 300+ calories remaining: suggest a specific next meal or snack`;
+AFTER LOGGING A MEAL — DO THIS ONLY:
+1. Show the meal logged with breakdown (what was eaten)
+2. SKIP "Updated totals" — the app dashboard will update totals automatically
+3. Do NOT calculate or show any new totals
+4. Give one coaching comment about the meal
+5. Ask what they want next if relevant
+
+CRITICAL: You do NOT calculate totals. The database and dashboard do that.
+Your only job: acknowledge the meal, give feedback, ask what's next.
+NEVER show "Updated totals" — that's wrong and breaks the app.`;
     }
 
     if (context?.type === "meal_planning") {
