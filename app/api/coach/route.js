@@ -162,31 +162,58 @@ function parseFoodItems(message) {
   if (!message) return [];
   const items = [];
 
-  // Patterns: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
+  // Split by common separators: "and", "plus", "with", "also", "&", ","
+  // This allows parsing "2 eggs and half avocado" as two separate items
+  const separators = /\s+(?:and|plus|with|also|&)\s+|,\s+/i;
+  const parts = message.split(separators);
+  
+  // Patterns for each part: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
   const patterns = [
     // number + unit + food: "8oz chicken breast", "1 cup oatmeal"
-    /(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?([a-z][a-z\s,]+?)(?:\s*[,;]|$)/gi,
+    /^(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?(.+?)$/i,
     // number + food (no unit): "2 eggs", "3 chicken wings"
-    /(\d+\.?\d*)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
+    /^(\d+\.?\d*)\s+(?:of\s+)?(.+?)$/i,
     // descriptor + food: "a banana", "half avocado", "whole chicken breast"
-    /\b(a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
+    /^(?:a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?(.+?)$/i,
   ];
 
-  const [p1, p2, p3] = patterns;
-  let match;
+  // Parse each part separately
+  parts.forEach(part => {
+    part = part.trim();
+    if (part.length < 2) return;
 
-  // Pattern 1: number + unit + food
-  while ((match = p1.exec(message)) !== null) {
-    items.push({ amount: parseFloat(match[1]), unit: match[2].toLowerCase(), food: match[3].trim() });
-  }
+    let found = false;
 
-  // Pattern 2: number + food (if no unit match found for same position)
-  if (items.length === 0) {
-    while ((match = p2.exec(message)) !== null) {
-      const food = match[2].trim();
-      if (food.length > 2) items.push({ amount: parseFloat(match[1]), unit: 'serving', food });
+    // Try each pattern
+    for (const pattern of patterns) {
+      const match = part.match(pattern);
+      if (match) {
+        let amount, unit, food;
+        
+        if (match[1] && !isNaN(match[1])) {
+          // Pattern 1 or 2: has numeric amount
+          amount = parseFloat(match[1]);
+          unit = match[2] ? match[2].toLowerCase() : 'serving';
+          food = (match[3] || match[2] || part).trim();
+        } else {
+          // Pattern 3: descriptor like "half" or "a"
+          amount = match[1] === 'half' ? 0.5 : 1;
+          unit = 'serving';
+          food = match[2] || part;
+          food = food.trim();
+        }
+        
+        items.push({ amount, unit, food });
+        found = true;
+        break;
+      }
     }
-  }
+
+    // If no pattern matched, treat entire part as food
+    if (!found && part.length > 2) {
+      items.push({ amount: 1, unit: 'serving', food: part });
+    }
+  });
 
   return items;
 }
@@ -1615,22 +1642,26 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
 
     // ── FIX #2: Single confirmation logic - check if user confirmed and meal should be logged ──
     let mealLogged = false;
+    // ── FIX: Combine ALL food items into ONE meal ──
     if (dbFoodResults && dbFoodResults.length > 0 && message.toLowerCase().includes('yes')) {
       if (reply.toLowerCase().includes('log') || context?.type === 'food_log') {
         try {
-          const firstFood = dbFoodResults[0];
-          const saveResult = await saveMealWithoutDuplicates(activeUserId, {
-            food: firstFood.food,
-            calories: firstFood.calories,
-            protein: firstFood.protein,
-            carbs: firstFood.carbs,
-            fat: firstFood.fat,
+          // COMBINE all foods into single meal entry
+          // Example: "2 eggs and half avocado" → save as ONE lunch with combined macros
+          const combinedMeal = {
+            food: dbFoodResults.map(r => r.food).join('; '), // "Eggs, large; Avocado"
+            calories: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.calories || 0), 0)),
+            protein: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.protein || 0), 0) * 10) / 10,
+            carbs: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.carbs || 0), 0) * 10) / 10,
+            fat: Math.round(dbFoodResults.reduce((sum, r) => sum + (r.fat || 0), 0) * 10) / 10,
             meal_type: "snack", // infer from context if possible
-          }, today);
+          };
+
+          const saveResult = await saveMealWithoutDuplicates(activeUserId, combinedMeal, targetDate);
 
           if (saveResult.success) {
             mealLogged = true;
-            console.log(`[SUCCESS] Meal saved: ${firstFood.food}`);
+            console.log(`[SUCCESS] Combined meal saved: ${combinedMeal.food} (${combinedMeal.calories} cal)`);
           }
         } catch (e) {
           console.error("[MEAL LOG ERROR]", e);
