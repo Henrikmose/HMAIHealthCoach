@@ -174,7 +174,7 @@ const patterns = [
 // number + food (no unit): "2 eggs", "3 chicken wings"
 /^(\d+\.?\d*)\s+(?:of\s+)?(.+?)$/i,
 // descriptor + food: "a banana", "half avocado", "whole chicken breast"
-/^(?:a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?(.+?)$/i,
+/^(a|an|half|whole|one|two|three|four|five|six|seven|eight|nine|ten|some|small|medium|large)\s+(?:of\s+)?(.+?)$/i,
 ];
 
 // Parse each part separately
@@ -196,9 +196,15 @@ amount = parseFloat(match[1]);
 unit = match[2] ? match[2].toLowerCase() : 'serving';
 food = (match[3] || match[2] || part).trim();
 } else {
-// Pattern 3: descriptor like "half" or "a"
-amount = match[1] === 'half' ? 0.5 : 1;
-unit = 'serving';
+// Pattern 3: descriptor like "half", "a", "two", "medium"
+const word = String(match[1] || '').toLowerCase();
+const wordAmounts = {
+a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5,
+six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+half: 0.5, whole: 1, some: 1, small: 1, medium: 1, large: 1,
+};
+amount = wordAmounts[word] || 1;
+unit = word === 'small' || word === 'medium' || word === 'large' ? word : 'serving';
 food = match[2] || part;
 food = food.trim();
 }
@@ -245,8 +251,38 @@ return null;
 }
 }
 
+// Fallback grams for common foods when the database conversion tables do not have a match.
+// This prevents the AI from guessing calories/macros for common natural-language portions.
+function fallbackGramsForFood(amount, unit, foodName) {
+const u = String(unit || '').toLowerCase().replace(/s$/, '');
+const f = String(foodName || '').toLowerCase();
+
+// Eggs
+if ((u === 'egg' || f.includes('egg')) && !f.includes('eggplant')) {
+if (u === 'large' || u === 'serving' || u === 'egg') return amount * 50;
+}
+
+// Avocado: one medium edible avocado is roughly 150g; half is roughly 75g.
+if (f.includes('avocado')) {
+if (u === 'half') return amount * 75;
+if (u === 'small') return amount * 100;
+if (u === 'medium' || u === 'serving') return amount * 150;
+if (u === 'large') return amount * 200;
+}
+
+if (f.includes('banana')) return amount * 118;
+if (f.includes('apple')) return amount * 182;
+if (f.includes('orange')) return amount * 131;
+if (f.includes('slice') && f.includes('bread')) return amount * 28;
+if (f.includes('toast') || f.includes('sourdough')) {
+if (u === 'slice' || u === 'serving') return amount * 38;
+}
+
+return null;
+}
+
 // Convert amount + unit to grams
-async function convertToGrams(amount, unit, foodId) {
+async function convertToGrams(amount, unit, foodId, foodName = '') {
 const unitLower = unit.toLowerCase().replace(/s$/, ''); // remove plural
 
 // 1. Try food-specific conversion first
@@ -273,7 +309,11 @@ if (data[0].grams_per_unit) return amount * data[0].grams_per_unit;
 if (data[0].ml_per_unit) return amount * data[0].ml_per_unit;
 }
 
-// 3. Can't convert — return null, AI will estimate
+// 3. Common-food fallback — still deterministic, not AI.
+const fallback = fallbackGramsForFood(amount, unitLower, foodName);
+if (fallback) return fallback;
+
+// 4. Can't convert — return null, AI will estimate only if needed.
 return null;
 }
 
@@ -298,7 +338,7 @@ for (const item of items.slice(0, 5)) { // max 5 foods per message
 const food = await lookupFood(item.food);
 if (!food) continue;
 
-const grams = await convertToGrams(item.amount, item.unit, food.id);
+const grams = await convertToGrams(item.amount, item.unit, food.id, item.food || food.name);
 if (!grams) continue;
 
 const macros = calcMacros(food, grams);
@@ -313,6 +353,99 @@ source: 'usda_db',
 }
 
 return results.length > 0 ? results : null;
+}
+
+
+function inferMealTypeFromMessage(message, hour, contextMealType) {
+if (contextMealType) return contextMealType;
+const lower = String(message || '').toLowerCase();
+if (lower.includes('breakfast')) return 'breakfast';
+if (lower.includes('lunch')) return 'lunch';
+if (lower.includes('dinner')) return 'dinner';
+if (lower.includes('snack')) return 'snack';
+if (hour < 11) return 'breakfast';
+if (hour < 14) return 'lunch';
+if (hour < 17) return 'snack';
+return 'dinner';
+}
+
+function isConfirmationMessage(message) {
+const lower = String(message || '').trim().toLowerCase();
+return /^(yes|yes please|yep|yeah|sure|ok|okay|log it|add it|please log it|do it|correct|that is right|looks good)\b/.test(lower);
+}
+
+function titleMealType(type) {
+const t = String(type || 'snack').toLowerCase();
+return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+function roundMacro(n) {
+return Math.round(Number(n || 0) * 10) / 10;
+}
+
+function buildMealFromDbResults(dbFoodResults, mealType) {
+const foods = dbFoodResults || [];
+const total = foods.reduce((acc, r) => {
+acc.calories += Number(r.calories || 0);
+acc.protein += Number(r.protein || 0);
+acc.carbs += Number(r.carbs || 0);
+acc.fat += Number(r.fat || 0);
+return acc;
+}, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+
+return {
+food: foods.map(r => `${r.food}${r.amount ? `, ${r.amount} ${r.unit}` : ''}`).join('; '),
+calories: Math.round(total.calories),
+protein: roundMacro(total.protein),
+carbs: roundMacro(total.carbs),
+fat: roundMacro(total.fat),
+meal_type: mealType || 'snack',
+servings: 1,
+breakdown: foods.map(r => ({
+food: r.food,
+amount: r.amount,
+unit: r.unit,
+grams: r.grams,
+calories: Math.round(Number(r.calories || 0)),
+protein: roundMacro(r.protein),
+carbs: roundMacro(r.carbs),
+fat: roundMacro(r.fat),
+})),
+};
+}
+
+function formatDeterministicMealBlock(meal, includeQuestion = true) {
+const mealTitle = titleMealType(meal.meal_type);
+const breakdown = (meal.breakdown || [])
+.map(b => `${b.food} — ${b.calories} cal, ${b.protein}g P, ${b.carbs}g C, ${b.fat}g F`)
+.join(' | ');
+
+const coaching = getSimpleFoodCoachComment(meal);
+
+return `${mealTitle}
+- Foods: ${meal.food}
+- Calories: ${meal.calories}
+- Protein: ${meal.protein}g
+- Carbs: ${meal.carbs}g
+- Fat: ${meal.fat}g
+
+Breakdown: ${breakdown}
+
+${coaching}${includeQuestion ? '\n\nWant me to log this?' : ''}`;
+}
+
+function getSimpleFoodCoachComment(meal) {
+const p = Number(meal.protein || 0);
+const c = Number(meal.carbs || 0);
+const f = Number(meal.fat || 0);
+const cal = Number(meal.calories || 0);
+
+if (p >= 30 && c >= 30) return 'Good recovery-style meal: strong protein plus enough carbs to refuel.';
+if (p >= 25) return 'Good protein hit — this helps with fullness and muscle recovery.';
+if (f >= 20 && p < 20) return 'Good healthy-fat meal, but protein is a little light if this is a main meal.';
+if (c >= 40 && f <= 10) return 'Good quick-energy meal — useful before training or a busy day.';
+if (cal < 250) return 'Light meal — fine as a snack, but you may need more protein later.';
+return 'Solid meal — I’ll use this against your daily targets from the dashboard.';
 }
 
 function classifyEventType(text) {
@@ -499,13 +632,8 @@ const body = await req.json();
 const { message, context, history = [], userId, localHour, localDate: clientDate, images } = body;
 const image = images?.[0] || null;
 
-// IMPORTANT: Coach and Dashboard MUST use the same real userId.
-// Never fall back to a hardcoded user, or the coach may read/write a different dashboard.
 if (!userId) {
-return Response.json(
-{ reply: "I could not load your dashboard because the user ID was missing. Please sign out and back in, then try again." },
-{ status: 400 }
-);
+return Response.json({ reply: "Missing userId. I can't load your dashboard data without a user ID." }, { status: 400 });
 }
 const activeUserId = userId;
 const hour = typeof localHour === "number" ? localHour : new Date().getHours();
@@ -597,12 +725,58 @@ console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
 }
 }
 
+// ── DETERMINISTIC FOOD LOGGING ──────────────────────────────────────
+// If USDA/database lookup succeeds, do NOT use AI to calculate nutrition.
+// The backend builds the totals and breakdown so dashboard numbers always match.
+if (context?.type === "food_log" && dbFoodResults && dbFoodResults.length > 0) {
+const lookupMsg = context.followUpMessage || context.originalMessage || message;
+const mealType = inferMealTypeFromMessage(lookupMsg, hour, context.mealType);
+const deterministicMeal = buildMealFromDbResults(dbFoodResults, mealType);
+const confirmed = isConfirmationMessage(message) || context.confirmed === true || context.shouldLog === true;
+
+let mealLogged = false;
+let saveResult = null;
+
+if (confirmed) {
+saveResult = await saveMealWithoutDuplicates(activeUserId, deterministicMeal, targetDate);
+mealLogged = !!saveResult?.success;
+}
+
+const reply = confirmed
+? `Logged as eaten.\n\n${formatDeterministicMealBlock(deterministicMeal, false)}`
+: formatDeterministicMealBlock(deterministicMeal, true);
+
+try {
+await supabase.from("ai_messages").insert([{
+user_id: activeUserId,
+message: message || "",
+response: reply,
+created_at: new Date().toISOString(),
+}]);
+} catch (e) { console.log("Save AI message error:", e.message); }
+
+return Response.json({
+reply,
+mealLogged,
+deterministic: true,
+savedMeal: mealLogged ? deterministicMeal : null,
+saveResult,
+debug: {
+source: "database_deterministic_food_log",
+activeUserId,
+targetDate,
+foodsFound: dbFoodResults.length,
+meal: deterministicMeal,
+},
+});
+}
+
 const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
 const nothingEatenYet = todayMeals.length === 0;
 const unloggedPrompt = getUnloggedMealPrompt(hour, nothingEatenYet);
 
-// IMPORTANT: Use ONLY the current message for event/restaurant detection.
-// Old chat history can contain stale test meals/events and should not affect today's coaching.
+// Only use the CURRENT message for event/restaurant detection.
+// Old chat history can be stale and must not affect today's dashboard truth.
 const allText = message || "";
 
 // Multi-event detection
@@ -1627,33 +1801,22 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
 
 const conversationMessages = [{ role: "system", content: systemMessage }];
 
-// IMPORTANT: Do NOT pass stale meal/calorie history into the model.
-// The database/dashboard is the only source of truth for meals, totals, and remaining macros.
-// We keep only light conversational context and remove anything that looks like food state.
-const safeHistory = (history || [])
-.slice(-4)
-.filter((msg) => {
-const text = (msg.content || "").toLowerCase();
-
+// Safe history only: old meal/calorie messages can be stale after dashboard edits.
+// Never let chat history override actual_meals/planned_meals from Supabase.
+const safeHistory = (history || []).slice(-4).filter((msg) => {
+const text = String(msg.content || "").toLowerCase();
 const looksLikeMealState =
 text.includes("logged") ||
 text.includes("you ate") ||
 text.includes("you've eaten") ||
-text.includes("you have eaten") ||
 text.includes("updated totals") ||
-text.includes("total planned") ||
+text.includes("breakdown:") ||
 text.includes("cal remaining") ||
 text.includes("remaining calories") ||
-text.includes("breakdown:") ||
 text.includes("breakfast") ||
 text.includes("lunch") ||
 text.includes("dinner") ||
-text.includes("snack") ||
-text.includes("protein") ||
-text.includes("carbs") ||
-text.includes("fat") ||
-text.includes("calories");
-
+text.includes("snack");
 return !looksLikeMealState;
 });
 
@@ -1746,8 +1909,9 @@ activeUserId,
 targetDate,
 actualMealsLoaded: todayMeals.length,
 plannedMealsLoaded: todayPlanned.length,
-mealsSummary,
-plannedSummary,
+totals,
+remaining,
+deterministicFoodLogUsed: false,
 },
 });
 
