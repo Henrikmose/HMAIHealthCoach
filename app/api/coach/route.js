@@ -626,6 +626,26 @@ if (hour >= 18) return "It's evening and nothing is logged. Say: 'I don't see an
 return null;
 }
 
+// Detect food logging from the user's words, not only from the UI context.
+// This prevents food logs from falling through to the AI math path.
+function looksLikeFoodLogMessage(message, context) {
+const lower = String(message || '').toLowerCase();
+if (context?.type === 'food_log') return true;
+if (/\b(i had|i ate|i just had|i just ate|i also had|and i had|for breakfast|for lunch|for dinner|for snack)\b/.test(lower)) return true;
+return false;
+}
+
+// Clean natural language food-log text into just the food phrase for parsing.
+// Example: "And I had two eggs and an avocado for lunch" -> "two eggs and an avocado"
+function cleanFoodLogText(message, context) {
+let text = String(context?.followUpMessage || context?.originalMessage || message || '');
+text = text.replace(/^[\s,.;]*(and\s+)?i\s+(just\s+)?(also\s+)?(had|ate)\s+/i, '');
+text = text.replace(/^[\s,.;]*(and\s+)?/i, '');
+text = text.replace(/\s+for\s+(breakfast|lunch|dinner|snack)\b.*$/i, '');
+text = text.replace(/\b(breakfast|lunch|dinner|snack)\b[:\-]?/i, '');
+return text.trim();
+}
+
 export async function POST(req) {
 try {
 const body = await req.json();
@@ -712,10 +732,12 @@ carbs: Math.max(0, goal.carbs - totals.carbs),
 fat: Math.max(0, goal.fat - totals.fat),
 };
 
-// ── DB Food Lookup (for food_log AND meal_planning) ──
+// ── DB Food Lookup (food logs from context OR natural language, plus meal planning) ──
+const looksLikeFoodLog = looksLikeFoodLogMessage(message, context);
+const foodLogLookupMsg = cleanFoodLogText(message, context);
 let dbFoodResults = null;
-if (context?.type === "food_log" || context?.type === "meal_planning") {
-const lookupMsg = context.followUpMessage || context.originalMessage || message;
+if (looksLikeFoodLog || context?.type === "meal_planning") {
+const lookupMsg = looksLikeFoodLog ? foodLogLookupMsg : (context.followUpMessage || context.originalMessage || message);
 dbFoodResults = await lookupFoodMacros(lookupMsg);
 if (dbFoodResults) {
 console.log(`=== DB FOOD LOOKUP: found ${dbFoodResults.length} food(s) ===`);
@@ -728,9 +750,9 @@ console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
 // ── DETERMINISTIC FOOD LOGGING ──────────────────────────────────────
 // If USDA/database lookup succeeds, do NOT use AI to calculate nutrition.
 // The backend builds the totals and breakdown so dashboard numbers always match.
-if (context?.type === "food_log" && dbFoodResults && dbFoodResults.length > 0) {
-const lookupMsg = context.followUpMessage || context.originalMessage || message;
-const mealType = inferMealTypeFromMessage(lookupMsg, hour, context.mealType);
+if (looksLikeFoodLog && dbFoodResults && dbFoodResults.length > 0) {
+const lookupMsg = foodLogLookupMsg;
+const mealType = inferMealTypeFromMessage(message || lookupMsg, hour, context?.mealType);
 const deterministicMeal = buildMealFromDbResults(dbFoodResults, mealType);
 const confirmed = isConfirmationMessage(message) || context.confirmed === true || context.shouldLog === true;
 
@@ -766,6 +788,7 @@ source: "database_deterministic_food_log",
 activeUserId,
 targetDate,
 foodsFound: dbFoodResults.length,
+lookupMessage: lookupMsg,
 meal: deterministicMeal,
 },
 });
@@ -1855,7 +1878,7 @@ console.log("=== RESPONSE ===\n", reply);
 // ── FIX #2: Single confirmation logic - check if user confirmed and meal should be logged ──
 let mealLogged = false;
 // ── FIX: Combine ALL food items into ONE meal ──
-if (dbFoodResults && dbFoodResults.length > 0 && message.toLowerCase().includes('yes')) {
+if (false && dbFoodResults && dbFoodResults.length > 0 && message.toLowerCase().includes('yes')) {
 if (reply.toLowerCase().includes('log') || context?.type === 'food_log') {
 try {
 // COMBINE all foods into single meal entry
@@ -1912,6 +1935,7 @@ plannedMealsLoaded: todayPlanned.length,
 totals,
 remaining,
 deterministicFoodLogUsed: false,
+looksLikeFoodLog,
 },
 });
 
