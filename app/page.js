@@ -387,6 +387,7 @@ const [pendingImages, setPendingImages] = useState([]); // max 4: [{ base64, mim
 const [showPhotoMenu, setShowPhotoMenu] = useState(false);
 const [loadingStage, setLoadingStage] = useState("");
 const [completedMealReviewIds, setCompletedMealReviewIds] = useState(new Set());
+const [dismissedPlanKeys, setDismissedPlanKeys] = useState(new Set());
 
 const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
 if (typeof window !== "undefined") {
@@ -891,6 +892,23 @@ await loadPlannedMeals(uid);
 }
 }
 
+
+function handleEditPlanMeal(meal) {
+const label = getMealLabel(meal.displayType || meal.mealType || "meal");
+setHistory(prev => [
+...prev,
+{
+role: "assistant",
+content: `Got it — tell me what you'd like instead for ${label}.`,
+},
+]);
+}
+
+function handleCancelPlanMeal(meal, msgIdx) {
+const key = getMealKey(msgIdx, meal);
+setDismissedPlanKeys(prev => new Set([...prev, key]));
+}
+
 async function handleMealReviewAction(action, msg, idx) {
 if (completedMealReviewIds.has(idx)) return;
 
@@ -929,10 +947,12 @@ return;
 
 const table = action === "eat" ? "actual_meals" : "planned_meals";
 
+const reviewTargetDate = msg.mealReview?.targetDate || getLocalDate();
+
 for (const meal of meals) {
 const saved = await saveMealViaAPI(table, {
 ...meal,
-date: getLocalDate(),
+date: reviewTargetDate,
 }, uid);
 
 if (!saved) {
@@ -1184,23 +1204,40 @@ const { meals: confirmMeals, sourceIdx } = (thisIsPostConfirmAI || isPhotoSelect
 
 const thisMeals = !isUser ? parseAllMeals(msg.content) : [];
 
-// Only show buttons for multi-meal plans (2+ meals) or explicit photo winner
-// Never show buttons for single food logs — those auto-save
-const buttonMeals = (thisIsPostConfirmAI && confirmMeals.length >= 2)
-? confirmMeals
-: (isPhotoSelection && confirmMeals.length > 0)
-? confirmMeals
-: [];
-const buttonSourceIdx = sourceIdx >= 0 ? sourceIdx : idx;
-
 const triggerText = !isUser && history[idx - 1]?.role === "user"
 ? history[idx - 1].content : "";
 const surroundingTexts = history.slice(Math.max(0, idx - 6), idx).map(m => m.content || "");
 const targetDate = extractTargetDate(triggerText, surroundingTexts);
 
-const showButtons = buttonMeals.length > 0;
+// Meal-plan review buttons:
+// If the assistant returned one or more meal blocks and this is NOT a food-log review,
+// render each meal as its own planned-meal action.
+// This supports full-day plans and partial plans like breakfast+lunch or snack+dinner.
+const planMealsFromThisMessage =
+!isUser && !msg.mealReview && thisMeals.length > 0
+? thisMeals
+: [];
+
+const buttonMeals = planMealsFromThisMessage.length > 0
+? planMealsFromThisMessage
+: (thisIsPostConfirmAI && confirmMeals.length > 0)
+? confirmMeals
+: (isPhotoSelection && confirmMeals.length > 0)
+? confirmMeals
+: [];
+
+const buttonSourceIdx = planMealsFromThisMessage.length > 0
+? idx
+: (sourceIdx >= 0 ? sourceIdx : idx);
+
+const visibleButtonMeals = buttonMeals.filter((m) => {
+const key = getMealKey(buttonSourceIdx, m);
+return !dismissedPlanKeys.has(key);
+});
+
+const showButtons = visibleButtonMeals.length > 0;
 const allSaved = showButtons &&
-buttonMeals.every((m) => savedPlanKeys.includes(getMealKey(buttonSourceIdx, m)));
+visibleButtonMeals.every((m) => savedPlanKeys.includes(getMealKey(buttonSourceIdx, m)));
 
 return (
 <div key={idx} style={{ display:"flex",
@@ -1290,38 +1327,109 @@ style={{ ...buttonBase, background:"#ef4444" }}
 </div>
 )}
 
-{/* Add to plan buttons */}
+{/* Meal plan buttons */}
 {showButtons && (
-<div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-{buttonMeals.length > 1 && (
-<button onClick={() => handleAddAllToPlan(buttonMeals, buttonSourceIdx, targetDate)}
+<div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+{visibleButtonMeals.length > 1 && (
+<button
+onClick={() => handleAddAllToPlan(visibleButtonMeals, buttonSourceIdx, targetDate)}
 disabled={allSaved}
-style={{ fontSize:12, padding:"10px 16px", borderRadius:12, fontWeight:700,
+style={{
+fontSize:12,
+padding:"10px 16px",
+borderRadius:12,
+fontWeight:700,
 background: allSaved ? "#10b98122" : "#10b981",
-color: allSaved ? "#10b981" : "#fff", border:"none", cursor:"pointer" }}>
-{allSaved ? "✅ All meals added" : `+ Add all ${buttonMeals.length} meals to plan`}
+color: allSaved ? "#10b981" : "#fff",
+border:"none",
+cursor: allSaved ? "default" : "pointer",
+}}
+>
+{allSaved ? "✅ All selected meals added" : `+ Add all ${visibleButtonMeals.length} meals to plan`}
 </button>
 )}
-{buttonMeals.map(meal => {
+
+{visibleButtonMeals.map(meal => {
 const key = getMealKey(buttonSourceIdx, meal);
 const isSaved = savedPlanKeys.includes(key);
 const label = getMealLabel(meal.displayType);
 const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
 pm => pm.meal_type === meal.mealType && pm.date === targetDate
 );
+
 return (
-<button key={key}
+<div key={key} style={{
+display:"flex",
+flexDirection:"column",
+gap:6,
+padding:"10px",
+borderRadius:12,
+border:`1px solid ${T.border}`,
+background:T.surface,
+}}>
+<div style={{ fontSize:12, fontWeight:800, color:T.text }}>
+{label} · {meal.calories} cal
+</div>
+
+<div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+<button
 onClick={() => handleAddToPlan(meal, buttonSourceIdx, targetDate)}
 disabled={isSaved}
-style={{ fontSize:12, padding:"9px 16px", borderRadius:12, fontWeight:600,
-border: isSaved ? "none" : `1px solid ${hasExisting ? "#f59e0b" : "#2563eb"}`,
-background: isSaved ? "#10b98122" : hasExisting ? "#f59e0b22" : "#2563eb22",
-color: isSaved ? "#10b981" : hasExisting ? "#f59e0b" : "#2563eb",
-cursor: isSaved ? "default" : "pointer" }}>
-{isSaved ? `✅ ${label} added`
-: hasExisting ? `↺ Replace ${label} · ${meal.calories} cal`
-: `+ Add ${label} · ${meal.calories} cal`}
+style={{
+fontSize:12,
+padding:"8px 10px",
+borderRadius:10,
+fontWeight:700,
+border:"none",
+background: isSaved ? "#10b98122" : hasExisting ? "#f59e0b" : "#2563eb",
+color: isSaved ? "#10b981" : "#fff",
+cursor: isSaved ? "default" : "pointer",
+}}
+>
+{isSaved
+? `✅ ${label} added`
+: hasExisting
+? `↺ Replace ${label}`
+: `+ Add ${label}`}
 </button>
+
+<button
+onClick={() => handleEditPlanMeal(meal)}
+disabled={isSaved}
+style={{
+fontSize:12,
+padding:"8px 10px",
+borderRadius:10,
+fontWeight:700,
+border:"none",
+background:"#f59e0b",
+color:"#fff",
+cursor: isSaved ? "default" : "pointer",
+opacity: isSaved ? 0.5 : 1,
+}}
+>
+✏️ Edit
+</button>
+
+<button
+onClick={() => handleCancelPlanMeal(meal, buttonSourceIdx)}
+disabled={isSaved}
+style={{
+fontSize:12,
+padding:"8px 10px",
+borderRadius:10,
+fontWeight:700,
+border:"none",
+background:"#ef4444",
+color:"#fff",
+cursor: isSaved ? "default" : "pointer",
+opacity: isSaved ? 0.5 : 1,
+}}
+>
+❌ Cancel
+</button>
+</div>
+</div>
 );
 })}
 </div>
