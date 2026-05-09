@@ -584,7 +584,7 @@ export default function HomePage() {
           const lookupData = await lookupResponse.json();
           
           // If ALL foods found in DB, skip AI entirely
-          if (lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
+          if (false && lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
             const uid = userId || localStorage.getItem("user_id");
             const mealType = extractMealType(trimmed) || inferMealTypeFromHour(hour);
             
