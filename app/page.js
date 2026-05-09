@@ -1214,7 +1214,15 @@ cursor:"pointer"
 </button>
 
 <button
-onClick={() => setMessage("Edit this meal")}
+onClick={() => {
+setHistory(prev => [
+...prev,
+{
+role: "assistant",
+content: "Got it — tell me what you actually had instead.",
+},
+]);
+}}
 style={{
 background:"#f59e0b",
 color:"#fff",
