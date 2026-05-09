@@ -227,6 +227,17 @@ return items;
 // Look up a food in the USDA database
 async function lookupFood(foodName) {
 if (!foodName) return null;
+const rawFoodName = foodName;
+const lowerFoodName = String(foodName).toLowerCase();
+
+if (/\begg whites?\b/.test(lowerFoodName)) {
+foodName = "egg white";
+} else if (
+/\beggs?\b/.test(lowerFoodName) &&
+!lowerFoodName.includes("eggplant")
+) {
+foodName = "whole egg";
+}
 try {
 // Full text search — finds closest match
 const { data, error } = await supabase
@@ -752,41 +763,110 @@ console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
 // The backend builds the totals and breakdown so dashboard numbers always match.
 if (looksLikeFoodLog && dbFoodResults && dbFoodResults.length > 0) {
 const lookupMsg = foodLogLookupMsg;
-const mealType = inferMealTypeFromMessage(message || lookupMsg, hour, context?.mealType);
-const deterministicMeal = buildMealFromDbResults(dbFoodResults, mealType);
-const confirmed = isConfirmationMessage(message) || context.confirmed === true || context.shouldLog === true;
+
+const mealType = inferMealTypeFromMessage(
+message || lookupMsg,
+hour,
+context?.mealType
+);
+
+const deterministicMeal = buildMealFromDbResults(
+dbFoodResults,
+mealType
+);
+
+const detectedItems = parseFoodItems(lookupMsg);
+
+const hasPartialMatch =
+detectedItems.length > dbFoodResults.length;
+
+const confirmed =
+isConfirmationMessage(message) ||
+context?.confirmed === true ||
+context?.shouldLog === true;
 
 let mealLogged = false;
 let saveResult = null;
 
-if (confirmed) {
-saveResult = await saveMealWithoutDuplicates(activeUserId, deterministicMeal, targetDate);
+if (confirmed && !hasPartialMatch) {
+saveResult = await saveMealWithoutDuplicates(
+activeUserId,
+deterministicMeal,
+targetDate
+);
+
 mealLogged = !!saveResult?.success;
 }
 
-const reply = confirmed
-? `Logged as eaten.\n\n${formatDeterministicMealBlock(deterministicMeal, false)}`
-: formatDeterministicMealBlock(deterministicMeal, true);
+const reply = mealLogged
+? `Logged as eaten.\n\n${formatDeterministicMealBlock(
+deterministicMeal,
+false
+)}`
+: hasPartialMatch
+? `I found part of that meal, but not everything.
+
+I found:
+${dbFoodResults.map(r => `- ${r.food}`).join("\n")}
+
+Please confirm or edit before I save it.`
+: `Review this meal before saving:
+
+${formatDeterministicMealBlock(
+deterministicMeal,
+false
+)}
+
+Choose one:
+✅ Add to Eaten
+📅 Add to Planned
+✏️ Edit
+❌ Cancel`;
 
 try {
-await supabase.from("ai_messages").insert([{
+await supabase.from("ai_messages").insert([
+{
 user_id: activeUserId,
 message: message || "",
 response: reply,
 created_at: new Date().toISOString(),
-}]);
-} catch (e) { console.log("Save AI message error:", e.message); }
+},
+]);
+} catch (e) {
+console.log("Save AI message error:", e.message);
+}
 
 return Response.json({
 reply,
 mealLogged,
 deterministic: true,
-savedMeal: mealLogged ? deterministicMeal : null,
+needsConfirmation: !mealLogged,
+hasPartialMatch,
+
+mealReview: {
+meal: deterministicMeal,
+mealType,
+targetDate,
+actions: [
+"add_to_eaten",
+"add_to_planned",
+"edit",
+"cancel",
+],
+},
+
+savedMeal: mealLogged
+? deterministicMeal
+: null,
+
 saveResult,
+
 debug: {
-source: "database_deterministic_food_log",
+source:
+"database_deterministic_food_log_review",
 activeUserId,
 targetDate,
+detectedItems: detectedItems.length,
 foodsFound: dbFoodResults.length,
 lookupMessage: lookupMsg,
 meal: deterministicMeal,
