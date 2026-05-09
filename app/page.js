@@ -735,14 +735,25 @@ export default function HomePage() {
         }),
       });
 
-      const data  = await res.json();
-      const reply = data.reply || "Sorry, could not get a response.";
-      const assistantMessage = {
-      role: "assistant",
-      content: reply,
-      mealReview: data.mealReview || null,
-      needsConfirmation: data.needsConfirmation || false,
-      };
+     const data = await res.json();
+const reply = data.reply || "Sorry, could not get a response.";
+
+const parsedReplyMeals = parseAllMeals(reply);
+const shouldForceMealReview =
+isLogMessage(trimmed) && parsedReplyMeals.length > 0;
+
+const assistantMessage = {
+role: "assistant",
+content: shouldForceMealReview && !reply.includes("Review this meal before saving:")
+? `Review this meal before saving:\n\n${reply}\n\nChoose one:\n✅ Add to Eaten\n📅 Add to Planned\n✏️ Edit\n❌ Cancel`
+: reply,
+mealReview: data.mealReview || (
+shouldForceMealReview
+? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
+: null
+),
+needsConfirmation: data.needsConfirmation || shouldForceMealReview,
+};
 
       setHistory([
       ...newHistory,
