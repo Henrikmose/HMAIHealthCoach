@@ -752,7 +752,7 @@ export default function HomePage() {
       // The AI response index in history — used to close it after saving
       const aiMsgIdx = newHistory.length;
 
-      if (newActiveMealLog?.type === "food_log") {
+      if (false && newActiveMealLog?.type === "food_log") {
         const parsed = parseAllMeals(reply);
         if (parsed.length > 0) {
           const meal = { ...parsed[0], date: getLocalDate() };
