@@ -737,7 +737,17 @@ export default function HomePage() {
 
       const data  = await res.json();
       const reply = data.reply || "Sorry, could not get a response.";
-      setHistory([...newHistory, { role: "assistant", content: reply }]);
+      const assistantMessage = {
+      role: "assistant",
+      content: reply,
+      mealReview: data.mealReview || null,
+      needsConfirmation: data.needsConfirmation || false,
+      };
+
+      setHistory([
+      ...newHistory,
+      assistantMessage,
+      ]);
 
       // The AI response index in history — used to close it after saving
       const aiMsgIdx = newHistory.length;
@@ -1122,6 +1132,25 @@ export default function HomePage() {
                       border: isUser ? "none" : `1px solid ${T.aiBorder}`,
                     }}>
                       {msg.content}
+                      {!isUser && msg.mealReview?.actions?.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                      <button onClick={() => setMessage("Add to Eaten")}>
+                      ✅ Add to Eaten
+                      </button>
+
+                      <button onClick={() => setMessage("Add to Planned")}>
+                      📅 Add to Planned
+                      </button>
+
+                      <button onClick={() => setMessage("Edit")}>
+                      ✏️ Edit
+                      </button>
+
+                      <button onClick={() => setMessage("Cancel")}>
+                      ❌ Cancel
+                      </button>
+                      </div>
+                      )}
                     </div>
                   )}
 
