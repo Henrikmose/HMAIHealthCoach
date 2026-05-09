@@ -860,6 +860,42 @@ export default function HomePage() {
       await loadPlannedMeals(uid);
     }
   }
+  async function handleMealReviewAction(action, msg, idx) {
+try {
+const uid = userId || localStorage.getItem("user_id");
+
+const meals = parseAllMeals(msg.content);
+
+if (!meals.length) {
+alert("No meals found.");
+return;
+}
+
+const table =
+action === "eat"
+? "actual_meals"
+: "planned_meals";
+
+for (const meal of meals) {
+await saveMealViaAPI(table, {
+...meal,
+date: getLocalDate(),
+}, uid);
+}
+
+if (action === "eat") {
+await loadTodayMeals(uid);
+} else {
+await loadPlannedMeals(uid);
+}
+
+setClosedPlanIndices(prev => new Set([...prev, idx]));
+
+} catch (err) {
+console.error(err);
+alert("Could not save meal.");
+}
+}
 
   function handleKeyDown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1134,21 +1170,69 @@ export default function HomePage() {
                       {msg.content}
                       {!isUser && msg.mealReview?.actions?.length > 0 && (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-                      <button onClick={() => setMessage("Add to Eaten")}>
-                      ✅ Add to Eaten
-                      </button>
+                     <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12 }}>
 
-                      <button onClick={() => setMessage("Add to Planned")}>
-                      📅 Add to Planned
-                      </button>
+<button
+onClick={() => handleMealReviewAction("eat", msg, idx)}
+style={{
+background:"#10b981",
+color:"#fff",
+border:"none",
+borderRadius:10,
+padding:"8px 12px",
+fontWeight:600,
+cursor:"pointer"
+}}
+>
+✅ Add to Eaten
+</button>
 
-                      <button onClick={() => setMessage("Edit")}>
-                      ✏️ Edit
-                      </button>
+<button
+onClick={() => handleMealReviewAction("plan", msg, idx)}
+style={{
+background:"#2563eb",
+color:"#fff",
+border:"none",
+borderRadius:10,
+padding:"8px 12px",
+fontWeight:600,
+cursor:"pointer"
+}}
+>
+📅 Add to Planned
+</button>
 
-                      <button onClick={() => setMessage("Cancel")}>
-                      ❌ Cancel
-                      </button>
+<button
+onClick={() => setMessage("Edit this meal")}
+style={{
+background:"#f59e0b",
+color:"#fff",
+border:"none",
+borderRadius:10,
+padding:"8px 12px",
+fontWeight:600,
+cursor:"pointer"
+}}
+>
+✏️ Edit
+</button>
+
+<button
+onClick={() => setMessage("Cancel")}
+style={{
+background:"#ef4444",
+color:"#fff",
+border:"none",
+borderRadius:10,
+padding:"8px 12px",
+fontWeight:600,
+cursor:"pointer"
+}}
+>
+❌ Cancel
+</button>
+
+</div>
                       </div>
                       )}
                     </div>
