@@ -15,17 +15,17 @@ function getLocalDate(localDate) {
 }
 
 function sumMeals(meals) {
-  console.log("🔍 sumMeals called with", meals?.length || 0, "meals");
+  console.log("🧮 sumMeals called with", meals?.length || 0, "meals");
   
   return (meals || []).reduce(
     (t, m, idx) => {
       const s = Number(m.servings || 1);
       const cals = Number(m.calories||0) * s;
-      const prot = Number(m.protein||0)  * s;
-      const carb = Number(m.carbs||0)    * s;
-      const fats = Number(m.fat||0)      * s;
+      const prot = Number(m.protein||0) * s;
+      const carb = Number(m.carbs||0) * s;
+      const fats = Number(m.fat||0) * s;
       
-      console.log(`  Meal ${idx+1}: ${m.food || 'Unknown'} - base: ${m.calories}cal × ${s} servings = ${cals}cal | ${prot}g P | ${carb}g C | ${fats}g F`);
+      console.log(`  Meal ${idx+1}: ${m.food} - ${m.calories}cal × ${s} servings = ${cals}cal`);
       
       return {
         calories: t.calories + cals,
@@ -371,14 +371,6 @@ export async function POST(req) {
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
     const hour = typeof localHour === "number" ? localHour : new Date().getHours();
     const today = getLocalDate(clientDate);
-    
-    console.log("\n═══════════════════════════════════════════");
-    console.log("🎯 ROUTE.JS DEBUG - MACRO CALCULATION");
-    console.log("═══════════════════════════════════════════");
-    console.log("📅 Date being used:", today);
-    console.log("🕐 Hour:", hour);
-    console.log("👤 User ID:", activeUserId);
-    console.log("📝 Client sent date:", clientDate || "NOT PROVIDED");
 
     // ── Load profile ──
     let userName = "there", currentWeight = null, targetWeight = null;
@@ -407,51 +399,24 @@ export async function POST(req) {
       if (g) goal = { calories: g.calories||2200, protein: g.protein||180, carbs: g.carbs||220, fat: g.fat||70 };
     } catch (e) { console.log("Goals error:", e.message); }
 
-    console.log("🎯 Daily Goals:", goal);
-
     // ── Load today's meals ──
-    console.log("\n🔍 Fetching actual_meals for date:", today);
+    console.log("\n📊 Loading meals for date:", today);
     let todayMeals = [];
     try {
-      const { data: meals, error } = await supabase
+      const { data: meals } = await supabase
         .from("actual_meals").select("*").eq("user_id", activeUserId).eq("date", today);
-      
-      if (error) {
-        console.error("❌ Error fetching actual_meals:", error);
-      } else {
-        console.log("✅ Found", meals?.length || 0, "actual meals");
-        todayMeals = meals || [];
-        
-        // Log each meal retrieved
-        todayMeals.forEach((m, idx) => {
-          console.log(`  Meal ${idx+1}: ${m.food} - ${m.calories}cal (servings: ${m.servings || 1})`);
-        });
-      }
-    } catch (e) { 
-      console.log("Meals error:", e.message); 
-    }
+      todayMeals = meals || [];
+      console.log("✅ Loaded", todayMeals.length, "actual meals");
+    } catch (e) { console.log("Meals error:", e.message); }
 
     // ── Load today's planned meals ──
-    console.log("\n🔍 Fetching planned_meals for date:", today);
     let todayPlanned = [];
     try {
-      const { data: planned, error } = await supabase
+      const { data: planned } = await supabase
         .from("planned_meals").select("*").eq("user_id", activeUserId).eq("date", today);
-      
-      if (error) {
-        console.error("❌ Error fetching planned_meals:", error);
-      } else {
-        console.log("✅ Found", planned?.length || 0, "planned meals");
-        todayPlanned = planned || [];
-        
-        // Log each planned meal
-        todayPlanned.forEach((m, idx) => {
-          console.log(`  Planned ${idx+1}: ${m.food} - ${m.calories}cal (servings: ${m.servings || 1})`);
-        });
-      }
-    } catch (e) { 
-      console.log("Planned meals error:", e.message); 
-    }
+      todayPlanned = planned || [];
+      console.log("✅ Loaded", todayPlanned.length, "planned meals");
+    } catch (e) { console.log("Planned meals error:", e.message); }
 
     const plannedTypes = [...new Set(todayPlanned.map(m => m.meal_type))];
     const hasPlannedMeals = todayPlanned.length > 0;
@@ -459,14 +424,8 @@ export async function POST(req) {
       ? todayPlanned.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal)`).join("\n")
       : "No planned meals yet";
 
-    console.log("\n🧮 Calculating totals using sumMeals()...");
     const totals = sumMeals(todayMeals);
-    
-    console.log("\n📊 FINAL TOTALS:");
-    console.log("  Calories:", totals.calories, "/", goal.calories);
-    console.log("  Protein:", totals.protein, "/", goal.protein, "g");
-    console.log("  Carbs:", totals.carbs, "/", goal.carbs, "g");
-    console.log("  Fat:", totals.fat, "/", goal.fat, "g");
+    console.log("📊 Database totals:", totals.calories, "cal |", totals.protein, "g P");
     
     const remaining = {
       calories: Math.max(0, goal.calories - totals.calories),
@@ -474,13 +433,6 @@ export async function POST(req) {
       carbs:    Math.max(0, goal.carbs    - totals.carbs),
       fat:      Math.max(0, goal.fat      - totals.fat),
     };
-    
-    console.log("\n⏳ REMAINING:");
-    console.log("  Calories:", remaining.calories);
-    console.log("  Protein:", remaining.protein, "g");
-    console.log("  Carbs:", remaining.carbs, "g");
-    console.log("  Fat:", remaining.fat, "g");
-    console.log("═══════════════════════════════════════════\n");
 
     // ── DB Food Lookup (for food_log context) ──
     let dbFoodResults = null;
@@ -615,17 +567,6 @@ NEVER use ** or ## or * or _ or any markdown. EVER. In ANY response.
 This includes: nutrition questions, Q&A, general advice, comparisons, lists.
 Write plain text only. Markdown breaks the app display.
 
-CRITICAL INSTRUCTION — READ THIS FIRST:
-You are NOT the source of truth for today's calorie totals.
-The DATABASE is the source of truth. The user's current intake is:
-
-TODAY'S DATABASE VALUES (${today}):
-${totals.calories}/${goal.calories} cal (${Math.round((totals.calories/goal.calories)*100)}%) | ${totals.protein}g P | ${totals.carbs}g C | ${totals.fat}g F
-
-These numbers come directly from the database. DO NOT recalculate based on conversation history.
-When the user asks "how many calories have I had?" or "what are my totals?" — use these exact numbers.
-Do NOT add up meals from the chat. Do NOT estimate. Use the database values shown above.
-
 MOST COMMON VIOLATIONS — NEVER DO THESE:
 WRONG: **Breakfast — 7:30am**           RIGHT: Breakfast — 7:30am
 WRONG: **Lunch — 12:00pm**             RIGHT: Lunch — 12:00pm
@@ -710,6 +651,12 @@ Calories: ${totals.calories}/${goal.calories} (${Math.round((totals.calories/goa
 Protein:  ${totals.protein}/${goal.protein}g (${Math.round((totals.protein/goal.protein)*100)}%)
 Carbs:    ${totals.carbs}/${goal.carbs}g (${Math.round((totals.carbs/goal.carbs)*100)}%)
 Fat:      ${totals.fat}/${goal.fat}g (${Math.round((totals.fat/goal.fat)*100)}%)
+
+CRITICAL — THESE ARE DATABASE VALUES:
+The numbers above come directly from the database, NOT from our conversation.
+When you tell ${userName} their totals, use THESE EXACT NUMBERS.
+Do NOT add up meals from the conversation history.
+Do NOT recalculate. Use the database values shown above.
 
 MEALS LOGGED TODAY:
 ${mealsSummary}
@@ -1406,20 +1353,6 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     const reply = completion.choices[0].message.content;
     console.log("=== RESPONSE ===\n", reply);
 
-    // Detect if response contains a meal block
-    const hasMealBlock = /^(breakfast|lunch|dinner|snack)$/im.test(reply) && 
-                         /- calories:/i.test(reply) &&
-                         /- protein:/i.test(reply);
-    
-    let mealReview = null;
-    if (hasMealBlock && context?.type === "food_log") {
-      console.log("✅ Meal block detected in food logging context - enabling review buttons");
-      mealReview = {
-        actions: ["eat", "plan", "edit", "cancel"],
-        targetDate: today
-      };
-    }
-
     try {
       await supabase.from("ai_messages").insert([{
         user_id: activeUserId, message: message || "", response: reply,
@@ -1427,7 +1360,7 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
       }]);
     } catch (e) { console.log("Save error:", e); }
 
-    return Response.json({ reply, mealReview });
+    return Response.json({ reply });
 
   } catch (error) {
     console.error("AI ERROR:", error);
