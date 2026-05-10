@@ -1406,6 +1406,20 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     const reply = completion.choices[0].message.content;
     console.log("=== RESPONSE ===\n", reply);
 
+    // Detect if response contains a meal block
+    const hasMealBlock = /^(breakfast|lunch|dinner|snack)$/im.test(reply) && 
+                         /- calories:/i.test(reply) &&
+                         /- protein:/i.test(reply);
+    
+    let mealReview = null;
+    if (hasMealBlock && context?.type === "food_log") {
+      console.log("✅ Meal block detected in food logging context - enabling review buttons");
+      mealReview = {
+        actions: ["eat", "plan", "edit", "cancel"],
+        targetDate: today
+      };
+    }
+
     try {
       await supabase.from("ai_messages").insert([{
         user_id: activeUserId, message: message || "", response: reply,
@@ -1413,7 +1427,7 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
       }]);
     } catch (e) { console.log("Save error:", e); }
 
-    return Response.json({ reply });
+    return Response.json({ reply, mealReview });
 
   } catch (error) {
     console.error("AI ERROR:", error);
