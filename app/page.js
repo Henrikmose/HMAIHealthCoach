@@ -199,14 +199,27 @@ const lineLower = line.toLowerCase().trim();
 
 // ENHANCED MATCHING: Strip emojis, parentheses, markdown, extra text
 // Clean the line to just get the meal type word
-const cleanedLine = lineLower
-  .replace(/[🍳🥗🍽️🌮🥙🍕🍔🌭🥪🌯🥘🍱🍛🍜🍝🍲🥟🍙🍚🥡🦐🦞🦀🐟🐠🍤🦪🍣🥮🍡🥠🥧🧁🍰🎂🍮🍭🍬🍫🍩🍪🍨🍧🍦🥧🧁🍰🎂📊👉💪🔥⚡✨🌟⭐💫🎯🎉😊🙂😀👍✅❌📅🕐]/g, "") // remove common emojis
-  .replace(/\*\*/g, "") // remove markdown bold
-  .replace(/^#+\s*/g, "") // remove markdown headers
-  .replace(/\s*\([^)]*\)/g, "") // remove anything in parentheses
-  .replace(/\s*—.*$/g, "") // remove anything after em dash
-  .replace(/\s*-\s*\d+:\d+/g, "") // remove time patterns like "- 7:00am"
-  .trim();
+// Use simple string operations instead of emoji regex to avoid browser compatibility issues
+let cleanedLine = lineLower;
+
+// Remove markdown
+cleanedLine = cleanedLine.replace(/\*\*/g, "");
+cleanedLine = cleanedLine.replace(/^#+\s*/g, "");
+
+// Remove anything in parentheses
+cleanedLine = cleanedLine.replace(/\s*\([^)]*\)/g, "");
+
+// Remove anything after em dash or regular dash with time
+cleanedLine = cleanedLine.replace(/\s*—.*$/g, "");
+cleanedLine = cleanedLine.replace(/\s*-\s*\d+:\d+.*$/g, "");
+
+// Remove common emoji characters by checking for non-ASCII characters
+// This is safer than using emoji character classes
+cleanedLine = cleanedLine.split('').filter(char => {
+  const code = char.charCodeAt(0);
+  // Keep only ASCII and common European characters
+  return code < 127 || (code >= 128 && code < 256);
+}).join('').trim();
 
 console.log(`  Line ${i}: "${line}" → cleaned: "${cleanedLine}"`);
 
@@ -240,12 +253,16 @@ if (matchedType) {
     
     const isNextMeal = mealTypes.some(
       (t) => {
-        const cleaned = fll
-          .replace(/[🍳🥗🍽️🌮🥙🍕🍔🌭🥪🌯🥘🍱🍛🍜🍝🍲🥟🍙🍚🥡🦐🦞🦀🐟🐠🍤🦪🍣🥮🍡🥠🥧🧁🍰🎂🍮🍭🍬🍫🍩🍪🍨🍧🍦🥧🧁🍰🎂]/g, "")
-          .replace(/\*\*/g, "")
-          .replace(/\s*\([^)]*\)/g, "")
-          .replace(/\s*—.*$/g, "")
-          .trim();
+        // Use the same safe cleaning approach without emoji regex
+        let cleaned = fll;
+        cleaned = cleaned.replace(/\*\*/g, "");
+        cleaned = cleaned.replace(/\s*\([^)]*\)/g, "");
+        cleaned = cleaned.replace(/\s*—.*$/g, "");
+        cleaned = cleaned.split('').filter(char => {
+          const code = char.charCodeAt(0);
+          return code < 127 || (code >= 128 && code < 256);
+        }).join('').trim();
+        
         return cleaned === t || cleaned.startsWith(t + " ") || cleaned.startsWith(t + ":");
       }
     );
