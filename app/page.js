@@ -197,28 +197,45 @@ while (i < lines.length) {
 const line = lines[i];
 const lineLower = line.toLowerCase().trim();
 
-// ENHANCED MATCHING: Strip emojis, parentheses, markdown, extra text
-// Clean the line to just get the meal type word
-// Use simple string operations instead of emoji regex to avoid browser compatibility issues
+// SAFE CLEANING: Use only simple string operations
 let cleanedLine = lineLower;
 
-// Remove markdown
-cleanedLine = cleanedLine.replace(/\*\*/g, "");
-cleanedLine = cleanedLine.replace(/^#+\s*/g, "");
+// Remove markdown (asterisks)
+while (cleanedLine.includes("**")) {
+  cleanedLine = cleanedLine.replace("**", "");
+}
+while (cleanedLine.includes("*")) {
+  cleanedLine = cleanedLine.replace("*", "");
+}
 
-// Remove anything in parentheses
-cleanedLine = cleanedLine.replace(/\s*\([^)]*\)/g, "");
+// Remove hash symbols
+if (cleanedLine.startsWith("#")) {
+  cleanedLine = cleanedLine.substring(cleanedLine.indexOf(" ") + 1);
+}
 
-// Remove anything after em dash or regular dash with time
-cleanedLine = cleanedLine.replace(/\s*—.*$/g, "");
-cleanedLine = cleanedLine.replace(/\s*-\s*\d+:\d+.*$/g, "");
+// Remove parentheses content - find first ( and remove everything until )
+if (cleanedLine.includes("(")) {
+  const startParen = cleanedLine.indexOf("(");
+  const endParen = cleanedLine.indexOf(")");
+  if (endParen > startParen) {
+    cleanedLine = cleanedLine.substring(0, startParen) + cleanedLine.substring(endParen + 1);
+  }
+}
 
-// Remove common emoji characters by checking for non-ASCII characters
-// This is safer than using emoji character classes
+// Remove anything after em dash or colon-time pattern
+if (cleanedLine.includes("—")) {
+  cleanedLine = cleanedLine.substring(0, cleanedLine.indexOf("—"));
+}
+if (cleanedLine.includes(" - ") && cleanedLine.includes(":")) {
+  const dashIndex = cleanedLine.indexOf(" - ");
+  cleanedLine = cleanedLine.substring(0, dashIndex);
+}
+
+// Remove emojis and special characters - keep only letters, numbers, spaces
 cleanedLine = cleanedLine.split('').filter(char => {
   const code = char.charCodeAt(0);
-  // Keep only ASCII and common European characters
-  return code < 127 || (code >= 128 && code < 256);
+  // Keep only: a-z, A-Z, 0-9, space, and basic punctuation
+  return (code >= 32 && code <= 126);
 }).join('').trim();
 
 console.log(`  Line ${i}: "${line}" → cleaned: "${cleanedLine}"`);
@@ -253,14 +270,31 @@ if (matchedType) {
     
     const isNextMeal = mealTypes.some(
       (t) => {
-        // Use the same safe cleaning approach without emoji regex
+        // Use safe string cleaning without regex
         let cleaned = fll;
-        cleaned = cleaned.replace(/\*\*/g, "");
-        cleaned = cleaned.replace(/\s*\([^)]*\)/g, "");
-        cleaned = cleaned.replace(/\s*—.*$/g, "");
+        
+        // Remove asterisks
+        while (cleaned.includes("**")) cleaned = cleaned.replace("**", "");
+        while (cleaned.includes("*")) cleaned = cleaned.replace("*", "");
+        
+        // Remove parentheses
+        if (cleaned.includes("(")) {
+          const start = cleaned.indexOf("(");
+          const end = cleaned.indexOf(")");
+          if (end > start) {
+            cleaned = cleaned.substring(0, start) + cleaned.substring(end + 1);
+          }
+        }
+        
+        // Remove after em dash
+        if (cleaned.includes("—")) {
+          cleaned = cleaned.substring(0, cleaned.indexOf("—"));
+        }
+        
+        // Keep only ASCII
         cleaned = cleaned.split('').filter(char => {
           const code = char.charCodeAt(0);
-          return code < 127 || (code >= 128 && code < 256);
+          return (code >= 32 && code <= 126);
         }).join('').trim();
         
         return cleaned === t || cleaned.startsWith(t + " ") || cleaned.startsWith(t + ":");
