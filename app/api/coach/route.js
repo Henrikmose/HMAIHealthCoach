@@ -1356,10 +1356,16 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     // Detect food logging (past tense) vs meal planning (future tense)
     const isFoodLog = /\b(had|ate|consumed|drank|finished|got|grabbed|just)\b/i.test(message);
     
-    // Detect if response contains a meal block
-    const hasMealBlock = /^(breakfast|lunch|dinner|snack)$/im.test(reply) && 
-                         /- calories:/i.test(reply) &&
-                         /- protein:/i.test(reply);
+    // Detect if response contains a meal - both formats:
+    // Block format: "Breakfast\n- Foods: ...\n- Calories: 140"
+    // Inline format: "Breakfast - 140 cal"
+    const hasMealBlockFormat = /^(breakfast|lunch|dinner|snack)$/im.test(reply) && 
+                                /- calories:/i.test(reply) &&
+                                /- protein:/i.test(reply);
+    
+    const hasMealInlineFormat = /(breakfast|lunch|dinner|snack)\s*[-–]\s*\d+\s*cal/i.test(reply);
+    
+    const hasMealBlock = hasMealBlockFormat || hasMealInlineFormat;
     
     let mealReview = null;
     if (hasMealBlock && isFoodLog) {
@@ -1368,6 +1374,8 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
         actions: ["eat", "plan", "edit", "cancel"],
         targetDate: today
       };
+    } else {
+      console.log("❌ Meal review NOT triggered:", { isFoodLog, hasMealBlock, hasMealBlockFormat, hasMealInlineFormat });
     }
 
     try {
