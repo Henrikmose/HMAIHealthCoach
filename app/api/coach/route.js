@@ -801,6 +801,17 @@ Ambiguous — always ask: "sushi lunch scheduled", "having sushi", "sushi at 12:
 
 IMPORTANT: The total must include ALREADY EATEN calories too.
 Already eaten today: ${totals.calories} cal | ${totals.protein}g P | ${totals.carbs}g C | ${totals.fat}g F
+
+${todayMeals.length > 0 ? `FOODS LOGGED TODAY (from database, not conversation):
+${todayMeals.map(m => `- ${m.meal_type}: ${m.food} (${m.calories} cal, ${m.servings || 1} serving${(m.servings || 1) > 1 ? 's' : ''})`).join('\n')}
+
+When user logs food that matches something above, acknowledge it:
+"You already logged [food] for [meal_type] earlier — here's the breakdown again:"
+Then show the meal block and let them decide (they might want to add another serving or it might be a mistake).` : 'No foods logged yet today.'}
+
+${todayPlanned.length > 0 ? `PLANNED MEALS TODAY (from database, not conversation):
+${todayPlanned.map(m => `- ${m.meal_type}: ${m.food} (${m.calories} cal)`).join('\n')}` : ''}
+
 Total = already eaten + all planned meals in this plan.
 Example: if eaten=545 and plan=1380, total = 1925/2800 cal (69%)
 
@@ -1415,6 +1426,15 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     
     const hasMealBlock = hasMealBlockFormat || hasMealInlineFormat;
     
+    // Debug logging
+    console.log("🔍 MEAL REVIEW DETECTION:");
+    console.log("  - isFoodLog:", isFoodLog, "(message:", message.substring(0, 50) + "...)");
+    console.log("  - hasMealBlockFormat:", hasMealBlockFormat);
+    console.log("  - hasMealInlineFormat:", hasMealInlineFormat);
+    console.log("  - hasMealBlock:", hasMealBlock);
+    console.log("  - hasImages:", images?.length > 0);
+    console.log("  - Should trigger?", hasMealBlock && (isFoodLog || images?.length > 0));
+    
     let mealReview = null;
     // Trigger meal review for: (1) past tense food logging OR (2) photo-based meals
     if (hasMealBlock && (isFoodLog || images?.length > 0)) {
@@ -1425,7 +1445,13 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
         .replace(/choose one:?\s*/gi, '')
         .replace(/select one:?\s*/gi, '')
         .replace(/pick one:?\s*/gi, '')
+        .replace(/✅\s*add to eaten/gi, '')
+        .replace(/📅\s*add to planned/gi, '')
+        .replace(/✏️\s*edit/gi, '')
+        .replace(/❌\s*cancel/gi, '')
         .trim();
+      
+      console.log("🧹 Cleaned reply length:", cleanedReply.length, "vs original:", reply.length);
       
       mealReview = {
         actions: ["eat", "plan", "edit", "cancel"],
@@ -1442,7 +1468,7 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
 
       return Response.json({ reply: cleanedReply, mealReview });
     } else {
-      console.log("❌ Meal review NOT triggered:", { isFoodLog, hasMealBlock, hasMealBlockFormat, hasMealInlineFormat, hasImages: images?.length > 0 });
+      console.log("❌ Meal review NOT triggered");
     }
 
     try {
