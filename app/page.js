@@ -973,6 +973,14 @@ const table = action === "eat" ? "actual_meals" : "planned_meals";
 
 const reviewTargetDate = msg.mealReview?.targetDate || getLocalDate();
 
+console.log("💾 Attempting to save meals:", {
+  count: meals.length,
+  table,
+  date: reviewTargetDate,
+  userId: uid,
+  meals: meals
+});
+
 for (const meal of meals) {
 const saved = await saveMealViaAPI(table, {
 ...meal,
@@ -1007,13 +1015,20 @@ content: action === "eat"
 },
 ]);
 } catch (err) {
-console.error(err);
+console.error("❌ MEAL SAVE ERROR:", err);
+console.error("Error details:", {
+  message: err.message,
+  stack: err.stack,
+  meals: meals,
+  userId: uid,
+  table: action === "eat" ? "actual_meals" : "planned_meals"
+});
 setCompletedMealReviewIds(prev => {
 const next = new Set(prev);
 next.delete(idx);
 return next;
 });
-alert("Could not save meal. Please try again.");
+alert(`Could not save meal: ${err.message || 'Unknown error'}. Please try again.`);
 }
 }
 
