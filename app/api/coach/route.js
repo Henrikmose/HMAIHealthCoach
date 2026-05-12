@@ -1357,9 +1357,9 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     const isFoodLog = /\b(had|ate|consumed|drank|finished|got|grabbed|just)\b/i.test(message);
     
     // Detect if response contains a meal - both formats:
-    // Block format: "Breakfast\n- Foods: ...\n- Calories: 140"
+    // Block format: "Breakfast  \n- Foods: ...\n- Calories: 140" (note: may have trailing spaces)
     // Inline format: "Breakfast - 140 cal"
-    const hasMealBlockFormat = /^(breakfast|lunch|dinner|snack)$/im.test(reply) && 
+    const hasMealBlockFormat = /^(breakfast|lunch|dinner|snack)\s*$/im.test(reply) && 
                                 /- calories:/i.test(reply) &&
                                 /- protein:/i.test(reply);
     
