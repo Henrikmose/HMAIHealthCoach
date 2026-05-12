@@ -930,6 +930,10 @@ if (completedMealReviewIds.has(idx)) return;
 
 if (action === "cancel") {
 setCompletedMealReviewIds(prev => new Set([...prev, idx]));
+// Remove mealReview from the message so buttons don't come back
+setHistory(prev => prev.map((m, i) => 
+i === idx ? { ...m, mealReview: null } : m
+));
 setHistory(prev => [
 ...prev,
 { role: "assistant", content: "Canceled — I won’t save that meal." },
@@ -938,6 +942,10 @@ return;
 }
 
 if (action === "edit") {
+// Remove mealReview from the message so buttons don't come back
+setHistory(prev => prev.map((m, i) => 
+i === idx ? { ...m, mealReview: null } : m
+));
 setHistory(prev => [
 ...prev,
 { role: "assistant", content: "Got it — tell me what you actually had instead." },
@@ -983,6 +991,11 @@ await loadPlannedMeals(uid);
 }
 
 setClosedPlanIndices(prev => new Set([...prev, idx]));
+
+// Remove mealReview from the message so buttons don't come back
+setHistory(prev => prev.map((m, i) => 
+i === idx ? { ...m, mealReview: null } : m
+));
 
 setHistory(prev => [
 ...prev,

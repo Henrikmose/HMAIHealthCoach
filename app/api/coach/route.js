@@ -1368,8 +1368,9 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     const hasMealBlock = hasMealBlockFormat || hasMealInlineFormat;
     
     let mealReview = null;
-    if (hasMealBlock && isFoodLog) {
-      console.log("✅ Food logging detected - showing 4-button review");
+    // Trigger meal review for: (1) past tense food logging OR (2) photo-based meals
+    if (hasMealBlock && (isFoodLog || images?.length > 0)) {
+      console.log("✅ Meal review triggered - showing 4-button review");
       
       // Clean up AI response - remove any button instructions
       const cleanedReply = reply
@@ -1393,7 +1394,7 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
 
       return Response.json({ reply: cleanedReply, mealReview });
     } else {
-      console.log("❌ Meal review NOT triggered:", { isFoodLog, hasMealBlock, hasMealBlockFormat, hasMealInlineFormat });
+      console.log("❌ Meal review NOT triggered:", { isFoodLog, hasMealBlock, hasMealBlockFormat, hasMealInlineFormat, hasImages: images?.length > 0 });
     }
 
     try {
