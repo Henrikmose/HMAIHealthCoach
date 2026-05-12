@@ -932,7 +932,7 @@ if (action === "cancel") {
 setCompletedMealReviewIds(prev => new Set([...prev, idx]));
 // Remove mealReview from the message so buttons don't come back
 setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null } : m
+i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
 ));
 setHistory(prev => [
 ...prev,
@@ -944,7 +944,7 @@ return;
 if (action === "edit") {
 // Remove mealReview from the message so buttons don't come back
 setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null } : m
+i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
 ));
 setHistory(prev => [
 ...prev,
@@ -994,7 +994,7 @@ setClosedPlanIndices(prev => new Set([...prev, idx]));
 
 // Remove mealReview from the message so buttons don't come back
 setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null } : m
+i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
 ));
 
 setHistory(prev => [
@@ -1243,7 +1243,7 @@ const targetDate = extractTargetDate(triggerText, surroundingTexts);
 // render each meal as its own planned-meal action.
 // This supports full-day plans and partial plans like breakfast+lunch or snack+dinner.
 const planMealsFromThisMessage =
-!isUser && !msg.mealReview && thisMeals.length > 0
+!isUser && !msg.mealReview && !msg.reviewCompleted && thisMeals.length > 0
 ? thisMeals
 : [];
 
