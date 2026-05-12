@@ -1370,10 +1370,28 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     let mealReview = null;
     if (hasMealBlock && isFoodLog) {
       console.log("✅ Food logging detected - showing 4-button review");
+      
+      // Clean up AI response - remove any button instructions
+      const cleanedReply = reply
+        .replace(/choose one:?\s*/gi, '')
+        .replace(/select one:?\s*/gi, '')
+        .replace(/pick one:?\s*/gi, '')
+        .trim();
+      
       mealReview = {
         actions: ["eat", "plan", "edit", "cancel"],
         targetDate: today
       };
+      
+      // Return cleaned reply
+      try {
+        await supabase.from("ai_messages").insert([{
+          user_id: activeUserId, message: message || "", response: cleanedReply,
+          created_at: new Date().toISOString(),
+        }]);
+      } catch (e) { console.log("Save error:", e); }
+
+      return Response.json({ reply: cleanedReply, mealReview });
     } else {
       console.log("❌ Meal review NOT triggered:", { isFoodLog, hasMealBlock, hasMealBlockFormat, hasMealInlineFormat });
     }
