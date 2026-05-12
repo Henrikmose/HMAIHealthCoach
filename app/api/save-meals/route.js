@@ -13,12 +13,31 @@ export async function POST(req) {
 
     // Validate inputs
     if (!table || !meal || !userId) {
-      console.error("Missing required fields:", { table, meal, userId });
-      return Response.json({ success: false, error: "Missing required fields" }, { status: 400 });
+      console.error("Missing required fields:", { table, meal: !!meal, userId });
+      return Response.json(
+        { success: false, error: "Missing required fields (table, meal, or userId)" },
+        { status: 400 }
+      );
     }
 
     if (table !== "actual_meals" && table !== "planned_meals") {
       return Response.json({ success: false, error: "Invalid table" }, { status: 400 });
+    }
+
+    if (!meal.date) {
+      console.error("Missing date in meal object:", meal);
+      return Response.json(
+        { success: false, error: "Missing date field in meal object" },
+        { status: 400 }
+      );
+    }
+
+    if (!meal.food || meal.calories == null) {
+      console.error("Missing food or calories in meal object:", meal);
+      return Response.json(
+        { success: false, error: "Missing food name or calories" },
+        { status: 400 }
+      );
     }
 
     console.log(`=== SAVE MEAL === table: ${table}`);
@@ -30,15 +49,16 @@ export async function POST(req) {
       date:      meal.date,
       meal_type: meal.mealType || "snack",
       food:      meal.food,
-      calories:  meal.calories,
-      protein:   meal.protein,
-      carbs:     meal.carbs,
-      fat:       meal.fat,
+      calories:  Math.round(Number(meal.calories) || 0),
+      protein:   Math.round(Number(meal.protein) || 0),
+      carbs:     Math.round(Number(meal.carbs) || 0),
+      fat:       Math.round(Number(meal.fat) || 0),
     };
 
     // Add table-specific fields
     if (table === "actual_meals") {
-      row.servings = 1;
+      // Read servings from meal object — supports multi-serving label scans
+      row.servings = Number(meal.servings) > 0 ? Number(meal.servings) : 1;
     } else {
       row.suggested_time = null;
       row.status = "planned";
@@ -48,7 +68,17 @@ export async function POST(req) {
 
     if (error) {
       console.error(`❌ Supabase insert error (${table}):`, error);
-      return Response.json({ success: false, error: error.message }, { status: 500 });
+      // Return the specific Postgres error so the frontend can surface it
+      return Response.json(
+        {
+          success: false,
+          error: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        },
+        { status: 500 }
+      );
     }
 
     console.log(`✅ Saved to ${table}:`, data);
@@ -56,6 +86,9 @@ export async function POST(req) {
 
   } catch (error) {
     console.error("Save meal route error:", error);
-    return Response.json({ success: false, error: error.message }, { status: 500 });
+    return Response.json(
+      { success: false, error: error.message || "Unknown error" },
+      { status: 500 }
+    );
   }
 }
