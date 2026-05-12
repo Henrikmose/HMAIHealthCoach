@@ -1278,28 +1278,29 @@ border: isUser ? "none" : `1px solid ${T.aiBorder}`,
 {msg.content}
 {!isUser && msg.mealReview?.actions?.length > 0 && (() => {
 const reviewDone = completedMealReviewIds.has(idx);
+
+// Don't show buttons if already completed
+if (reviewDone) return null;
+
 const buttonBase = {
 color:"#fff",
 border:"none",
 borderRadius:10,
 padding:"8px 12px",
 fontWeight:600,
-cursor: reviewDone ? "default" : "pointer",
-opacity: reviewDone ? 0.55 : 1,
+cursor:"pointer",
 };
 
 return (
 <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12 }}>
 <button
-disabled={reviewDone}
 onClick={() => handleMealReviewAction("eat", msg, idx)}
 style={{ ...buttonBase, background:"#10b981" }}
 >
-{reviewDone ? "✅ Added" : "✅ Add to Eaten"}
+✅ Add to Eaten
 </button>
 
 <button
-disabled={reviewDone}
 onClick={() => handleMealReviewAction("plan", msg, idx)}
 style={{ ...buttonBase, background:"#2563eb" }}
 >
@@ -1307,7 +1308,6 @@ style={{ ...buttonBase, background:"#2563eb" }}
 </button>
 
 <button
-disabled={reviewDone}
 onClick={() => handleMealReviewAction("edit", msg, idx)}
 style={{ ...buttonBase, background:"#f59e0b" }}
 >
@@ -1315,7 +1315,6 @@ style={{ ...buttonBase, background:"#f59e0b" }}
 </button>
 
 <button
-disabled={reviewDone}
 onClick={() => handleMealReviewAction("cancel", msg, idx)}
 style={{ ...buttonBase, background:"#ef4444" }}
 >
@@ -1357,6 +1356,9 @@ const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
 pm => pm.meal_type === meal.mealType && pm.date === targetDate
 );
 
+// Don't show buttons if saved - they're in closedPlanIndices
+if (isSaved || closedPlanIndices.has(buttonSourceIdx)) return null;
+
 return (
 <div key={key} style={{
 display:"flex",
@@ -1374,28 +1376,22 @@ background:T.surface,
 <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
 <button
 onClick={() => handleAddToPlan(meal, buttonSourceIdx, targetDate)}
-disabled={isSaved}
 style={{
 fontSize:12,
 padding:"8px 10px",
 borderRadius:10,
 fontWeight:700,
 border:"none",
-background: isSaved ? "#10b98122" : hasExisting ? "#f59e0b" : "#2563eb",
-color: isSaved ? "#10b981" : "#fff",
-cursor: isSaved ? "default" : "pointer",
+background: hasExisting ? "#f59e0b" : "#2563eb",
+color:"#fff",
+cursor:"pointer",
 }}
 >
-{isSaved
-? `✅ ${label} added`
-: hasExisting
-? `↺ Replace ${label}`
-: `+ Add ${label}`}
+{hasExisting ? `↺ Replace ${label}` : `+ Add ${label}`}
 </button>
 
 <button
 onClick={() => handleEditPlanMeal(meal)}
-disabled={isSaved}
 style={{
 fontSize:12,
 padding:"8px 10px",
@@ -1404,8 +1400,7 @@ fontWeight:700,
 border:"none",
 background:"#f59e0b",
 color:"#fff",
-cursor: isSaved ? "default" : "pointer",
-opacity: isSaved ? 0.5 : 1,
+cursor:"pointer",
 }}
 >
 ✏️ Edit
