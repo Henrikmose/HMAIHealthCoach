@@ -973,8 +973,8 @@ setHistory(prev => [
 {
 role: "assistant",
 content: action === "eat"
-? "Added to eaten."
-: "Added to planned.",
+? "✅ Added to your eaten food"
+: "✅ Added to your planned meals",
 },
 ]);
 } catch (err) {
