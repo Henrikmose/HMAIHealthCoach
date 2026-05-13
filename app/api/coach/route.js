@@ -1412,16 +1412,28 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
     const reply = completion.choices[0].message.content;
     console.log("=== RESPONSE ===\n", reply);
 
-    // Detect food logging (past tense) vs meal planning (future tense)
+   // Detect food logging (past tense) vs meal planning (future tense)
     const isFoodLog = /\b(had|ate|consumed|drank|finished|got|grabbed|just)\b/i.test(message);
-    
-    // Detect if response contains a meal - both formats:
-    // Block format: "Breakfast  \n- Foods: ...\n- Calories: 140" (note: may have trailing spaces)
-    // Inline format: "Breakfast - 140 cal"
-    const hasMealBlockFormat = /^(breakfast|lunch|dinner|snack)\s*$/im.test(reply) && 
-                                /- calories:/i.test(reply) &&
-                                /- protein:/i.test(reply);
-    
+
+    // Strip leading emojis, markdown markers, and bullets from each line, then check
+    // for a meal-type word at the start. Tolerates "🍳 Breakfast", "**Breakfast**",
+    // "Breakfast — 7:00am (eat before your walk)", "Lunch:", "- Snack", etc.
+    const replyLines = reply.split("\n");
+    const hasMealHeaderLine = replyLines.some(line => {
+      const cleaned = line
+        .trim()
+        .replace(/^[\s\*_•·●○\-–—#>]+/, "")
+        .replace(/^[^\p{L}\p{N}]+/u, "")
+        .toLowerCase();
+      if (!/^(breakfast|lunch|dinner|snack)(\b|[\s\-–—:(])/.test(cleaned)) return false;
+      if (cleaned.includes("calories:") || cleaned.includes("foods:")) return false;
+      return true;
+    });
+
+    const hasMealBlockFormat = hasMealHeaderLine &&
+                               /- calories:/i.test(reply) &&
+                               /- protein:/i.test(reply);
+
     const hasMealInlineFormat = /(breakfast|lunch|dinner|snack)\s*[-–]\s*\d+\s*cal/i.test(reply);
     
     const hasMealBlock = hasMealBlockFormat || hasMealInlineFormat;
