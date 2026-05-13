@@ -326,22 +326,27 @@ return labels[displayType] || displayType.charAt(0).toUpperCase() + displayType.
 // ========================================
 
 async function saveMealViaAPI(table, meal, userId) {
-try {
-const res = await fetch("/api/save-meals", {
-method: "POST",
-headers: { "Content-Type": "application/json" },
-body: JSON.stringify({ table, meal, userId }),
-});
-const data = await res.json();
-if (!data.success) {
-console.error(`Save failed (${table}):`, data.error);
-return false;
-}
-return true;
-} catch (e) {
-console.error("Save exception:", e);
-return false;
-}
+  const res = await fetch("/api/save-meals", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ table, meal, userId }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    const msg = parsed?.error || text.slice(0, 300) || `HTTP ${res.status}`;
+    console.error(`Save failed (${table}): ${msg}`, parsed);
+    throw new Error(msg);
+  }
+
+  const data = await res.json();
+  if (!data.success) {
+    console.error(`Save rejected (${table}):`, data);
+    throw new Error(data.error || "Save rejected by server");
+  }
+  return true;
 }
 
 // ========================================
@@ -878,35 +883,41 @@ await supabase.from("planned_meals").delete().eq("id", e.id);
 }
 }
 
-const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-if (saved) {
-const newKeys = [...savedPlanKeys, key];
-setSavedPlanKeys(newKeys);
-// Close this plan index — no more looking back at it
-setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
-await loadPlannedMeals(uid);
-} else {
-alert("Could not save to plan. Please try again.");
-}
+try {
+      await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
+      const newKeys = [...savedPlanKeys, key];
+      setSavedPlanKeys(newKeys);
+      setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
+      await loadPlannedMeals(uid);
+    } catch (err) {
+      alert(`Could not save to plan: ${err.message || "Please try again."}`);
+    }
 }
 
 async function handleAddAllToPlan(meals, msgIdx, targetDate) {
-const uid = userId || localStorage.getItem("user_id");
-const newKeys = [];
-for (const meal of meals) {
-const key = getMealKey(msgIdx, meal);
-if (!savedPlanKeys.includes(key)) {
-const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-if (saved) newKeys.push(key);
-}
-}
-if (newKeys.length > 0) {
-setSavedPlanKeys(prev => [...prev, ...newKeys]);
-// Close this plan index entirely — conversation is done
-setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
-await loadPlannedMeals(uid);
-}
-}
+    const uid = userId || localStorage.getItem("user_id");
+    const newKeys = [];
+    const failures = [];
+    for (const meal of meals) {
+      const key = getMealKey(msgIdx, meal);
+      if (!savedPlanKeys.includes(key)) {
+        try {
+          await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
+          newKeys.push(key);
+        } catch (err) {
+          failures.push(`${meal.food}: ${err.message}`);
+        }
+      }
+    }
+    if (newKeys.length > 0) {
+      setSavedPlanKeys(prev => [...prev, ...newKeys]);
+      setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
+      await loadPlannedMeals(uid);
+    }
+    if (failures.length > 0) {
+      alert(`Some meals could not be saved:\n${failures.join("\n")}`);
+    }
+  }
 
 
 function handleEditPlanMeal(meal) {
@@ -982,15 +993,11 @@ console.log("💾 Attempting to save meals:", {
 });
 
 for (const meal of meals) {
-const saved = await saveMealViaAPI(table, {
-...meal,
-date: reviewTargetDate,
-}, uid);
-
-if (!saved) {
-throw new Error("Save failed");
-}
-}
+        await saveMealViaAPI(table, {
+          ...meal,
+          date: reviewTargetDate,
+        }, uid);
+      }
 
 if (action === "eat") {
 await loadTodayMeals(uid);
