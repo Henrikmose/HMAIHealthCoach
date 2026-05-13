@@ -421,8 +421,7 @@ return stored ? JSON.parse(stored) : [];
 return [];
 });
 
-// Track which AI message indices have had ALL their meals saved — close them permanently
-const [closedPlanIndices, setClosedPlanIndices] = useState(new Set());
+
 
 const messagesEndRef = useRef(null);
 const textareaRef = useRef(null);
@@ -701,9 +700,7 @@ setHistory([...newHistory, { role: "assistant", content: confirmMsg }]);
 
 // Close the meal plan message so it's never looked up again
 const mostRecentAiIdx = history.lastIndexOf(mostRecentAiMsg);
-if (mostRecentAiIdx >= 0) {
-setClosedPlanIndices(prev => new Set([...prev, mostRecentAiIdx]));
-}
+
 } else {
 setHistory([...newHistory, { role: "assistant", content: "Sorry, couldn't save. Please try again." }]);
 }
@@ -815,8 +812,7 @@ const saved = await saveMealViaAPI("actual_meals", meal, uid);
 if (saved) {
 setActiveMealLog(null);
 await loadTodayMeals(uid);
-// Close this message — never look it up again
-setClosedPlanIndices(prev => new Set([...prev, aiMsgIdx]));
+
 }
 }
 }
@@ -842,8 +838,7 @@ mealType: parsed[0].mealType || inferredType,
 const saved = await saveMealViaAPI("actual_meals", meal, uid);
 if (saved) {
 await loadTodayMeals(uid);
-// Close this message — never look it up again
-setClosedPlanIndices(prev => new Set([...prev, aiMsgIdx]));
+
 console.log("✅ Photo meal auto-saved to actual_meals");
 }
 }
@@ -887,7 +882,7 @@ try {
       await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
       const newKeys = [...savedPlanKeys, key];
       setSavedPlanKeys(newKeys);
-      setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
+     
       await loadPlannedMeals(uid);
     } catch (err) {
       alert(`Could not save to plan: ${err.message || "Please try again."}`);
@@ -911,7 +906,7 @@ async function handleAddAllToPlan(meals, msgIdx, targetDate) {
     }
     if (newKeys.length > 0) {
       setSavedPlanKeys(prev => [...prev, ...newKeys]);
-      setClosedPlanIndices(prev => new Set([...prev, msgIdx]));
+      
       await loadPlannedMeals(uid);
     }
     if (failures.length > 0) {
@@ -1005,7 +1000,7 @@ await loadTodayMeals(uid);
 await loadPlannedMeals(uid);
 }
 
-setClosedPlanIndices(prev => new Set([...prev, idx]));
+
 
 // Remove mealReview from the message so buttons don't come back
 setHistory(prev => prev.map((m, i) => 
@@ -1226,13 +1221,12 @@ transition:"all .2s" }}>
 {history.map((msg, idx) => {
 const isUser = msg.role === "user";
 
-// Find meals — only look back 3 messages, skip any closed plan indices
+// Find meals — only look back 3 messages 
 const findRecentMeals = (beforeIdx) => {
 const limit = Math.max(0, beforeIdx - 3);
 for (let i = beforeIdx - 1; i >= limit; i--) {
 if (history[i].role === "assistant") {
-// Skip if this plan has already been saved — it's closed
-if (closedPlanIndices.has(i)) continue;
+
 const m = parseAllMeals(history[i].content);
 if (m.length > 0) return { meals: m, sourceIdx: i };
 }
@@ -1281,10 +1275,25 @@ const buttonSourceIdx = planMealsFromThisMessage.length > 0
 ? idx
 : (sourceIdx >= 0 ? sourceIdx : idx);
 
-const visibleButtonMeals = buttonMeals.filter((m) => {
-const key = getMealKey(buttonSourceIdx, m);
-return !dismissedPlanKeys.has(key);
-});
+// Hide buttons for meals already saved in the database (by content match).
+            // This is the source of truth — survives reloads, sessions, devices.
+            const mealAlreadyInDb = (m) => {
+              const matches = (rows) => rows.some(r =>
+                r.date === targetDate &&
+                r.meal_type === m.mealType &&
+                r.food === m.food &&
+                Math.abs(Number(r.calories) - Number(m.calories)) < 5
+              );
+              return matches(todayMeals) || matches(plannedMeals);
+            };
+
+            const visibleButtonMeals = buttonMeals.filter((m) => {
+              const key = getMealKey(buttonSourceIdx, m);
+              if (dismissedPlanKeys.has(key)) return false;
+              if (savedPlanKeys.includes(key)) return false;
+              if (mealAlreadyInDb(m)) return false;
+              return true;
+            });
 
 const showButtons = visibleButtonMeals.length > 0;
 const allSaved = showButtons &&
@@ -1407,8 +1416,8 @@ const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
 pm => pm.meal_type === meal.mealType && pm.date === targetDate
 );
 
-// Don't show buttons if saved - they're in closedPlanIndices
-if (isSaved || closedPlanIndices.has(buttonSourceIdx)) return null;
+// Don't show buttons if already saved
+                        if (isSaved) return null;
 
 return (
 <div key={key} style={{
