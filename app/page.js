@@ -391,23 +391,9 @@ const [goals, setGoals] = useState({ calories: 2200, protein: 180, carbs: 220, f
 const [pendingImages, setPendingImages] = useState([]); // max 4: [{ base64, mimeType, preview }]
 const [showPhotoMenu, setShowPhotoMenu] = useState(false);
 const [loadingStage, setLoadingStage] = useState("");
-const [completedMealReviewIds, setCompletedMealReviewIds] = useState(() => {
-try {
-const saved = localStorage.getItem('completedMealReviews');
-return saved ? new Set(JSON.parse(saved)) : new Set();
-} catch {
-return new Set();
-}
-});
+const [completedMealReviewIds, setCompletedMealReviewIds] = useState(new Set());
 
-// Persist completed meal reviews to localStorage
-useEffect(() => {
-try {
-localStorage.setItem('completedMealReviews', JSON.stringify([...completedMealReviewIds]));
-} catch (err) {
-console.error('Failed to save completed reviews:', err);
-}
-}, [completedMealReviewIds]);
+
 const [dismissedPlanKeys, setDismissedPlanKeys] = useState(new Set());
 
 const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
