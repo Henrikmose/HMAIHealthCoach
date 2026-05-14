@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import HamburgerMenu from "./components/HamburgerMenu";
 
@@ -379,6 +380,7 @@ style={{ width: `${pct}%`, backgroundColor: color }}
 // ========================================
 
 export default function HomePage() {
+const router = useRouter();
 const [message, setMessage] = useState("");
 const [history, setHistory] = useState([]);
 const [isLoading, setIsLoading] = useState(false);
@@ -422,17 +424,16 @@ localStorage.setItem("savedPlanKeys", JSON.stringify(savedPlanKeys));
 }, [savedPlanKeys]);
 
 useEffect(() => {
-let uid = localStorage.getItem("user_id");
-const uname = localStorage.getItem("user_name");
-
-// MVP: Generate temp user_id if it doesn't exist
-if (!uid) {
-uid = "temp-user-" + Date.now();
-localStorage.setItem("user_id", uid);
-}
-
-if (uname) setUserName(uname);
-if (uid) setUserId(uid);
+  async function initAuth() {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      router.push("/signin");
+      return;
+    }
+    setUserId(user.id);
+    setUserName(user.user_metadata?.name || "");
+  }
+  initAuth();
 }, []);
 
 useEffect(() => {
@@ -537,7 +538,7 @@ async function handleSend() {
 const trimmed = message.trim();
 if ((!trimmed && pendingImages.length === 0) || isLoading) return;
 
-const uid = userId || localStorage.getItem("user_id");
+const uid = userId;
 setMessage("");
 setIsLoading(true);
 
@@ -593,7 +594,7 @@ const lookupData = await lookupResponse.json();
 
 // If ALL foods found in DB, skip AI entirely
 if (false && lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
-const uid = userId || localStorage.getItem("user_id");
+const uid = userId;
 const mealType = extractMealType(trimmed) || inferMealTypeFromHour(hour);
 
 // Build meal block from DB results
@@ -664,7 +665,7 @@ const mostRecentAiMsg = recentAiMsgs[0];
 const meals = mostRecentAiMsg ? parseAllMeals(mostRecentAiMsg.content) : [];
 
 if (meals.length > 0) {
-const uid = userId || localStorage.getItem("user_id");
+const uid = userId;
 
 // Detect target date from context (today vs tomorrow)
 const surroundingTexts = history.slice(Math.max(0, history.length - 6)).map(m => m.content || "");
@@ -846,7 +847,7 @@ if (stageTimer) clearTimeout(stageTimer);
 async function handleAddToPlan(meal, msgIdx, targetDate) {
 const key = getMealKey(msgIdx, meal);
 if (savedPlanKeys.includes(key)) return;
-const uid = userId || localStorage.getItem("user_id");
+const uid = userId;
 
 // Only replace for Breakfast/Lunch/Dinner — Snacks can stack
 if (meal.mealType !== "snack") {
@@ -876,7 +877,7 @@ try {
 }
 
 async function handleAddAllToPlan(meals, msgIdx, targetDate) {
-    const uid = userId || localStorage.getItem("user_id");
+    const uid = userId;
     const newKeys = [];
     const failures = [];
     for (const meal of meals) {
@@ -948,7 +949,7 @@ return;
 setCompletedMealReviewIds(prev => new Set([...prev, idx]));
 
 try {
-const uid = userId || localStorage.getItem("user_id");
+const uid = userId;
 const meals = parseAllMeals(msg.content);
 
 if (!meals.length) {
