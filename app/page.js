@@ -1265,6 +1265,7 @@ const buttonSourceIdx = planMealsFromThisMessage.length > 0
 // Hide buttons for meals already saved in the database (by content match).
             // This is the source of truth — survives reloads, sessions, devices.
             const mealAlreadyInDb = (m) => {
+              console.log("🔎 mealAlreadyInDb check:", { mealFood: m.food, mealType: m.mealType, mealCal: m.calories, targetDate, todayMeals });
               const matches = (rows) => rows.some(r =>
                 r.date === targetDate &&
                 r.meal_type === m.mealType &&
