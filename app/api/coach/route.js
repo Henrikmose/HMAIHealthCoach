@@ -1,7 +1,9 @@
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -1399,17 +1401,53 @@ NEVER make up macro numbers. Only report what you can clearly read on the label.
       conversationMessages.push({ role: "user", content: message || "" });
     }
 
-    console.log(`=== AI | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    const provider = process.env.AI_PROVIDER || "openai";
+    const hasImages = images?.length > 0;
+    console.log(`=== AI | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
-    const model = images?.length > 0 ? "gpt-4o" : "gpt-4o-mini";
+    let reply;
 
-    const completion = await client.chat.completions.create({
-      model,
-      messages: conversationMessages,
-      temperature: 0.7,
-    });
+    if (provider === "claude") {
+      // Convert OpenAI-format messages to Anthropic format:
+      // 1. System message moves to top-level `system` param (not in messages array)
+      // 2. Image blocks change from `image_url` shape to `image` shape
+      const claudeMessages = conversationMessages
+        .filter(m => m.role !== "system")
+        .map(m => {
+          if (!Array.isArray(m.content)) return m;
+          const converted = m.content.map(part => {
+            if (part.type !== "image_url") return part;
+            const url = part.image_url.url; // "data:image/jpeg;base64,XXXX"
+            const [meta, data] = url.split(",");
+            const media_type = meta.match(/data:(.*?);/)?.[1] || "image/jpeg";
+            return { type: "image", source: { type: "base64", media_type, data } };
+          });
+          return { role: m.role, content: converted };
+        });
 
-    const reply = completion.choices[0].message.content;
+      const claudeModel = hasImages ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001";
+
+      const response = await anthropic.messages.create({
+        model: claudeModel,
+        max_tokens: 3000,
+        system: systemMessage,
+        messages: claudeMessages,
+        temperature: 0.7,
+      });
+
+      reply = response.content.find(b => b.type === "text")?.text || "";
+    } else {
+      const model = hasImages ? "gpt-4o" : "gpt-4o-mini";
+
+      const completion = await client.chat.completions.create({
+        model,
+        messages: conversationMessages,
+        temperature: 0.7,
+      });
+
+      reply = completion.choices[0].message.content;
+    }
+
     console.log("=== RESPONSE ===\n", reply);
 
    // Detect food logging (past tense) vs meal planning (future tense)
