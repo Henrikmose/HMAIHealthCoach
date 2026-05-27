@@ -333,17 +333,13 @@ export default function DashboardPage() {
   async function loadMeals(uid, date) {
     try {
       setLoading(true);
-      const { data: actualData } = await supabase
-        .from("actual_meals")
-        .select("*")
-        .eq("user_id", uid)
-        .eq("date", date);
-
-      const { data: plannedData } = await supabase
-        .from("planned_meals")
-        .select("*")
-        .eq("user_id", uid)
-        .eq("date", date);
+      const [
+        { data: actualData },
+        { data: plannedData },
+      ] = await Promise.all([
+        supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", date),
+        supabase.from("planned_meals").select("*").eq("user_id", uid).eq("date", date),
+      ]);
 
       setActual(actualData || []);
       setPlanned(plannedData || []);
@@ -357,11 +353,14 @@ export default function DashboardPage() {
   // ── Auth Setup ──
   useEffect(() => {
     async function initAuth() {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (user) {
         setUserId(user.id);
-        await loadGoals(user.id);
-        await loadMeals(user.id, getLocalDate());
+        await Promise.all([
+          loadGoals(user.id),
+          loadMeals(user.id, getLocalDate()),
+        ]);
       }
     }
     initAuth();
