@@ -764,13 +764,7 @@ role: "assistant",
 content: shouldForceMealReview && !reply.includes("Review this meal before saving:")
 ? `Review this meal before saving:
 
-${cleanedReplyForReview}
-
-Choose one:
-✅ Add to Eaten
-📅 Add to Planned
-✏️ Edit
-❌ Cancel`
+${cleanedReplyForReview}`
 : reply,
 mealReview: data.mealReview || (
 shouldForceMealReview
