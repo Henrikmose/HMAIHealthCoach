@@ -74,9 +74,11 @@ function parseFoodItems(message) {
 
   // Step 2: ONE unified pattern — number, optional unit, food — terminated by comma/semicolon/"and"/end.
   // This runs in a single pass so mixed meals ("8oz chicken and a banana") capture BOTH foods.
-  const unitWords = "oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
+ const unitWords = "oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
+  // Stop-words: food capture must end before these so "banana for snack" doesn't become the food name.
+  const stopWords = "and|with|for|after|before|then|plus|also|while|during|at|on|in|to|today|yesterday|tomorrow|tonight|this\\s+morning|this\\s+afternoon|this\\s+evening|right\\s+now|just\\s+now";
   const pattern = new RegExp(
-    `(\\d+\\.?\\d*)\\s*(${unitWords})?\\s+(?:of\\s+)?([a-z][a-z\\s,]*?[a-z])(?=\\s*(?:,|;|\\band\\b|\\.|$))`,
+    `(\\d+\\.?\\d*)\\s*(${unitWords})?\\s+(?:of\\s+)?([a-z][a-z\\s,]*?[a-z])(?=\\s*(?:,|;|\\.|$|\\b(?:${stopWords})\\b))`,
     "gi"
   );
 
