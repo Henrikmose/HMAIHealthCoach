@@ -58,58 +58,97 @@ function isVeryActive(activityLevel) {
 // Returns array of { food, amount, unit }
 function parseFoodItems(message) {
   if (!message) return [];
+
+  // Step 1: Normalize word-quantities to digits so the numeric pattern below catches them.
+  // "a banana" -> "1 banana", "half an avocado" -> "0.5 avocado", "two eggs" -> "2 eggs"
+  // Order matters: handle "half" (and "half an") before the bare a/an/one.
+  let normalized = " " + message.toLowerCase() + " ";
+  normalized = normalized
+    .replace(/\bhalf\s+(?:an?\s+)?/g, " 0.5 ")
+    .replace(/\b(?:a|an|one)\s+/g, " 1 ")
+    .replace(/\btwo\s+/g, " 2 ")
+    .replace(/\bthree\s+/g, " 3 ")
+    .replace(/\bfour\s+/g, " 4 ")
+    .replace(/\bfive\s+/g, " 5 ")
+    .replace(/\bwhole\s+/g, " 1 ");
+
+  // Step 2: ONE unified pattern — number, optional unit, food — terminated by comma/semicolon/"and"/end.
+  // This runs in a single pass so mixed meals ("8oz chicken and a banana") capture BOTH foods.
+  const unitWords = "oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
+  const pattern = new RegExp(
+    `(\\d+\\.?\\d*)\\s*(${unitWords})?\\s+(?:of\\s+)?([a-z][a-z\\s,]*?[a-z])(?=\\s*(?:,|;|\\band\\b|\\.|$))`,
+    "gi"
+  );
+
   const items = [];
-
-  // Patterns: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
-  const patterns = [
-    // number + unit + food: "8oz chicken breast", "1 cup oatmeal"
-    /(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?([a-z][a-z\s,]+?)(?:\s*[,;]|$)/gi,
-    // number + food (no unit): "2 eggs", "3 chicken wings"
-    /(\d+\.?\d*)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
-    // descriptor + food: "a banana", "half avocado", "whole chicken breast"
-    /\b(a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
-  ];
-
-  const [p1, p2, p3] = patterns;
   let match;
-
-  // Pattern 1: number + unit + food
-  while ((match = p1.exec(message)) !== null) {
-    items.push({ amount: parseFloat(match[1]), unit: match[2].toLowerCase(), food: match[3].trim() });
-  }
-
-  // Pattern 2: number + food (if no unit match found for same position)
-  if (items.length === 0) {
-    while ((match = p2.exec(message)) !== null) {
-      const food = match[2].trim();
-      if (food.length > 2) items.push({ amount: parseFloat(match[1]), unit: 'serving', food });
+  while ((match = pattern.exec(normalized)) !== null) {
+    const amount = parseFloat(match[1]);
+    const unit = (match[2] || "serving").toLowerCase().trim();
+    const food = match[3].trim();
+    if (food.length > 2 && !isNaN(amount)) {
+      items.push({ amount, unit, food });
     }
   }
 
   return items;
 }
 
+// Rank candidate food rows: prefer the search term as a leading whole word,
+// prefer plain "raw" forms, penalize odd variants, prefer shorter/simpler names.
+function pickBest(rows, term) {
+  const oddVariants = ['overripe','underripe','unripe','dried','dehydrated','frozen','canned','cooked','fried','candied','sweetened','juice','powder'];
+  const scored = rows.map(r => {
+    const name = (r.name || '').toLowerCase();
+    let score = 0;
+    if (name === term) score += 100;
+    if (name.startsWith(term + ',') || name.startsWith(term + ' ') ||
+        name.startsWith(term + 's,') || name.startsWith(term + 's ')) score += 40;
+    else if (name.startsWith(term)) score += 20;
+    if (name.includes('raw')) score += 10;
+    for (const v of oddVariants) if (name.includes(v)) score -= 25;
+    score -= name.length * 0.2; // prefer simpler, shorter names
+    return { r, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].r;
+}
+
 // Look up a food in the USDA database
 async function lookupFood(foodName) {
   if (!foodName) return null;
+  const cols = 'id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
+  const clean = foodName.trim().toLowerCase();
   try {
-    // Full text search — finds closest match
-    const { data, error } = await supabase
-      .from('foods')
-      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-      .textSearch('name', foodName.split(' ').join(' & '), { type: 'websearch' })
-      .limit(1);
+    // 1. Prefer names that START with the search term — excludes "Peppers, banana..." for "banana"
+    const { data: starts } = await supabase
+      .from('foods').select(cols)
+      .ilike('name', `${clean}%`)
+      .limit(8);
+    if (starts && starts.length > 0) return pickBest(starts, clean);
 
-    if (!error && data && data.length > 0) return data[0];
+    // 2. Also try the plural form ("banana" -> "bananas...")
+    const { data: startsPlural } = await supabase
+      .from('foods').select(cols)
+      .ilike('name', `${clean}s%`)
+      .limit(8);
+    if (startsPlural && startsPlural.length > 0) return pickBest(startsPlural, clean);
 
-    // Fallback: ILIKE search
-    const { data: data2 } = await supabase
-      .from('foods')
-      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-      .ilike('name', `%${foodName}%`)
-      .limit(1);
+    // 3. Full-text search
+    const { data: fts } = await supabase
+      .from('foods').select(cols)
+      .textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' })
+      .limit(8);
+    if (fts && fts.length > 0) return pickBest(fts, clean);
 
-    return data2?.[0] || null;
+    // 4. Last resort: contains-anywhere
+    const { data: contains } = await supabase
+      .from('foods').select(cols)
+      .ilike('name', `%${clean}%`)
+      .limit(10);
+    if (contains && contains.length > 0) return pickBest(contains, clean);
+
+    return null;
   } catch (e) {
     console.log('Food lookup error:', e.message);
     return null;
