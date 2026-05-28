@@ -1040,6 +1040,87 @@ AFTER LOGGING — ALWAYS include:
 3. ONLY DB baseline + this new meal — nothing else
 4. 👉 One coaching tip
 5. IF 300+ calories remaining: suggest a specific next meal or snack`;
+
+      // ── Structured meal data for code consumption (Batch 2.1) ──
+      // This JSON block lets code save meals reliably without parsing prose.
+      // The user does NOT see this block — page.js will strip it before display in Batch 2.2.
+      // For tonight, page.js ignores it entirely. We only validate the JSON is well-formed.
+      systemMessage += `
+
+OUTPUT FORMAT — STRUCTURED DATA (CRITICAL):
+After your normal response above, append a structured JSON block. This is parsed by the app, not shown to the user.
+
+Wrap the JSON in these EXACT delimiters on their own lines:
+<<<MEAL_DATA>>>
+{ ...json here... }
+<<<END_MEAL_DATA>>>
+
+The JSON MUST have this shape:
+{
+  "meal_type": "breakfast" | "lunch" | "dinner" | "snack",
+  "items": [
+    {
+      "user_text": "<what the user typed for this food>",
+      "canonical_name": "<standard nutritional name, e.g. 'Banana, raw'>",
+      "amount": <number, e.g. 1 or 0.5>,
+      "unit": "<unit, e.g. 'medium', 'tbsp', 'oz', 'g', 'slice'>",
+      "grams": <approximate weight in grams as integer>,
+      "calories": <integer>,
+      "protein": <integer>,
+      "carbs": <integer>,
+      "fat": <integer>,
+      "source": "usda_db" | "ai_estimate",
+      "usda_food_id": <number or null>
+    }
+  ]
+}
+
+RULES — READ CAREFULLY:
+- ONE object per food. If the user logged 2 foods, output 2 objects in items[]. NEVER merge two foods into one object.
+- If a food appeared in the DATABASE LOOKUP section above (marked "from USDA"), set source="usda_db" and use the EXACT numbers from there. Set usda_food_id if provided, else null.
+- If a food was NOT in DATABASE LOOKUP (you estimated it), set source="ai_estimate" and usda_food_id=null.
+- canonical_name should be the standard nutritional name. Examples: user types "banana" → canonical_name "Banana, raw". User types "PB" → canonical_name "Peanut butter, smooth". User types "Big Mac" → canonical_name "Big Mac". This becomes the key for our food database.
+- ALWAYS include the JSON block when logging a meal. ALWAYS close with <<<END_MEAL_DATA>>>.
+- The JSON must be VALID JSON (parseable by JSON.parse). No trailing commas. No comments inside the actual JSON braces. Use null, not undefined.
+- If adding to an existing meal ("I also had X"), the items[] array should contain ONLY the NEW item(s), matching the meal block above.
+
+EXAMPLE for "I had a banana and a tablespoon of peanut butter for snack":
+
+[your normal prose response with meal block + Breakdown line + Updated totals + coaching tip goes here, exactly as instructed above]
+
+<<<MEAL_DATA>>>
+{
+  "meal_type": "snack",
+  "items": [
+    {
+      "user_text": "banana",
+      "canonical_name": "Banana, raw",
+      "amount": 1,
+      "unit": "medium",
+      "grams": 118,
+      "calories": 105,
+      "protein": 1,
+      "carbs": 27,
+      "fat": 0,
+      "source": "usda_db",
+      "usda_food_id": 1102653
+    },
+    {
+      "user_text": "tablespoon of peanut butter",
+      "canonical_name": "Peanut butter, smooth",
+      "amount": 1,
+      "unit": "tbsp",
+      "grams": 16,
+      "calories": 190,
+      "protein": 8,
+      "carbs": 6,
+      "fat": 16,
+      "source": "ai_estimate",
+      "usda_food_id": null
+    }
+  ]
+}
+<<<END_MEAL_DATA>>>`;
     }
 
     if (context?.type === "meal_planning") {
