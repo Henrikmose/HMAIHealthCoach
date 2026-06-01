@@ -302,6 +302,60 @@ return meals;
 }
 
 // ========================================
+// STRUCTURED MEAL DATA (JSON) — Batch 2.1 output, Session 1 consumer
+// ========================================
+// Claude appends <<<MEAL_DATA>>>{...}<<<END_MEAL_DATA>>> to food-log responses.
+// The JSON contains per-food items with canonical names and DB-resolved or AI-estimated macros.
+// We extract it for accurate per-food saves, strip it from the displayed message,
+// and fall back to parseAllMeals if the JSON is missing or malformed.
+
+const MEAL_DATA_REGEX = /<<<MEAL_DATA>>>\s*([\s\S]*?)\s*<<<END_MEAL_DATA>>>/;
+
+function extractMealData(text) {
+  if (!text) return null;
+  const match = text.match(MEAL_DATA_REGEX);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[1].trim());
+    // Minimal shape validation — must have meal_type and items[] with at least one entry
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed.meal_type || !Array.isArray(parsed.items) || parsed.items.length === 0) return null;
+    return parsed;
+  } catch (err) {
+    console.warn("MEAL_DATA JSON parse failed:", err.message, match[1].slice(0, 200));
+    return null;
+  }
+}
+
+function stripMealData(text) {
+  if (!text) return text;
+  return text.replace(MEAL_DATA_REGEX, "").trim();
+}
+
+// Convert MEAL_DATA into save-ready meal rows — one per food item.
+// Each row matches the shape that saveMealViaAPI expects (mealType, food, calories, protein, carbs, fat).
+// This is what kills the merged-row bug: a multi-food meal becomes N rows in actual_meals/planned_meals.
+function mealDataToSaveRows(mealData) {
+  if (!mealData || !Array.isArray(mealData.items)) return [];
+  return mealData.items.map((item, idx) => {
+    // Build a clean food string from the item parts.
+    // Prefer canonical_name + amount + unit. Fall back to user_text if canonical is missing.
+    const namePart = item.canonical_name || item.user_text || "Unknown food";
+    const qtyPart = item.amount && item.unit ? `${item.amount} ${item.unit}` : (item.amount ? `${item.amount}` : "");
+    const food = qtyPart ? `${namePart}, ${qtyPart}` : namePart;
+    return {
+      mealType: mealData.meal_type,
+      displayType: mealData.meal_type, // single meal_type per JSON; suffix logic not needed here
+      food,
+      calories: Math.round(Number(item.calories) || 0),
+      protein: Math.round(Number(item.protein) || 0),
+      carbs: Math.round(Number(item.carbs) || 0),
+      fat: Math.round(Number(item.fat) || 0),
+    };
+  });
+}
+
+// ========================================
 // MEAL KEY AND LABEL HELPERS
 // ========================================
 
@@ -748,15 +802,20 @@ images: imagesToSend.length > 0 ? imagesToSend.map(img => ({ base64: img.base64,
 const data = await res.json();
 const reply = data.reply || "Sorry, could not get a response.";
 
-const parsedReplyMeals = parseAllMeals(reply);
+// Session 1: extract the structured MEAL_DATA JSON block (if present) and strip it from the displayed text.
+// The JSON is for the save handler; the user should never see it in chat.
+const mealData = extractMealData(reply);
+const displayReply = stripMealData(reply);
+
+const parsedReplyMeals = parseAllMeals(displayReply);
 const shouldForceMealReview =
 isLogMessage(trimmed) &&
 (
 parsedReplyMeals.length > 0 ||
-/foods:|calories:|protein:|carbs:|fat:|breakdown:/i.test(reply)
+/foods:|calories:|protein:|carbs:|fat:|breakdown:/i.test(displayReply)
 );
 
-const cleanedReplyForReview = reply
+const cleanedReplyForReview = displayReply
 .replace(/you'?ve logged this meal\.?\s*✅?/gi, "")
 .replace(/meal logged\.?\s*✅?/gi, "")
 .replace(/logged as eaten\.?/gi, "")
@@ -764,17 +823,18 @@ const cleanedReplyForReview = reply
 
 const assistantMessage = {
 role: "assistant",
-content: shouldForceMealReview && !reply.includes("Review this meal before saving:")
+content: shouldForceMealReview && !displayReply.includes("Review this meal before saving:")
 ? `Review this meal before saving:
 
 ${cleanedReplyForReview}`
-: reply,
+: displayReply,
 mealReview: data.mealReview || (
 shouldForceMealReview
 ? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
 : null
 ),
 needsConfirmation: data.needsConfirmation || shouldForceMealReview,
+mealData: mealData || null, // Session 1: attach structured items for per-food save in handleMealReviewAction
 };
 
 setHistory([
@@ -947,7 +1007,18 @@ setCompletedMealReviewIds(prev => new Set([...prev, idx]));
 
 try {
 const uid = userId;
-const meals = parseAllMeals(msg.content);
+
+// Session 1: prefer structured MEAL_DATA when available (saves N rows for N foods).
+// Fall back to parseAllMeals for legacy messages or when JSON is missing/malformed.
+let meals = [];
+if (msg.mealData) {
+meals = mealDataToSaveRows(msg.mealData);
+console.log("💾 Using structured MEAL_DATA — items count:", meals.length);
+}
+if (meals.length === 0) {
+meals = parseAllMeals(msg.content);
+console.log("💾 Fallback to parseAllMeals — meals count:", meals.length);
+}
 
 if (!meals.length) {
 alert("No meal found to save.");
