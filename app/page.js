@@ -737,7 +737,7 @@ headers: { "Content-Type": "application/json" },
 body: JSON.stringify({
 message: trimmed,
 context,
-history: newHistory.slice(-8).map((m) => ({ role: m.role, content: m.content })),
+history: newHistory.slice(-1).map((m) => ({ role: m.role, content: m.content })),
 userId: uid,
 localHour: new Date().getHours(),
 localDate: getLocalDate(),
