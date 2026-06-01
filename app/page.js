@@ -594,42 +594,44 @@ body: JSON.stringify({ message: trimmed }),
 const lookupData = await lookupResponse.json();
 
 // If ALL foods found in DB, skip AI entirely
-if (false && lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
-const uid = userId;
-const mealType = extractMealType(trimmed) || inferMealTypeFromHour(hour);
+// If ALL foods found in DB, build a meal review (same 4-button UI as the AI path) — skip Claude entirely.
+// The user still confirms via Add to Eaten / Add to Planned / Edit / Cancel.
+if (lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
+  const mealType = extractMealType(trimmed) || inferMealTypeFromHour(hour);
+  const mealTypeLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1).toLowerCase();
 
-// Build meal block from DB results
-const foods = lookupData.found.map(f => `${f.food}, ${f.amount} ${f.unit}`).join("; ");
-const totalCals = lookupData.found.reduce((sum, f) => sum + f.calories, 0);
-const totalProtein = lookupData.found.reduce((sum, f) => sum + f.protein, 0);
-const totalCarbs = lookupData.found.reduce((sum, f) => sum + f.carbs, 0);
-const totalFat = lookupData.found.reduce((sum, f) => sum + f.fat, 0);
+  // Build the meal block text in the exact format parseAllMeals expects.
+  const foodsLine = lookupData.found.map(f => `${f.food}, ${f.amount} ${f.unit}`).join("; ");
+  const totalCals = lookupData.found.reduce((s, f) => s + f.calories, 0);
+  const totalProtein = lookupData.found.reduce((s, f) => s + f.protein, 0);
+  const totalCarbs = lookupData.found.reduce((s, f) => s + f.carbs, 0);
+  const totalFat = lookupData.found.reduce((s, f) => s + f.fat, 0);
 
-const meal = {
-mealType: mealType.toLowerCase(),
-displayType: mealType.toLowerCase(),
-food: foods,
-calories: Math.round(totalCals),
-protein: Math.round(totalProtein),
-carbs: Math.round(totalCarbs),
-fat: Math.round(totalFat),
-};
+  const breakdown = lookupData.found.map(f =>
+    `${f.food} — ${f.calories} cal, ${f.protein}g P, ${f.carbs}g C, ${f.fat}g F`
+  ).join(" | ");
 
-// Save directly
-const saved = await saveMealViaAPI("actual_meals", meal, uid);
+  const mealBlock =
+    `${mealTypeLabel}\n` +
+    `- Foods: ${foodsLine}\n` +
+    `- Calories: ${Math.round(totalCals)}\n` +
+    `- Protein: ${Math.round(totalProtein)}g\n` +
+    `- Carbs: ${Math.round(totalCarbs)}g\n` +
+    `- Fat: ${Math.round(totalFat)}g\n\n` +
+    `Breakdown: ${breakdown}`;
 
-if (saved) {
-await loadTodayMeals(uid);
-const breakdown = lookupData.found.map(f =>
-`${f.food} — ${f.calories} cal, ${f.protein}g P, ${f.carbs}g C, ${f.fat}g F`
-).join(" | ");
+  // Assistant message attaches the standard mealReview actions so the existing 4-button UI renders.
+  const reviewMessage = {
+    role: "assistant",
+    content: `Review this meal before saving:\n\n${mealBlock}`,
+    mealReview: { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] },
+  };
 
-const confirmMsg = `Got it — ${mealType}\n\nBreakdown: ${breakdown}\n\n✅ Logged!`;
-setHistory([...newHistory, { role: "assistant", content: confirmMsg }]);
-setIsLoading(false);
-setLoadingStage("");
-return; // Skip AI call entirely
-}
+  setHistory([...newHistory, reviewMessage]);
+  setIsLoading(false);
+  setLoadingStage("");
+  return; // Skip AI call entirely — DB had everything we needed
+
 }
 } catch (lookupError) {
 console.log("DB lookup failed, falling back to AI:", lookupError);
