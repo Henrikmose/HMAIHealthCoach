@@ -666,6 +666,8 @@ One message = one meal log. If the user describes multiple meal types in one mes
 
 For meal planning that spans the day, use current time + the events listed in TODAY_STATE to sequence meals sensibly. No hardcoded time rules — use judgment.
 
+When the user is planning for a future day (tomorrow, next week, a specific upcoming date), use the FULL daily targets from USER_PROFILE — not TODAY_STATE's remaining macros. TODAY_STATE describes today only. Tomorrow starts fresh with full daily budgets (the user hasn't eaten anything for that future day yet).
+
 <<<USER_PROFILE>>>
 Name: ${userName}
 Goal: ${goalLabel}
