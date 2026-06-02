@@ -566,7 +566,18 @@ if (data && data.length > 0) {
 const rebuilt = [];
 for (const row of data.reverse()) {
 if (row.message) rebuilt.push({ role: "user", content: row.message });
-if (row.response) rebuilt.push({ role: "assistant", content: row.response });
+if (row.response) {
+  // Session 1 fix: re-extract structured MEAL_DATA from the stored raw response and strip it from the displayed content.
+  // The JSON is persisted raw in ai_messages.response (for debuggability and re-extraction), but never shown to the user.
+  const rawResponse = row.response;
+  const reloadedMealData = extractMealData(rawResponse);
+  const displayResponse = stripMealData(rawResponse);
+  rebuilt.push({
+    role: "assistant",
+    content: displayResponse,
+    mealData: reloadedMealData || null,
+  });
+}
 }
 setHistory(rebuilt);
 }
