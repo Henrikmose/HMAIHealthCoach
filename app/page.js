@@ -591,10 +591,13 @@ console.log("Meals load error:", e);
 
 async function loadPlannedMeals(uid) {
 try {
+// Fix: load today AND all future planned meals so mealAlreadyInDb can match
+// tomorrow/future plans (was: .eq("date", getLocalDate()) which only loaded today,
+// causing duplicates when planning for future dates because cards never recognized as saved).
 const { data } = await supabase
 .from("planned_meals").select("*")
 .eq("user_id", uid)
-.eq("date", getLocalDate());
+.gte("date", getLocalDate());
 setPlannedMeals(data || []);
 } catch (e) {
 console.log("Planned meals load error:", e);
@@ -926,33 +929,9 @@ await loadTodayMeals(uid);
 }
 }
 
-// Auto-save photo logs when intent is "eaten" or meal type was specified
-if (context?.type === "photo" && imagesToSend.length > 0) {
-const photoIntent = context.photoIntent;
-const msgLower = (trimmed || "").toLowerCase();
-const isEaten = photoIntent === "eaten" ||
-/\b(had|ate|drank|consumed|finished|as a snack|as a lunch|as a breakfast|as a dinner|for snack|for lunch|for breakfast|for dinner)\b/i.test(msgLower);
-
-if (isEaten) {
-const parsed = parseAllMeals(reply);
-if (parsed.length > 0) {
-// Infer meal type from time if not in meal block
-const hour = new Date().getHours();
-const inferredType = hour < 11 ? "breakfast" : hour < 14 ? "lunch" : hour < 17 ? "snack" : "dinner";
-const meal = {
-...parsed[0],
-date: getLocalDate(),
-mealType: parsed[0].mealType || inferredType,
-};
-const saved = await saveMealViaAPI("actual_meals", meal, uid);
-if (saved) {
-await loadTodayMeals(uid);
-
-console.log("✅ Photo meal auto-saved to actual_meals");
-}
-}
-}
-}
+// Photo logs now flow through the same 4-button review as text logs (Rule 1: no auto-save, ever).
+// Previously had an auto-save block here that wrote to actual_meals without user confirmation.
+// Removed — the photo response goes through shouldForceMealReview / planning UI just like text.
 } catch (err) {
 console.error("Send error:", err);
 setHistory([
