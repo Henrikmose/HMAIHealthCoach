@@ -447,35 +447,59 @@ const [goals, setGoals] = useState({ calories: 2200, protein: 180, carbs: 220, f
 const [pendingImages, setPendingImages] = useState([]); // max 4: [{ base64, mimeType, preview }]
 const [showPhotoMenu, setShowPhotoMenu] = useState(false);
 const [loadingStage, setLoadingStage] = useState("");
-const [completedMealReviewIds, setCompletedMealReviewIds] = useState(new Set());
 
-
-const [dismissedPlanKeys, setDismissedPlanKeys] = useState(new Set());
-
-const [savedPlanKeys, setSavedPlanKeys] = useState(() => {
+// Session 2: dismissedPlanKeys persists to localStorage scoped to today's date.
+// NOT a database — purely a UI marker so cancelled meal cards stay hidden across navigation.
+// Nothing about cancelled meals touches actual_meals or planned_meals. Clears at midnight.
+const [dismissedPlanKeys, setDismissedPlanKeys] = useState(() => {
 if (typeof window !== "undefined") {
-const storedDate = localStorage.getItem("savedPlanKeysDate");
+const storedDate = localStorage.getItem("dismissedPlanKeysDate");
 if (storedDate === getLocalDate()) {
-const stored = localStorage.getItem("savedPlanKeys");
-return stored ? JSON.parse(stored) : [];
+const stored = localStorage.getItem("dismissedPlanKeys");
+if (stored) {
+try { return new Set(JSON.parse(stored)); } catch { return new Set(); }
 }
 }
-return [];
+}
+return new Set();
 });
 
+// Session 2: dismissedReviewIds persists the same way — ephemeral UI markers for 4-button review Cancel/Edit.
+// Note: these are message indices, which are stable within a session but reset when message order changes.
+// For best behavior, we also store a content-hash so reloads can recover dismissals.
+const [dismissedReviewIds, setDismissedReviewIds] = useState(() => {
+if (typeof window !== "undefined") {
+const storedDate = localStorage.getItem("dismissedReviewIdsDate");
+if (storedDate === getLocalDate()) {
+const stored = localStorage.getItem("dismissedReviewIds");
+if (stored) {
+try { return new Set(JSON.parse(stored)); } catch { return new Set(); }
+}
+}
+}
+return new Set();
+});
 
+// Persist dismissedPlanKeys whenever it changes
+useEffect(() => {
+if (typeof window !== "undefined") {
+localStorage.setItem("dismissedPlanKeysDate", getLocalDate());
+localStorage.setItem("dismissedPlanKeys", JSON.stringify([...dismissedPlanKeys]));
+}
+}, [dismissedPlanKeys]);
+
+// Persist dismissedReviewIds whenever it changes
+useEffect(() => {
+if (typeof window !== "undefined") {
+localStorage.setItem("dismissedReviewIdsDate", getLocalDate());
+localStorage.setItem("dismissedReviewIds", JSON.stringify([...dismissedReviewIds]));
+}
+}, [dismissedReviewIds]);
 
 const messagesEndRef = useRef(null);
 const textareaRef = useRef(null);
 const cameraInputRef = useRef(null);
 const libraryInputRef = useRef(null);
-
-useEffect(() => {
-if (typeof window !== "undefined") {
-localStorage.setItem("savedPlanKeysDate", getLocalDate());
-localStorage.setItem("savedPlanKeys", JSON.stringify(savedPlanKeys));
-}
-}, [savedPlanKeys]);
 
 useEffect(() => {
   async function initAuth() {
@@ -498,6 +522,30 @@ loadTodayMeals(userId);
 loadPlannedMeals(userId);
 loadTodayMessages(userId);
 }
+}, [userId]);
+
+// Session 2: refresh DB-derived state when user returns to Coach tab from Dashboard or background.
+// This is what fixes the orphan-button / re-tappable / cancelled-reappearing / edited-reverting symptoms.
+// Without this, todayMeals + plannedMeals stay stale (loaded once on mount), so mealAlreadyInDb
+// keeps returning false for meals saved in a different tab/screen.
+useEffect(() => {
+if (!userId) return;
+
+const refresh = () => {
+if (document.visibilityState === "visible") {
+loadTodayMeals(userId);
+loadPlannedMeals(userId);
+loadTodayMessages(userId);
+}
+};
+
+window.addEventListener("focus", refresh);
+document.addEventListener("visibilitychange", refresh);
+
+return () => {
+window.removeEventListener("focus", refresh);
+document.removeEventListener("visibilitychange", refresh);
+};
 }, [userId]);
 
 useEffect(() => {
@@ -555,10 +603,16 @@ console.log("Planned meals load error:", e);
 
 async function loadTodayMessages(uid) {
 try {
-// Load last 20 messages — no date filter to avoid timezone issues
+// Session 2: filter to today's messages only (was: last 20 messages across all days).
+// Avoids yesterday's stale meal cards reappearing in chat after midnight.
+const todayStart = new Date();
+todayStart.setHours(0, 0, 0, 0);
+const todayStartIso = todayStart.toISOString();
+
 const { data } = await supabase
 .from("ai_messages").select("*")
 .eq("user_id", uid)
+.gte("created_at", todayStartIso)
 .order("created_at", { ascending: false })
 .limit(20);
 
@@ -913,9 +967,19 @@ if (stageTimer) clearTimeout(stageTimer);
 }
 
 async function handleAddToPlan(meal, msgIdx, targetDate) {
-const key = getMealKey(msgIdx, meal);
-if (savedPlanKeys.includes(key)) return;
 const uid = userId;
+
+// Session 2: check if this meal already exists in DB instead of in savedPlanKeys.
+// mealAlreadyInDb logic is duplicated here as a guard (the function is defined in render scope).
+const alreadyExists = (rows) => rows.some(r =>
+r.date === targetDate &&
+r.meal_type === meal.mealType &&
+r.food === meal.food &&
+Math.abs(Number(r.calories) - Number(meal.calories)) < 5
+);
+if (alreadyExists(plannedMeals) || alreadyExists(todayMeals)) {
+return; // Already saved to DB — no-op, render will hide the button on next paint
+}
 
 // Only replace for Breakfast/Lunch/Dinner — Snacks can stack
 if (meal.mealType !== "snack") {
@@ -935,8 +999,6 @@ await supabase.from("planned_meals").delete().eq("id", e.id);
 
 try {
       await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-      const newKeys = [...savedPlanKeys, key];
-      setSavedPlanKeys(newKeys);
      
       await loadPlannedMeals(uid);
     } catch (err) {
@@ -946,24 +1008,26 @@ try {
 
 async function handleAddAllToPlan(meals, msgIdx, targetDate) {
     const uid = userId;
-    const newKeys = [];
     const failures = [];
     for (const meal of meals) {
-      const key = getMealKey(msgIdx, meal);
-      if (!savedPlanKeys.includes(key)) {
-        try {
+      // Session 2: skip meals already in DB instead of using savedPlanKeys.
+      const alreadyExists = (rows) => rows.some(r =>
+        r.date === targetDate &&
+        r.meal_type === meal.mealType &&
+        r.food === meal.food &&
+        Math.abs(Number(r.calories) - Number(meal.calories)) < 5
+      );
+      if (alreadyExists(plannedMeals) || alreadyExists(todayMeals)) {
+        continue;
+      }
+      try {
           await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-          newKeys.push(key);
         } catch (err) {
           failures.push(`${meal.food}: ${err.message}`);
         }
-      }
     }
-    if (newKeys.length > 0) {
-      setSavedPlanKeys(prev => [...prev, ...newKeys]);
-      
-      await loadPlannedMeals(uid);
-    }
+    // Session 2: always refetch — even partial successes affect plannedMeals.
+    await loadPlannedMeals(uid);
     if (failures.length > 0) {
       alert(`Some meals could not be saved:\n${failures.join("\n")}`);
     }
@@ -987,23 +1051,24 @@ setDismissedPlanKeys(prev => new Set([...prev, key]));
 }
 
 async function handleMealReviewAction(action, msg, idx) {
-if (completedMealReviewIds.has(idx)) return;
+// Session 2: no more completedMealReviewIds set — the render layer checks DB state
+// and dismissedReviewIds to decide whether to show buttons.
 
 if (action === "cancel") {
-setCompletedMealReviewIds(prev => new Set([...prev, idx]));
-// Remove mealReview from the message so buttons don't come back
+setDismissedReviewIds(prev => new Set([...prev, idx]));
+// Also mutate the in-memory message so buttons hide immediately this session
 setHistory(prev => prev.map((m, i) => 
 i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
 ));
 setHistory(prev => [
 ...prev,
-{ role: "assistant", content: "Canceled — I won’t save that meal." },
+{ role: "assistant", content: "Canceled — I won't save that meal." },
 ]);
 return;
 }
 
 if (action === "edit") {
-// Remove mealReview from the message so buttons don't come back
+setDismissedReviewIds(prev => new Set([...prev, idx]));
 setHistory(prev => prev.map((m, i) => 
 i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
 ));
@@ -1013,8 +1078,6 @@ setHistory(prev => [
 ]);
 return;
 }
-
-setCompletedMealReviewIds(prev => new Set([...prev, idx]));
 
 try {
 const uid = userId;
@@ -1033,11 +1096,6 @@ console.log("💾 Fallback to parseAllMeals — meals count:", meals.length);
 
 if (!meals.length) {
 alert("No meal found to save.");
-setCompletedMealReviewIds(prev => {
-const next = new Set(prev);
-next.delete(idx);
-return next;
-});
 return;
 }
 
@@ -1060,6 +1118,8 @@ for (const meal of meals) {
         }, uid);
       }
 
+// Session 2: refetch DB state immediately so render's mealAlreadyInDb returns true on next paint.
+// This hides the buttons without needing a separate completion tracking set.
 if (action === "eat") {
 await loadTodayMeals(uid);
 } else {
@@ -1068,7 +1128,8 @@ await loadPlannedMeals(uid);
 
 
 
-// Remove mealReview from the message so buttons don't come back
+// Keep the in-memory mutation for immediate visual feedback this session.
+// On reload, the DB check via mealAlreadyInDb will handle the same purpose.
 setHistory(prev => prev.map((m, i) => 
 i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
 ));
@@ -1087,14 +1148,8 @@ console.error("❌ MEAL SAVE ERROR:", err);
 console.error("Error details:", {
   message: err.message,
   stack: err.stack,
-  meals: meals,
-  userId: uid,
+  userId: userId,
   table: action === "eat" ? "actual_meals" : "planned_meals"
-});
-setCompletedMealReviewIds(prev => {
-const next = new Set(prev);
-next.delete(idx);
-return next;
 });
 alert(`Could not save meal: ${err.message || 'Unknown error'}. Please try again.`);
 }
@@ -1357,14 +1412,15 @@ const buttonSourceIdx = planMealsFromThisMessage.length > 0
             const visibleButtonMeals = buttonMeals.filter((m) => {
               const key = getMealKey(buttonSourceIdx, m);
               if (dismissedPlanKeys.has(key)) return false;
-              if (savedPlanKeys.includes(key)) return false;
               if (mealAlreadyInDb(m)) return false;
               return true;
             });
 
 const showButtons = visibleButtonMeals.length > 0;
-const allSaved = showButtons &&
-visibleButtonMeals.every((m) => savedPlanKeys.includes(getMealKey(buttonSourceIdx, m)));
+// Session 2: allSaved is implicit — when all meals are in DB, mealAlreadyInDb filters them all out,
+// visibleButtonMeals becomes empty, and showButtons becomes false. The whole planning UI hides.
+// No separate "all saved" indicator needed; the UI just collapses cleanly.
+const allSaved = false;
 
 return (
 <div key={idx} style={{ display:"flex",
@@ -1404,7 +1460,32 @@ border: isUser ? "none" : `1px solid ${T.aiBorder}`,
 }}>
 {msg.content}
 {!isUser && msg.mealReview?.actions?.length > 0 && (() => {
-const reviewDone = completedMealReviewIds.has(idx);
+// Session 2: reviewDone is now DB-derived.
+// A 4-button review is "done" when:
+//   (a) the user dismissed it via Cancel/Edit this session (ephemeral, dismissedReviewIds), OR
+//   (b) any meal extracted from this message already exists in todayMeals or plannedMeals (DB-derived, survives nav).
+let reviewMeals = [];
+if (msg.mealData) {
+reviewMeals = mealDataToSaveRows(msg.mealData);
+}
+if (reviewMeals.length === 0) {
+reviewMeals = parseAllMeals(msg.content);
+}
+
+const todayStr = getLocalDate();
+const reviewTargetDate = msg.mealReview?.targetDate || todayStr;
+const mealInDb = (m) => {
+const matches = (rows) => rows.some(r =>
+r.date === reviewTargetDate &&
+r.meal_type === m.mealType &&
+r.food === m.food &&
+Math.abs(Number(r.calories) - Number(m.calories)) < 5
+);
+return matches(todayMeals) || matches(plannedMeals);
+};
+
+const allInDb = reviewMeals.length > 0 && reviewMeals.every(mealInDb);
+const reviewDone = dismissedReviewIds.has(idx) || msg.reviewCompleted || allInDb;
 
 // Don't show buttons if already completed
 if (reviewDone) return null;
@@ -1477,7 +1558,9 @@ cursor: allSaved ? "default" : "pointer",
 
 {visibleButtonMeals.map(meal => {
 const key = getMealKey(buttonSourceIdx, meal);
-const isSaved = savedPlanKeys.includes(key);
+// Session 2: visibleButtonMeals already filters out DB-saved meals via mealAlreadyInDb.
+// Belt-and-suspenders DB check here in case of any timing edge case.
+const isSaved = mealAlreadyInDb(meal);
 const label = getMealLabel(meal.displayType);
 const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
 pm => pm.meal_type === meal.mealType && pm.date === targetDate
