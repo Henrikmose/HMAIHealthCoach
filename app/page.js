@@ -629,6 +629,10 @@ if (row.response) {
   const rawResponse = row.response;
   const reloadedMealData = extractMealData(rawResponse);
   const displayResponse = stripMealData(rawResponse);
+  // Session 2.5 fix: count meal blocks to decide reconstruction strategy.
+  // 1 meal → 4-button review (single-meal log)
+  // 2+ meals → null, let multi-meal planning UI render with per-card buttons + Add all
+  const reloadedMealCount = parseAllMeals(displayResponse).length;
   rebuilt.push({
     role: "assistant",
     content: displayResponse,
@@ -637,10 +641,10 @@ if (row.response) {
     // When resolved === true, render NO buttons of any kind for this message (action already taken).
     aiMessageId: row.id,
     resolved: row.resolved === true,
-    // Reconstruct mealReview if the message had a meal block and wasn't resolved.
-    // This is what prevents single-meal logs from falling through to the planning UI on reload.
+    // Reconstruct mealReview ONLY for single-meal messages, and only if not resolved.
+    // Multi-meal plans get null so they fall through to the per-card planning UI.
     mealReview: row.resolved === true ? null : (
-      /(?:^|\n)(?:Breakfast|Lunch|Dinner|Snack)\b/i.test(displayResponse)
+      reloadedMealCount === 1
         ? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
         : null
     ),
