@@ -633,6 +633,17 @@ if (row.response) {
     role: "assistant",
     content: displayResponse,
     mealData: reloadedMealData || null,
+    // Resolved fix (Session 2.5): carry the ai_messages row id + resolved flag forward.
+    // When resolved === true, render NO buttons of any kind for this message (action already taken).
+    aiMessageId: row.id,
+    resolved: row.resolved === true,
+    // Reconstruct mealReview if the message had a meal block and wasn't resolved.
+    // This is what prevents single-meal logs from falling through to the planning UI on reload.
+    mealReview: row.resolved === true ? null : (
+      /(?:^|\n)(?:Breakfast|Lunch|Dinner|Snack)\b/i.test(displayResponse)
+        ? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
+        : null
+    ),
   });
 }
 }
@@ -1029,15 +1040,48 @@ const key = getMealKey(msgIdx, meal);
 setDismissedPlanKeys(prev => new Set([...prev, key]));
 }
 
+// Session 2.5: persist resolution to ai_messages.resolved so buttons disappear permanently.
+// Called from all 4 action paths (eat / plan / edit / cancel) after the action is processed.
+async function markMessageResolved(msg) {
+let id = msg?.aiMessageId;
+
+// Fresh in-session messages don't have an ID yet (route.js inserts but doesn't return id).
+// Fallback: find the most recent unresolved row for this user — that's almost certainly the one
+// the user is acting on (only one assistant message at a time can be in review state).
+if (!id && userId) {
+try {
+const { data } = await supabase
+.from("ai_messages")
+.select("id")
+.eq("user_id", userId)
+.eq("resolved", false)
+.order("created_at", { ascending: false })
+.limit(1);
+if (data && data.length > 0) id = data[0].id;
+} catch (e) {
+console.warn("Could not look up ai_messages row for resolution:", e.message);
+}
+}
+
+if (!id) return;
+try {
+await supabase
+.from("ai_messages")
+.update({ resolved: true })
+.eq("id", id);
+} catch (e) {
+console.warn("Could not mark message resolved:", e.message);
+}
+}
+
 async function handleMealReviewAction(action, msg, idx) {
-// Session 2: no more completedMealReviewIds set — the render layer checks DB state
-// and dismissedReviewIds to decide whether to show buttons.
+// Session 2.5: resolved=true survives reload via ai_messages column. All 4 action paths set it.
 
 if (action === "cancel") {
 setDismissedReviewIds(prev => new Set([...prev, idx]));
-// Also mutate the in-memory message so buttons hide immediately this session
+await markMessageResolved(msg);
 setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
+i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
 ));
 setHistory(prev => [
 ...prev,
@@ -1048,8 +1092,9 @@ return;
 
 if (action === "edit") {
 setDismissedReviewIds(prev => new Set([...prev, idx]));
+await markMessageResolved(msg);
 setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
+i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
 ));
 setHistory(prev => [
 ...prev,
@@ -1105,12 +1150,13 @@ await loadTodayMeals(uid);
 await loadPlannedMeals(uid);
 }
 
-
+// Session 2.5: persist resolution to DB so buttons stay hidden on reload.
+await markMessageResolved(msg);
 
 // Keep the in-memory mutation for immediate visual feedback this session.
-// On reload, the DB check via mealAlreadyInDb will handle the same purpose.
+// On reload, the resolved flag from ai_messages will handle the same purpose.
 setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null, reviewCompleted: true } : m
+i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
 ));
 
 setHistory(prev => [
@@ -1358,8 +1404,10 @@ const targetDate = extractTargetDate(triggerText, surroundingTexts);
 // If the assistant returned one or more meal blocks and this is NOT a food-log review,
 // render each meal as its own planned-meal action.
 // This supports full-day plans and partial plans like breakfast+lunch or snack+dinner.
+// Session 2.5: if the message has been resolved (any of the 4 actions taken), show NO buttons.
+// This is the rule the user articulated: once resolved, gone forever, no buttons of any kind.
 const planMealsFromThisMessage =
-!isUser && !msg.mealReview && !msg.reviewCompleted && thisMeals.length > 0
+!isUser && !msg.mealReview && !msg.reviewCompleted && !msg.resolved && thisMeals.length > 0
 ? thisMeals
 : [];
 
@@ -1438,7 +1486,7 @@ color: isUser ? "#fff" : T.text,
 border: isUser ? "none" : `1px solid ${T.aiBorder}`,
 }}>
 {msg.content}
-{!isUser && msg.mealReview?.actions?.length > 0 && (() => {
+{!isUser && !msg.resolved && msg.mealReview?.actions?.length > 0 && (() => {
 // Session 2: reviewDone is now DB-derived.
 // A 4-button review is "done" when:
 //   (a) the user dismissed it via Cancel/Edit this session (ephemeral, dismissedReviewIds), OR
