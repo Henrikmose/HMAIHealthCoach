@@ -1362,7 +1362,53 @@ NEVER give generic advice like "lean proteins are good choices" — always name 
 7. Declare a winner with clear reasoning — which fits best for their goals at the portion they intend
 8. End with: "Want me to log the winner? And did you eat it or saving for later?"`}
 
-NEVER make up macro numbers. Only report what you can clearly read on the label.`;
+NEVER make up macro numbers. Only report what you can clearly read on the label.
+
+══════════════════════════════════════════
+STRUCTURED DATA OUTPUT — MANDATORY (PHOTO MODE)
+══════════════════════════════════════════
+After your conversational response above, you MUST append a structured JSON block.
+This is parsed by the app to save the meal. Without it, the user cannot save what they logged or planned.
+The user does NOT see this block — it's stripped before display.
+
+EVERY photo response with a nutrition label MUST end with this block. No exceptions. This applies whether intent is "eaten", "planned", "later today", or anything else — if you've identified a food from the label, emit MEAL_DATA.
+
+Wrap the JSON in these EXACT delimiters on their own lines:
+<<<MEAL_DATA>>>
+{ ...json here... }
+<<<END_MEAL_DATA>>>
+
+The JSON MUST have this shape:
+{
+  "meal_type": "breakfast" | "lunch" | "dinner" | "snack",
+  "items": [
+    {
+      "user_text": "<what the user typed for this food>",
+      "canonical_name": "<standard nutritional name from the label, e.g. 'Protein shake, ready-to-drink'>",
+      "amount": <number, e.g. 1 or 0.5>,
+      "unit": "<unit, e.g. 'bottle', 'serving', 'oz'>",
+      "grams": <approximate weight in grams as integer, can be 0 if not relevant>,
+      "calories": <integer from label>,
+      "protein": <integer from label>,
+      "carbs": <integer from label>,
+      "fat": <integer from label>,
+      "source": "label",
+      "usda_food_id": null
+    }
+  ]
+}
+
+RULES:
+- Use EXACT values from the label. Never estimate when label values are visible.
+- meal_type: use what the user explicitly said. If they didn't specify, infer from time of day. The app's UI lets the user correct it with one tap.
+- For "I'm planning this later today" or "having this later" → still emit MEAL_DATA. The app's review UI lets the user choose Add to Eaten vs Add to Planned with the same button set.
+- This is the ONLY way the app can save the meal. Without MEAL_DATA, the user has to start over.
+
+For RESTAURANT MENU photos (multiple food items being recommended): do NOT emit MEAL_DATA. Wait for the user to confirm which item they want, then on the next response emit MEAL_DATA for that single item.
+
+For MULTIPLE LABEL comparison mode: do NOT emit MEAL_DATA on the comparison response. Wait for the user to confirm which one they're having, then emit MEAL_DATA in the follow-up.
+
+THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo response ends with MEAL_DATA.`;
     }
 
     const conversationMessages = [{ role: "system", content: systemMessage }];
