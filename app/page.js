@@ -927,12 +927,17 @@ const mealData = extractMealData(reply);
 const displayReply = stripMealData(reply);
 
 const parsedReplyMeals = parseAllMeals(displayReply);
+// New rule: MEAL_DATA emission is the single source of truth for "this is a save-able single meal."
+// AI emits MEAL_DATA only in food_log context (single meal). Multi-meal plans don't emit it.
+// This routes BOTH past-tense logs AND future-tense plans through the 4-button review.
+const hasMealData = !!mealData && Array.isArray(mealData.items) && mealData.items.length > 0;
 const shouldForceMealReview =
-isLogMessage(trimmed) &&
-(
-parsedReplyMeals.length > 0 ||
-/foods:|calories:|protein:|carbs:|fat:|breakdown:/i.test(displayReply)
-);
+hasMealData ||
+// Legacy fallback for the (now rare) case where AI doesn't emit MEAL_DATA but user clearly logged a meal.
+// Once MEAL_DATA emission is reliable, this fallback can be removed.
+(isLogMessage(trimmed) &&
+(parsedReplyMeals.length > 0 ||
+/foods:|calories:|protein:|carbs:|fat:|breakdown:/i.test(displayReply)));
 
 const cleanedReplyForReview = displayReply
 .replace(/you'?ve logged this meal\.?\s*✅?/gi, "")
