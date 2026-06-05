@@ -893,9 +893,7 @@ FOOD LOGGING MODE
 ══════════════════════════════════════════
 ${userName} is logging food they ate.
 Original: "${context.originalMessage}"
-${context.mealType ? `Meal type: ${context.mealType}` : `No meal type given — infer from time of day:
-  Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
-  Use this inferred type in the meal block. NEVER skip logging because meal type is missing.`}
+${context.mealType ? `Meal type: ${context.mealType}` : `Meal type not specified by user. Use your best inference from context — the app's UI lets the user correct it with one tap. Never refuse to log because meal type is unclear.`}
 ${context.followUpMessage ? `Follow-up: "${context.followUpMessage}"` : ""}
 
 ${dbFoodResults ? `
@@ -972,7 +970,53 @@ AFTER LOGGING — ALWAYS include:
 2. 📊 Updated totals: [sum]/${goal.calories} cal ([pct]%) | [sum]g protein | [sum]g carbs | [sum]g fat
 3. ONLY DB baseline + this new meal — nothing else
 4. 👉 One coaching tip
-5. IF 300+ calories remaining: suggest a specific next meal or snack`;
+5. IF 300+ calories remaining: suggest a specific next meal or snack
+
+══════════════════════════════════════════
+STRUCTURED DATA OUTPUT — MANDATORY
+══════════════════════════════════════════
+After your conversational response above, you MUST append a structured JSON block.
+This is parsed by the app to save the meal. Without it, the user cannot save what they logged.
+The user does NOT see this block — it's stripped before display.
+
+EVERY food log response MUST end with this block. No exceptions. Even if you're asking a clarifying question, if you've identified ANY foods in the user's message, emit MEAL_DATA for what you know.
+
+Wrap the JSON in these EXACT delimiters on their own lines:
+<<<MEAL_DATA>>>
+{ ...json here... }
+<<<END_MEAL_DATA>>>
+
+The JSON MUST have this shape:
+{
+  "meal_type": "breakfast" | "lunch" | "dinner" | "snack",
+  "items": [
+    {
+      "user_text": "<what the user typed for this food>",
+      "canonical_name": "<standard nutritional name, e.g. 'Banana, raw'>",
+      "amount": <number, e.g. 1 or 0.5>,
+      "unit": "<unit, e.g. 'medium', 'tbsp', 'oz', 'g', 'slice'>",
+      "grams": <approximate weight in grams as integer>,
+      "calories": <integer>,
+      "protein": <integer>,
+      "carbs": <integer>,
+      "fat": <integer>,
+      "source": "usda_db" | "ai_estimate",
+      "usda_food_id": <number or null>
+    }
+  ]
+}
+
+RULES — READ CAREFULLY:
+- ONE object per food. If the user logged 3 foods (burger + eggs + sweet potato), output 3 objects in items[]. NEVER merge multiple foods into one object.
+- INCLUDE ALL FOODS the user mentioned. If garbled or unclear text might mean food, include your best interpretation (e.g., "3X eggs" → assume "3 eggs"). Do not silently drop items.
+- meal_type: use what the user explicitly said. If they didn't specify, use your best inference from context (time of day, food choice). The app will let the user correct it if needed.
+- If a food appeared in the DATABASE LOOKUP section above (marked "from USDA"), set source="usda_db" and use the EXACT numbers from there. Set usda_food_id if provided, else null.
+- If a food was NOT in DATABASE LOOKUP (you estimated it), set source="ai_estimate" and usda_food_id=null.
+- canonical_name should be the standard nutritional name. Examples: user types "banana" → "Banana, raw". User types "PB" → "Peanut butter, smooth". User types "Big Mac" → "Big Mac".
+- The JSON must be VALID JSON (parseable by JSON.parse). No trailing commas. Use null, not undefined.
+- If adding to an existing meal ("I also had X"), the items[] array should contain ONLY the NEW item(s).
+
+THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to emit it means the user cannot save what they ate.`;
     }
 
     if (context?.type === "meal_planning") {

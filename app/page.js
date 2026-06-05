@@ -170,10 +170,14 @@ return null;
 }
 
 function inferMealTypeFromHour(hour) {
-if (hour < 11) return "breakfast";
-if (hour < 14) return "lunch";
-if (hour < 17) return "snack";
-return "dinner";
+// Time windows aligned with real eating patterns (not artificial meal slots).
+// Mid-morning, mid-afternoon, and late-night all default to Snack.
+if (hour >= 5 && hour < 9) return "breakfast";    // 5am-8:59am
+if (hour >= 9 && hour < 11) return "snack";       // 9am-10:59am (mid-morning)
+if (hour >= 11 && hour < 13) return "lunch";      // 11am-12:59pm
+if (hour >= 13 && hour < 17) return "snack";      // 1pm-4:59pm (afternoon)
+if (hour >= 17 && hour < 20) return "dinner";     // 5pm-7:59pm
+return "snack";                                    // 8pm-4:59am (late/early)
 }
 
 // ========================================
@@ -469,6 +473,11 @@ const [plannedMeals, setPlannedMeals] = useState([]);
 // when the user taps the button again before the first save completes.
 const isSavingRef = useRef(false);
 const [isSaving, setIsSaving] = useState(false);
+
+// Meal type dropdown overrides per message idx.
+// Default value comes from msg.mealData.meal_type, falls back to time-of-day inference.
+// User can override via the dropdown next to Add to Eaten / Add to Planned.
+const [selectedMealTypes, setSelectedMealTypes] = useState({});
 const [userId, setUserId] = useState(null);
 const [userName, setUserName] = useState("");
 const [goals, setGoals] = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
@@ -657,10 +666,10 @@ if (row.response) {
   const rawResponse = row.response;
   const reloadedMealData = extractMealData(rawResponse);
   const displayResponse = stripMealData(rawResponse);
-  // Session 2.5 fix: count meal blocks to decide reconstruction strategy.
-  // 1 meal → 4-button review (single-meal log)
-  // 2+ meals → null, let multi-meal planning UI render with per-card buttons + Add all
-  const reloadedMealCount = parseAllMeals(displayResponse).length;
+  // MEAL_DATA-only architecture: reconstruct mealReview ONLY when MEAL_DATA was emitted.
+  // If AI didn't emit MEAL_DATA (e.g., conversational response with no food), no buttons appear.
+  // This replaces the prose-based heuristic that was unreliable.
+  const hasMealData = reloadedMealData?.items?.length > 0;
   rebuilt.push({
     role: "assistant",
     content: displayResponse,
@@ -669,10 +678,9 @@ if (row.response) {
     // When resolved === true, render NO buttons of any kind for this message (action already taken).
     aiMessageId: row.id,
     resolved: row.resolved === true,
-    // Reconstruct mealReview ONLY for single-meal messages, and only if not resolved.
-    // Multi-meal plans get null so they fall through to the per-card planning UI.
+    // mealReview attaches when MEAL_DATA exists and message isn't resolved.
     mealReview: row.resolved === true ? null : (
-      reloadedMealCount === 1
+      hasMealData
         ? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
         : null
     ),
@@ -1125,7 +1133,7 @@ console.warn("Could not mark message resolved:", e.message);
 }
 }
 
-async function handleMealReviewAction(action, msg, idx) {
+async function handleMealReviewAction(action, msg, idx, overrideMealType) {
 // Session 2.5: resolved=true survives reload via ai_messages column. All 4 action paths set it.
 // Fix 1: double-tap protection — applies to all 4 actions, prevents double-save when network slow.
 if (isSavingRef.current) return;
@@ -1162,21 +1170,27 @@ return;
 try {
 const uid = userId;
 
-// Session 1: prefer structured MEAL_DATA when available (saves N rows for N foods).
-// Fall back to parseAllMeals for legacy messages or when JSON is missing/malformed.
+// MEAL_DATA is now the single source for the 4-button review.
+// Prose parsing fallback removed — if AI didn't emit MEAL_DATA, no buttons appear.
 let meals = [];
 if (msg.mealData) {
 meals = mealDataToSaveRows(msg.mealData);
 console.log("💾 Using structured MEAL_DATA — items count:", meals.length);
 }
-if (meals.length === 0) {
-meals = parseAllMeals(msg.content);
-console.log("💾 Fallback to parseAllMeals — meals count:", meals.length);
-}
 
 if (!meals.length) {
-alert("No meal found to save.");
+alert("No meal data found to save. Try logging again.");
 return;
+}
+
+// Apply meal type override from dropdown if user changed it.
+if (overrideMealType) {
+meals = meals.map(m => ({
+...m,
+mealType: overrideMealType,
+displayType: overrideMealType,
+}));
+console.log("💾 Meal type overridden to:", overrideMealType);
 }
 
 const table = action === "eat" ? "actual_meals" : "planned_meals";
@@ -1547,24 +1561,24 @@ border: isUser ? "none" : `1px solid ${T.aiBorder}`,
 }}>
 {msg.content}
 {!isUser && !msg.resolved && msg.mealReview?.actions?.length > 0 && (() => {
-// Session 2: reviewDone is now DB-derived.
-// A 4-button review is "done" when:
-//   (a) the user dismissed it via Cancel/Edit this session (ephemeral, dismissedReviewIds), OR
-//   (b) any meal extracted from this message already exists in todayMeals or plannedMeals (DB-derived, survives nav).
-let reviewMeals = [];
-if (msg.mealData) {
-reviewMeals = mealDataToSaveRows(msg.mealData);
-}
-if (reviewMeals.length === 0) {
-reviewMeals = parseAllMeals(msg.content);
-}
+// MEAL_DATA is the only source for the 4-button review now.
+// If AI didn't emit MEAL_DATA, no buttons appear — user re-asks the AI to log it properly.
+const reviewMeals = msg.mealData ? mealDataToSaveRows(msg.mealData) : [];
+
+if (reviewMeals.length === 0) return null; // No structured data = no save buttons
+
+// Determine the current meal type for the dropdown.
+// Priority: user-changed value > AI's value from MEAL_DATA > time-of-day inference.
+const aiMealType = msg.mealData?.meal_type || msg.mealData?.mealType;
+const defaultMealType = aiMealType || inferMealTypeFromHour(new Date().getHours());
+const currentMealType = selectedMealTypes[idx] || defaultMealType;
 
 const todayStr = getLocalDate();
 const reviewTargetDate = msg.mealReview?.targetDate || todayStr;
 const mealInDb = (m) => {
 const matches = (rows) => rows.some(r =>
 r.date === reviewTargetDate &&
-r.meal_type === m.mealType &&
+r.meal_type === currentMealType &&
 r.food === m.food &&
 Math.abs(Number(r.calories) - Number(m.calories)) < 5
 );
@@ -1584,34 +1598,75 @@ borderRadius:10,
 padding:"8px 12px",
 fontWeight:600,
 cursor:"pointer",
+fontSize: 14,
 };
 
+const onMealTypeChange = (e) => {
+setSelectedMealTypes(prev => ({ ...prev, [idx]: e.target.value }));
+};
+
+const mealTypeLabel = currentMealType.charAt(0).toUpperCase() + currentMealType.slice(1);
+
 return (
-<div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12 }}>
+<div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12, alignItems:"center" }}>
 <button
-onClick={() => handleMealReviewAction("eat", msg, idx)}
-style={{ ...buttonBase, background:"#10b981" }}
+onClick={() => handleMealReviewAction("eat", msg, idx, currentMealType)}
+disabled={isSaving}
+style={{ ...buttonBase, background: isSaving ? "#10b98155" : "#10b981" }}
 >
 ✅ Add to Eaten
 </button>
 
+<div style={{ position:"relative", display:"inline-block" }}>
+<select
+value={currentMealType}
+onChange={onMealTypeChange}
+disabled={isSaving}
+style={{
+...buttonBase,
+background:"#374151",
+appearance:"none",
+WebkitAppearance:"none",
+paddingRight: 26,
+cursor:"pointer",
+}}
+>
+<option value="breakfast">Breakfast</option>
+<option value="lunch">Lunch</option>
+<option value="snack">Snack</option>
+<option value="dinner">Dinner</option>
+</select>
+<span style={{
+position:"absolute",
+right:8,
+top:"50%",
+transform:"translateY(-50%)",
+pointerEvents:"none",
+color:"#fff",
+fontSize:10,
+}}>▾</span>
+</div>
+
 <button
-onClick={() => handleMealReviewAction("plan", msg, idx)}
-style={{ ...buttonBase, background:"#2563eb" }}
+onClick={() => handleMealReviewAction("plan", msg, idx, currentMealType)}
+disabled={isSaving}
+style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
 >
 📅 Add to Planned
 </button>
 
 <button
 onClick={() => handleMealReviewAction("edit", msg, idx)}
-style={{ ...buttonBase, background:"#f59e0b" }}
+disabled={isSaving}
+style={{ ...buttonBase, background: isSaving ? "#f59e0b55" : "#f59e0b" }}
 >
 ✏️ Edit
 </button>
 
 <button
 onClick={() => handleMealReviewAction("cancel", msg, idx)}
-style={{ ...buttonBase, background:"#ef4444" }}
+disabled={isSaving}
+style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 >
 ❌ Cancel
 </button>
