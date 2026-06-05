@@ -188,6 +188,47 @@ if (!text) return [];
 const meals = [];
 const mealTypes = ["breakfast", "lunch", "dinner", "snack"];
 const mealCounts = { breakfast: 0, lunch: 0, dinner: 0, snack: 0 };
+// Fix 2: allow compound prefixes like "Pre-Workout Snack", "Morning Snack", "Post-Workout Snack".
+// Only recognized descriptor prefixes are allowed — prevents false positives in prose like "For lunch I'll...".
+const compoundPrefixRe = /^(pre-\w+|post-\w+|mid-\w+|late-\w+|morning|afternoon|evening|early)\s+/i;
+
+// Returns the matched meal type if the line is a meal header, null otherwise.
+// Handles both simple ("Breakfast", "Lunch — 12pm") and compound ("Pre-Workout Snack") headers.
+function detectMealType(line, lineLower) {
+const isNotDataLine =
+!lineLower.includes("total") &&
+!lineLower.includes("calories:") &&
+!line.startsWith("-");
+if (!isNotDataLine) return null;
+
+for (const type of mealTypes) {
+// Simple: line starts with meal type
+if (
+lineLower === type ||
+lineLower.startsWith(type + " ") ||
+lineLower.startsWith(type + "(")
+) {
+return type;
+}
+}
+
+// Compound: line has descriptor prefix, then meal type
+if (compoundPrefixRe.test(lineLower)) {
+const remainder = lineLower.replace(compoundPrefixRe, "");
+for (const type of mealTypes) {
+if (
+remainder === type ||
+remainder.startsWith(type + " ") ||
+remainder.startsWith(type + "(")
+) {
+return type;
+}
+}
+}
+
+return null;
+}
+
 const lines = text.split("\n").map((l) => l.trim());
 let i = 0;
 
@@ -195,22 +236,7 @@ while (i < lines.length) {
 const line = lines[i];
 const lineLower = line.toLowerCase().trim();
 
-let matchedType = null;
-for (const type of mealTypes) {
-const startsWithType =
-lineLower === type ||
-lineLower.startsWith(type + " ") ||
-lineLower.startsWith(type + "(");
-const isNotDataLine =
-!lineLower.includes("total") &&
-!lineLower.includes("calories:") &&
-!line.startsWith("-");
-
-if (startsWithType && isNotDataLine) {
-matchedType = type;
-break;
-}
-}
+const matchedType = detectMealType(line, lineLower);
 
 if (matchedType) {
 let foods = null, calories = null, protein = null, carbs = null, fat = null;
@@ -220,9 +246,7 @@ while (j < lines.length && j < i + 15) {
 const fl = lines[j];
 const fll = fl.toLowerCase().trim();
 
-const isNextMeal = mealTypes.some(
-(t) => fll === t || fll.startsWith(t + " ") || fll.startsWith(t + "(")
-);
+const isNextMeal = detectMealType(fl, fll) !== null;
 const isTotal =
 fll.startsWith("total") ||
 fll.includes("📊") ||
@@ -441,6 +465,10 @@ const [isLoading, setIsLoading] = useState(false);
 const [activeMealLog, setActiveMealLog] = useState(null);
 const [todayMeals, setTodayMeals] = useState([]);
 const [plannedMeals, setPlannedMeals] = useState([]);
+// Double-tap protection (Fix 1): ref is synchronous, prevents the same save action firing twice
+// when the user taps the button again before the first save completes.
+const isSavingRef = useRef(false);
+const [isSaving, setIsSaving] = useState(false);
 const [userId, setUserId] = useState(null);
 const [userName, setUserName] = useState("");
 const [goals, setGoals] = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
@@ -961,6 +989,12 @@ if (stageTimer) clearTimeout(stageTimer);
 }
 
 async function handleAddToPlan(meal, msgIdx, targetDate) {
+// Fix 1: double-tap protection. If a save is already in flight, ignore subsequent taps
+// until the first one completes. Prevents duplicate writes when network is slow.
+if (isSavingRef.current) return;
+isSavingRef.current = true;
+setIsSaving(true);
+try {
 const uid = userId;
 
 // Session 2: check if this meal already exists in DB instead of in savedPlanKeys.
@@ -998,9 +1032,18 @@ try {
     } catch (err) {
       alert(`Could not save to plan: ${err.message || "Please try again."}`);
     }
+} finally {
+isSavingRef.current = false;
+setIsSaving(false);
+}
 }
 
 async function handleAddAllToPlan(meals, msgIdx, targetDate) {
+    // Fix 1: double-tap protection.
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+    setIsSaving(true);
+    try {
     const uid = userId;
     const failures = [];
     for (const meal of meals) {
@@ -1024,6 +1067,10 @@ async function handleAddAllToPlan(meals, msgIdx, targetDate) {
     await loadPlannedMeals(uid);
     if (failures.length > 0) {
       alert(`Some meals could not be saved:\n${failures.join("\n")}`);
+    }
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
     }
   }
 
@@ -1080,6 +1127,11 @@ console.warn("Could not mark message resolved:", e.message);
 
 async function handleMealReviewAction(action, msg, idx) {
 // Session 2.5: resolved=true survives reload via ai_messages column. All 4 action paths set it.
+// Fix 1: double-tap protection — applies to all 4 actions, prevents double-save when network slow.
+if (isSavingRef.current) return;
+isSavingRef.current = true;
+setIsSaving(true);
+try {
 
 if (action === "cancel") {
 setDismissedReviewIds(prev => new Set([...prev, idx]));
@@ -1181,6 +1233,10 @@ console.error("Error details:", {
   table: action === "eat" ? "actual_meals" : "planned_meals"
 });
 alert(`Could not save meal: ${err.message || 'Unknown error'}. Please try again.`);
+}
+} finally {
+isSavingRef.current = false;
+setIsSaving(false);
 }
 }
 
