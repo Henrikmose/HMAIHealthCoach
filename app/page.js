@@ -793,11 +793,31 @@ if (lookupData.found && lookupData.found.length > 0 && lookupData.missing.length
     `- Fat: ${Math.round(totalFat)}g\n\n` +
     `Breakdown: ${breakdown}`;
 
-  // Assistant message attaches the standard mealReview actions so the existing 4-button UI renders.
+ // Build mealData in the SAME shape the button handler (mealDataToSaveRows) expects,
+  // so the 4 buttons save correctly. Without this, DB-first meals show buttons that can't save.
+  const reviewMealData = {
+    meal_type: mealType,
+    items: lookupData.found.map(f => ({
+      user_text: `${f.amount} ${f.unit} ${f.food}`,
+      canonical_name: f.food,
+      amount: f.amount,
+      unit: f.unit,
+      grams: f.grams || 0,
+      calories: f.calories,
+      protein: f.protein,
+      carbs: f.carbs,
+      fat: f.fat,
+      source: "usda_db",
+      usda_food_id: f.usda_food_id || null,
+    })),
+  };
+
+  // Assistant message attaches mealReview actions AND structured mealData so the buttons save.
   const reviewMessage = {
     role: "assistant",
     content: `Review this meal before saving:\n\n${mealBlock}`,
     mealReview: { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] },
+    mealData: reviewMealData,
   };
 
   setHistory([...newHistory, reviewMessage]);
@@ -836,47 +856,15 @@ imageCount: imagesToSend.length,
 message: trimmed,
 };
 } else if (isConfirmation(trimmed) && lastAiHadMeals) {
-// User confirmed — save meals from previous AI message directly, skip AI call
-const mostRecentAiMsg = recentAiMsgs[0];
-const meals = mostRecentAiMsg ? parseAllMeals(mostRecentAiMsg.content) : [];
-
-if (meals.length > 0) {
-const uid = userId;
-
-// Detect target date from context (today vs tomorrow)
-const surroundingTexts = history.slice(Math.max(0, history.length - 6)).map(m => m.content || "");
-const targetDate = extractTargetDate(trimmed, surroundingTexts);
-
-let savedCount = 0;
-
-for (const meal of meals) {
-const saved = await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-if (saved) savedCount++;
-}
-
-if (savedCount > 0) {
-await loadPlannedMeals(uid);
-const confirmMsg = savedCount === 1
-? `Done — ${meals[0].displayType} added to your plan.`
-: `Done — all ${savedCount} meals added to your plan.`;
-setHistory([...newHistory, { role: "assistant", content: confirmMsg }]);
-
-// Close the meal plan message so it's never looked up again
-const mostRecentAiIdx = history.lastIndexOf(mostRecentAiMsg);
-
-} else {
-setHistory([...newHistory, { role: "assistant", content: "Sorry, couldn't save. Please try again." }]);
-}
-
+// RULE: The 4 buttons are the ONLY way to save. Typing/saying "yes" never saves anything.
+// If a meal review with buttons is on screen, nudge the user to tap a button instead.
+setHistory([...newHistory, {
+role: "assistant",
+content: "Tap **Add to Eaten** or **Add to Planned** on the meal above to save it. (You can also change the meal type, Edit, or Cancel there.)"
+}]);
 setIsLoading(false);
 setLoadingStage("");
-return; // Skip AI call entirely
-}
-
-// Fallback: if no meals found, route to AI
-newActiveMealLog = null;
-setActiveMealLog(null);
-context = { type: "meal_planning", request: trimmed, isConfirmation: true };
+return; // Never save from a typed/spoken confirmation
 } else if (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed) || isMealSwap(trimmed)) {
 // CRITICAL: Check meal planning/swap BEFORE activeMealLog fallback
 // This prevents meal planning requests from being treated as food log follow-ups
@@ -969,21 +957,7 @@ assistantMessage,
 // The AI response index in history — used to close it after saving
 const aiMsgIdx = newHistory.length;
 
-if (false && newActiveMealLog?.type === "food_log") {
-const parsed = parseAllMeals(reply);
-if (parsed.length > 0) {
-const meal = { ...parsed[0], date: getLocalDate() };
-if (!meal.mealType && newActiveMealLog.mealType) {
-meal.mealType = newActiveMealLog.mealType;
-}
-const saved = await saveMealViaAPI("actual_meals", meal, uid);
-if (saved) {
-setActiveMealLog(null);
-await loadTodayMeals(uid);
 
-}
-}
-}
 
 // Photo logs now flow through the same 4-button review as text logs (Rule 1: no auto-save, ever).
 // Previously had an auto-save block here that wrote to actual_meals without user confirmation.
