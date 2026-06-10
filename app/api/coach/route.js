@@ -81,26 +81,69 @@ function parseFoodItems(message) {
 }
 
 // Look up a food in the USDA database
+// Penalize oddball/edge-case USDA variants; prefer simple, common cuts.
+function scoreFoodMatch(rowName, query) {
+  const name = (rowName || "").toLowerCase();
+  const q = (query || "").toLowerCase().trim();
+  let score = 0;
+
+  // Strong penalties for non-food or edge parts the user almost never means
+  const badParts = [
+    "rind", "skin only", "shell", "peel only", "rind only",
+    "cartilage", "bone", "gizzard", "neck", "back", "tail",
+    "fat only", "trimmings", "novel", "imitation", "babyfood", "baby food",
+  ];
+  for (const bad of badParts) if (name.includes(bad)) score -= 50;
+
+  // Mild penalty for "with skin" / "meat and skin" when user didn't ask for skin
+  if (!q.includes("skin") && (name.includes("with skin") || name.includes("meat and skin"))) score -= 8;
+
+  // Prefer canonical lean cuts when relevant
+  if (q.includes("chicken") && name.includes("breast")) score += 10;
+  if (name.includes("boneless")) score += 3;
+  if (name.includes("skinless")) score += 3;
+
+  // Prefer "cooked" when the user didn't say "raw"; prefer "raw" when they did
+  if (q.includes("raw")) { if (name.includes("raw")) score += 4; }
+  else { if (name.includes("cooked")) score += 4; if (name.includes("raw")) score -= 2; }
+
+  // Shorter names are usually the plain/base food ("Watermelon, raw" > long oddball variants)
+  score -= Math.min(name.length / 25, 6);
+
+  // Bonus if the row name starts with the query word (closest match)
+  if (name.startsWith(q.split(" ")[0])) score += 5;
+
+  return score;
+}
+
 async function lookupFood(foodName) {
   if (!foodName) return null;
   try {
-    // Full text search — finds closest match
+    // Pull several candidates, then rank — instead of blindly taking the first.
     const { data, error } = await supabase
       .from('foods')
       .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
       .textSearch('name', foodName.split(' ').join(' & '), { type: 'websearch' })
-      .limit(1);
+      .limit(25);
 
-    if (!error && data && data.length > 0) return data[0];
+    let candidates = (!error && data) ? data : [];
 
-    // Fallback: ILIKE search
-    const { data: data2 } = await supabase
-      .from('foods')
-      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-      .ilike('name', `%${foodName}%`)
-      .limit(1);
+    // Fallback: ILIKE search if full-text found nothing
+    if (candidates.length === 0) {
+      const { data: data2 } = await supabase
+        .from('foods')
+        .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
+        .ilike('name', `%${foodName}%`)
+        .limit(25);
+      candidates = data2 || [];
+    }
 
-    return data2?.[0] || null;
+    if (candidates.length === 0) return null;
+
+    // Rank candidates and return the best.
+    candidates.sort((a, b) => scoreFoodMatch(b.name, foodName) - scoreFoodMatch(a.name, foodName));
+    console.log(`lookupFood "${foodName}" → "${candidates[0].name}" (from ${candidates.length} candidates)`);
+    return candidates[0];
   } catch (e) {
     console.log('Food lookup error:', e.message);
     return null;
