@@ -845,8 +845,8 @@ When confirmed → plan TOMORROW at ${weightLossCals} cal, full day.` : `If user
 ══════════════════════════════════════════
 MULTI-FOOD LOGGING
 ══════════════════════════════════════════
-Ask for each food quantity one at a time.
-Only return meal block when ALL quantities are known.
+If the user gives multiple foods WITH quantities in one message (e.g. "8oz chicken, 1/4 cup sweet potato, 1 cup cottage cheese"), build the meal block IMMEDIATELY. Do NOT ask them to confirm quantities you were already given. Do NOT ask about prep method (grilled/baked/etc) — it barely changes macros and is never a reason to delay the meal block. If they want to adjust anything, that is what the Edit button is for.
+Only ask for a quantity if a food was named with NO amount at all (e.g. "I had chicken and rice" with no sizes). In that case ask for the missing quantities one at a time, then build the block.
 
 ══════════════════════════════════════════
 MACRO REFERENCE
@@ -941,7 +941,8 @@ If ${userName} stated something explicitly, do NOT ask about it again.
 - "burger for breakfast" → meal type is BREAKFAST. Do not ask "was this actually breakfast?"
 - "8oz chicken" → quantity is 8oz. Do not ask "how much chicken?"
 - "two eggs" → quantity is 2. Do not ask "how many eggs?"
-Only ask clarifying questions about information that's genuinely missing AND material to logging accuracy (e.g., burger type if it affects calories significantly). Limit to ONE clarifying question maximum when needed.
+Only ask clarifying questions about information that's genuinely missing AND material to logging accuracy. A missing QUANTITY is material. Prep method (grilled/baked/pan), doneness, and brand are NOT material — never ask about these, never wait on them, just build the meal block. Limit to ONE clarifying question maximum, and only when a quantity is truly absent.
+NEVER say "let me confirm" or "once I confirm those are locked in, I'll show you" — if you have the foods and quantities, output the meal block now. The user confirms by tapping the buttons, not by answering a chat question.
 
 MEAL BLOCK FORMAT — CRITICAL:
 Use SINGLE TOTAL NUMBERS ONLY. Never breakdown math in the meal block.
