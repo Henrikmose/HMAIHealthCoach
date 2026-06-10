@@ -465,16 +465,36 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - totals.fat),
     };
 
-    // ── DB Food Lookup (for food_log context) ──
+    // ── DB Food Lookup (for food_log AND meal_planning when user states specific foods) ──
     let dbFoodResults = null;
     if (context?.type === "food_log") {
       const lookupMsg = context.followUpMessage || context.originalMessage || message;
       dbFoodResults = await lookupFoodMacros(lookupMsg);
       if (dbFoodResults) {
-        console.log(`=== DB FOOD LOOKUP: found ${dbFoodResults.length} food(s) ===`);
+        console.log(`=== DB FOOD LOOKUP (food_log): found ${dbFoodResults.length} food(s) ===`);
         dbFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
       } else {
         console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
+      }
+    }
+
+    // Planning lookup: only when the user NAMED specific foods (e.g. "I'm planning 8oz chicken and 1/4 cup rice").
+    // NOT when they asked for an open plan (e.g. "plan my day") — there are no stated foods to look up.
+    let plannedFoodResults = null;
+    if (context?.type === "meal_planning") {
+      const planMsg = context.request || message || "";
+      // Heuristic: a stated meal contains a quantity token (number + unit/food). An open plan request does not.
+      const hasStatedFoods = /\b\d+\.?\d*\s*(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|egg|eggs)\b/i.test(planMsg);
+      if (hasStatedFoods) {
+        plannedFoodResults = await lookupFoodMacros(planMsg);
+        if (plannedFoodResults) {
+          console.log(`=== DB FOOD LOOKUP (planning): found ${plannedFoodResults.length} food(s) ===`);
+          plannedFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
+        } else {
+          console.log("=== DB FOOD LOOKUP (planning): no match — AI will estimate ===");
+        }
+      } else {
+        console.log("=== PLANNING: open plan request, no stated foods — AI will build the day ===");
       }
     }
 
