@@ -1136,6 +1136,13 @@ MEAL PLANNING MODE
 ══════════════════════════════════════════
 Request: "${context.request || message}"
 Local time: ${hour}:00
+${plannedFoodResults ? `
+DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA) for the foods the user named:
+${plannedFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
+  Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
+
+CRITICAL: For the foods listed above, use these EXACT macro numbers. Do NOT recalculate or estimate them. Only estimate macros for foods the user did NOT name.
+` : ""}
 Planning for: ${events.some(e => e.isTomorrow) ? "TOMORROW" : "TODAY"}
 ${events.length > 0 ? `Events detected: ${events.map(e => `${e.type} at ${e.hour}:00`).join(", ")}` : "No events detected"}
 ${missingEventTimes && !hasAnyEvent ? "MISSING TIMES: Ask user what time each event is before planning." : ""}
