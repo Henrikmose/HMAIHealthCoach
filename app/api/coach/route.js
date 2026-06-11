@@ -801,8 +801,7 @@ TOTAL FORMAT — plain text only:
 📊 Total planned: X/Y cal (Z%) | Xg protein | Xg carbs | Xg fat
 👉 [one coaching note]
 
-EVERY MEAL PLAN MUST END WITH THIS LINE:
-Reply "yes" to save this plan, or let me know if you'd like to change anything.
+Do NOT end with "reply yes to save" or any chat-based save prompt — the buttons handle saving.
 
 CUISINE / STATED FOODS:
 If the user names specific foods or dishes (sushi rolls, a pasta, specific items) — build the meal block immediately and emit MEAL_DATA. NEVER ask "are you going out or planning this?" The user chooses eaten vs planned by tapping a button, and the meal-type dropdown handles meal type. Only when the user names a cuisine with NO specific dishes AND no other context ("I might do Italian sometime") is it fine to ask what dishes they're thinking of — never "out or planned."
@@ -1079,12 +1078,11 @@ This is the sum of the meal blocks in THIS plan only. Do not fold in already-eat
 4. End with 2-3 short rules specific to the day. Be decisive — present ONE plan, never "Option A/Option B." Do NOT ask the user to reply "yes" or confirm in chat; the buttons handle saving.
 
 RULES THAT MATTER:
-- Plan only the remaining part of the day (don't plan meals already past, or meals already eaten/planned — those are shown in DAY STATE).
-- One Breakfast, one Lunch, one Dinner maximum. Snacks can repeat (e.g. pre- and post-workout). Each snack is its own block.
-- Use the REMAINING budget from DAY STATE, not the full daily goal.
-- Restaurant / social / photo meals: give short inline ordering guidance, NOT a meal block (you can't know exact portions). Budget it as whatever REMAINING is after the other planned meals, and say so plainly. Tell them to photo the menu/food and you'll log it after.
-- Timing must be realistic: a 3-mile walk is ~45-60 min, a workout + shower ~60 min. For a time after an event you can't size, say "right after your [event]" instead of guessing a clock time. Pre-event fuel ~2hr before; pre-event snack ~45-60 min before.
-- "I get off at 7am" means a night shift just ended — first meal right at 7:00am, don't assume they just woke.`;
+- Plan only the remaining part of the day. Don't re-plan meals already eaten or planned (shown in DAY STATE). Use the REMAINING budget, not the full goal.
+- One Breakfast, one Lunch, one Dinner max; snacks can repeat. Each meal its own block.
+- Respect what the user told you: if they stated a meal's time or named it (lunch, dinner) or gave their schedule, place meals at those real-world times. Use common sense for how long activities take and when meals make sense around them.
+- Fuel before physical activity and support recovery after it.
+- Restaurant / photo meals: short ordering guidance, not a meal block; budget it from REMAINING. Be honest about the photo — it identifies the food, not the portion; estimates only; the buttons save (never say "I'll log it," "exact macros," "text it over," or that you can read portion from a photo).`;
     }
 
     if (context?.type === "photo" && images?.length > 0) {
