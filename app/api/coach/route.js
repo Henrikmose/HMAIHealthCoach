@@ -1137,119 +1137,30 @@ User message: "${context.message || "(no message)"}"
 Intent detected: ${photoIntent}
 Number of images: ${imageCount}
 
-${imageCount === 1 ? `SINGLE LABEL / MENU:
-IF it's a NUTRITION LABEL:
-1. Read ALL values EXACTLY from the label: calories, protein, carbs, fat, serving size
-2. ONLY use what you can read on the label — NEVER use your own estimates
-3. Report clearly: "Got it — [Product name]: Calories X | Protein Xg | Carbs Xg | Fat Xg | Serving: X"
-4. If meal type not mentioned → infer from time: before 11am=Breakfast, 11-2=Lunch, 2-5=Snack, 5pm+=Dinner
-5. If intent is "eaten" or inferred eaten → return meal block immediately, no questions
-6. If intent is "planned" → return meal block for planned
-7. If servings unclear → ask "How many servings did you have?" THEN log
+${imageCount === 1 ? `SINGLE IMAGE — it's either a nutrition label, a restaurant menu, or a photo of actual food. Handle by what it is:
 
-CRITICAL — USE LABEL VALUES ONLY:
-The label says 150 cal → use 150. Do NOT use 120.
-The label says 30g protein → use 30g. Do NOT use 25g.
-You are reading a nutrition label, not estimating. Trust what you read.
+NUTRITION LABEL:
+- Read the values EXACTLY off the label — calories, protein, carbs, fat, serving size, servings per container. Never substitute your own estimates.
+- Use PER-SERVING macros, and set the servings count to how many they had (the dashboard multiplies). If the container has multiple servings and the user didn't say how much, ask once ("1 serving or the whole bag?") unless context makes it obvious.
+- Infer meal type from time of day; the user can correct it with one tap. Then build the meal block immediately — don't ask "want me to log this?".
+- If they asked a question about it ("can I eat this?"), answer briefly from their remaining macros, then build the block anyway so they can save it if they want.
 
-SERVINGS HANDLING — CRITICAL:
-1. Read: calories per serving, protein per serving, carbs per serving, fat per serving, servings per container
-2. If user ate 1 serving → servings field = 1, use per-serving macros
-3. If user ate whole container with X servings → servings field = X, use per-serving macros
-   The dashboard multiplies: calories × servings automatically
-4. ALWAYS ask if label has multiple servings (>1) and user didn't specify how much:
-   "The bag has 3 servings — did you have 1 serving (120 cal) or the whole bag (360 cal)?"
-   EXCEPTION: skip asking if user said "whole bag", "all of it", "I ate this" with clear single-serve context
-5. NEVER use whole-bag totals as the per-serving macros
+RESTAURANT MENU:
+- Read the actual items. Using their remaining macros (${remaining.calories} cal | ${remaining.protein}g P | ${remaining.carbs}g C | ${remaining.fat}g F), recommend a few specific named items to get, 1-2 to consider with a caveat, and a few to avoid with the specific reason. Name real items from THIS menu — never generic advice.
+- Flag fried/heavy signals ("crunchy/tempura" = fried, "spicy mayo/cream cheese" = heavy).
+- This is guidance only — do NOT build a meal block from a menu, because you don't know what they'll order yet. Tell them to let you know what they pick and you'll log it.
 
-Meal block from label MUST use PER-SERVING values + correct servings count:
-WRONG (ate whole bag of 3 servings):
-- Foods: Fitzels, 1 bag
-- Calories: 370  ← wrong, this is whole bag total
-- Servings: 1    ← wrong
+PHOTO OF ACTUAL FOOD (plated meal, not a menu):
+- Estimate the foods and macros, infer meal type from time, and build the meal block immediately.` :
 
-RIGHT (ate whole bag of 3 servings):
-- Foods: Fitzels, 1 serving
-- Calories: 120  ← per serving value
-- Protein: 5g    ← per serving value
-- Carbs: 19g     ← per serving value
-- Fat: 4g        ← per serving value
-- Servings: 3    ← actual servings consumed (dashboard calculates 120 × 3 = 360 cal)
+`MULTIPLE IMAGES:
+- If they're nutrition labels: read each, show a short per-serving and full-container comparison, flag multi-serving traps, and declare a winner based on their remaining macros. Build a block only once they say which one (and how much) — otherwise ask once.
+- If one is a menu and another is actual food, treat the food photo as the meal to log and the menu as context for guidance.`}
 
-RIGHT (ate 1 serving):
-- Foods: Fitzels, 1 serving
-- Calories: 120
-- Protein: 5g
-- Carbs: 19g
-- Fat: 4g
-- Servings: 1
+THE OVERRIDE RULE — read this:
+The "don't build a block from a menu" guidance applies ONLY while the user hasn't said what they're having. The MOMENT the user states their order or selection — "I'll have X", "I'm getting X", "I chose X", "I'm having the salmon", or lists specific items — that is a STATED MEAL. Build the meal block immediately and emit MEAL_DATA. Do NOT ask "are you going out or planning this?" or "want me to log it?" — the user picks eaten vs planned by tapping a button. Stated food always beats the no-block rule.
 
-IF intent is "eaten" → skip the question, return meal block directly using inferred meal type from time:
-  Before 11am → Breakfast | 11am-2pm → Lunch | 2pm-5pm → Snack | 5pm+ → Dinner
-  NEVER skip logging because meal type is missing — always infer it
-
-IF intent is "planned" / "for later" / "as planned" → skip question, return meal block for planned
-
-IF intent is "unknown" and no meal type mentioned → infer from time of day, log as eaten
-
-IF user asks "can I eat this?" / "is this okay?" / "should I have this?" / "good for me?":
-1. Answer the question first — yes/no with brief reasoning based on remaining macros
-2. ALWAYS end with: "Want me to log it or add it to your plan?"
-3. When user confirms (yes/sure/log it/add it) → return a meal block immediately
-   Use inferred meal type from time of day
-   Use EXACT label values for macros
-   Do NOT loop back to asking again
-
-IF it's a RESTAURANT MENU:
-1. Read EVERY item on the menu carefully
-2. Based on ${userName}'s remaining macros: ${remaining.calories} cal | ${remaining.protein}g P | ${remaining.carbs}g C | ${remaining.fat}g F
-3. Structure your response exactly like this:
-
-Best picks (name 2-3 specific items):
-- [Item name] — why it's good (specific: "lean protein, no sauce, light rice")
-- [Item name] — why it's good
-
-Worth considering (1-2 items with a caveat):
-- [Item name] — good but [specific caveat: "ask for sauce on the side"]
-
-Avoid these (name specific items and exactly why):
-- [Item name] — specific reason ("fried tempura inside + mayo drizzle = 600+ cal")
-- [Item name] — specific reason ("cream cheese based, looks healthy but isn't")
-- [Item name] — specific reason ("imitation crab mixed with mayo")
-
-Key words that signal unhealthy: "crunchy" = fried, "spicy mayo" = heavy sauce, "cream cheese" = high fat, "shaggy dog" = fried shrimp + mayo, "tempura" = battered and fried
-
-4. End with one specific ordering tip: portion size, what to skip, or what to ask for
-5. Always add: "Note: these are estimates based on typical restaurant portions — actual macros will vary."
-6. End with: "Let me know which one you pick and I'll log it for you"
-
-NEVER give generic advice like "lean proteins are good choices" — always name the specific items from THIS menu.` :
-
-`MULTIPLE LABELS — COMPARISON MODE (${imageCount} labels):
-1. Read each label carefully — label them Label 1, Label 2, etc.
-2. Read BOTH per-serving AND total container values. This is critical coaching context.
-3. Build a comparison showing BOTH serving and full container:
-   Label 1: [name if visible]
-   Per serving: X cal | Xg P | Xg C | Xg F
-   Servings per container: X (full container = X cal total)
-
-   Label 2: [name if visible]
-   Per serving: X cal | Xg P | Xg C | Xg F
-   Servings per container: X (full container = X cal total)
-
-4. COACHING NOTE on servings — always flag if container has multiple servings:
-   "Note: Fitzels has 3 servings per bag — if you eat the whole bag that's 360 cal, not 120."
-   This is key coaching — many people eat the whole container assuming it's one serving.
-
-5. Ask: "Are you planning to have 1 serving or the full [container/bag/bottle]?"
-   Then base your recommendation on their actual intended portion.
-
-6. Based on ${userName}'s remaining macros today:
-   Remaining: ${remaining.calories} cal | ${remaining.protein}g protein | ${remaining.carbs}g carbs | ${remaining.fat}g fat
-7. Declare a winner with clear reasoning — which fits best for their goals at the portion they intend
-8. End with: "Want me to log the winner? And did you eat it or saving for later?"`}
-
-NEVER make up macro numbers. Only report what you can clearly read on the label.
+NEVER make up macro numbers — report what you can read on a label; estimate sensibly for menu/plated food.
 
 ══════════════════════════════════════════
 STRUCTURED DATA OUTPUT — MANDATORY (PHOTO MODE)
