@@ -457,12 +457,21 @@ export async function POST(req) {
       ? todayPlanned.map(m => `${m.meal_type}: ${m.food} (${m.calories} cal)`).join("\n")
       : "No planned meals yet";
 
-    const totals = sumMeals(todayMeals);
+   const totals = sumMeals(todayMeals);          // EATEN totals
+    const plannedTotals = sumMeals(todayPlanned); // PLANNED totals
+    // Committed = eaten PLUS already-planned for today.
+    const committed = {
+      calories: totals.calories + plannedTotals.calories,
+      protein:  totals.protein  + plannedTotals.protein,
+      carbs:    totals.carbs    + plannedTotals.carbs,
+      fat:      totals.fat      + plannedTotals.fat,
+    };
+    // TRUE remaining = goal minus eaten minus planned.
     const remaining = {
-      calories: Math.max(0, goal.calories - totals.calories),
-      protein:  Math.max(0, goal.protein  - totals.protein),
-      carbs:    Math.max(0, goal.carbs    - totals.carbs),
-      fat:      Math.max(0, goal.fat      - totals.fat),
+      calories: Math.max(0, goal.calories - committed.calories),
+      protein:  Math.max(0, goal.protein  - committed.protein),
+      carbs:    Math.max(0, goal.carbs    - committed.carbs),
+      fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
     // ── DB Food Lookup (for food_log AND meal_planning when user states specific foods) ──
@@ -694,14 +703,23 @@ Do NOT say "for fat loss you should eat X" if X is different from ${goal.calorie
 
 The ${goal.calories} target ALREADY reflects their goals — it is the number they want to eat each day.
 
-When telling the user how many calories they have left, ALWAYS calculate from ${goal.calories}.
-Example: if ${userName} has eaten ${totals.calories} cal, they have ${remaining.calories} cal remaining — not any other number.
+DAY STATE — USE THESE EXACT NUMBERS. NEVER COMPUTE YOUR OWN TOTALS OR "REMAINING."
+These are calculated from the database. "Remaining" already accounts for BOTH eaten and planned food.
+When you plan or recommend anything, you are spending the REMAINING numbers below — not the full daily goal.
 
-TODAY'S INTAKE (${today}):
-Calories: ${totals.calories}/${goal.calories} (${Math.round((totals.calories/goal.calories)*100)}% — ${remaining.calories} remaining)
-Protein:  ${totals.protein}/${goal.protein}g (${Math.round((totals.protein/goal.protein)*100)}%)
-Carbs:    ${totals.carbs}/${goal.carbs}g (${Math.round((totals.carbs/goal.carbs)*100)}%)
-Fat:      ${totals.fat}/${goal.fat}g (${Math.round((totals.fat/goal.fat)*100)}%)
+EATEN so far (${today}):
+Calories: ${totals.calories} | Protein: ${totals.protein}g | Carbs: ${totals.carbs}g | Fat: ${totals.fat}g
+
+ALREADY PLANNED for today (not yet eaten):
+Calories: ${plannedTotals.calories} | Protein: ${plannedTotals.protein}g | Carbs: ${plannedTotals.carbs}g | Fat: ${plannedTotals.fat}g
+
+COMMITTED (eaten + planned):
+Calories: ${committed.calories}/${goal.calories} | Protein: ${committed.protein}/${goal.protein}g | Carbs: ${committed.carbs}/${goal.carbs}g | Fat: ${committed.fat}/${goal.fat}g
+
+REMAINING (goal − eaten − planned) — THIS IS YOUR BUDGET:
+Calories: ${remaining.calories} | Protein: ${remaining.protein}g | Carbs: ${remaining.carbs}g | Fat: ${remaining.fat}g
+
+When the user asks what to eat next, plan within REMAINING. If a meal will be eaten out (restaurant/photo), its budget is whatever REMAINING is after the other planned meals — state it plainly: "your eaten + planned leaves ~X cal and ~Yg protein for that meal." Never state a "remaining" or "left" number that isn't one of the numbers above.
 
 MEALS LOGGED TODAY:
 ${mealsSummary}
