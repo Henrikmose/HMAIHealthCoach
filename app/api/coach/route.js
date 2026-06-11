@@ -564,26 +564,12 @@ Do NOT guess or plan without times. Just ask.`;
     } else if (hasMultipleEvents) {
       // Multi-event day — use new timeline builder
       eventStrategy = buildMultiEventStrategy(events, hour, goal);
-    } else if (hasRestaurantMeal && !hasPhysicalEvents) {
+   } else if (hasRestaurantMeal && !hasPhysicalEvents) {
       eventStrategy = `
-RESTAURANT / UNKNOWN MENU STRATEGY — MANDATORY:
-The user is eating at a restaurant, dinner party, or someone's home.
-You DO NOT know the menu. You CANNOT guess what they will eat.
-
-RULES — NO EXCEPTIONS:
-1. Create meal blocks ONLY for meals BEFORE the event (Breakfast, Lunch, Snack)
-2. Do NOT create a Dinner block. Not even an estimate. Not steak, not anything.
-3. After the pre-event meal blocks, write this in plain text:
-   "For the dinner itself — I don't know the exact menu, so here's what to look for:
-   - Go for grilled or baked protein over fried
-   - Skip heavy cream sauces and rich sides
-   - Go easy on bread and appetizers
-   - Watch portion sizes on starches
-   When you're there, take a photo of the menu and I'll help you pick the best option for your goals."
-4. Tell them how many calories they have budgeted for the event in plain text only
-5. Keep pre-event meals light — lean protein + vegetables
-6. Budget ${Math.round(goal.calories * 0.45)}-${Math.round(goal.calories * 0.5)} cal for the event
-7. When logging a restaurant meal after the fact: always add "Note: these are estimates based on typical restaurant portions — actual macros will vary."`;
+RESTAURANT / EATING OUT:
+If the user has NOT yet said what they'll order: don't fabricate specific dishes for the restaurant meal. Plan the other meals around it, give brief guidance for the meal out (lean/grilled over fried, light on heavy sauces, watch portions), and tell them to photo the menu or their order and you'll log it. Budget it from their REMAINING macros.
+If the user HAS stated specific foods/dishes: that overrides the above — build the meal block for it immediately and emit MEAL_DATA. Never ask "out or planned?"; the buttons handle that.
+When logging a restaurant meal after the fact, note that macros are estimates based on typical portions.`;
     } else if ((hasEventToday || hasTomorrowEvent) && eventType) {
       if (["sport", "workout", "endurance"].includes(eventType)) {
         eventStrategy = `
@@ -750,21 +736,9 @@ ${eventStrategy}
 INTERPRETING THE MESSAGE:
 Read the user's intent and act on it. Only ask a clarifying question if the message is genuinely impossible to interpret (e.g. a bare "hey" or "ok"). If the message mentions any food, meal, macro, plan, or goal, do NOT ask what they want — proceed. If they're responding to something you just said, treat it as a continuation; never restart with a clarifying question mid-conversation.
 
-${hasRestaurantMeal ? `══════════════════════════════════════════
-RESTAURANT / PARTY MEALS — CRITICAL RULE
-══════════════════════════════════════════
-The user is eating at a restaurant, dinner party, or someone's home.
-- DO NOT create a Dinner block — you don't know the menu
-- DO NOT guess specific dishes
-- Plan only Breakfast, Lunch, Snack blocks (meals BEFORE the event)
-- After the meal blocks, add plain text guidance:
-  "For the dinner itself — I don't know the exact menu, so here's what to look for:
-  - Lean protein: grilled or baked over fried
-  - Light on heavy sauces and sides
-  - Go easy on bread and alcohol
-  - Watch portion sizes
-  When you're there, take a photo of the menu and I'll help you choose."
-- Say how many calories remain for the event in plain text only — no meal block` : ""}
+$${hasRestaurantMeal ? `RESTAURANT / EATING OUT:
+If the user has NOT yet said what they'll order at the restaurant: don't fabricate specific dishes for it — give brief guidance (lean protein over fried, light on heavy sauces, watch portions) and tell them to photo the menu or their order and you'll log it. Budget it from their REMAINING macros.
+BUT if the user HAS stated specific foods/dishes (e.g. "I'll have 2 akami nigiri, miso soup") — that overrides the above: build the meal block immediately and emit MEAL_DATA. Never ask "out or planned" — the buttons handle that.` : ""}
 
 ══════════════════════════════════════════
 MEAL BLOCK FORMAT — CRITICAL
@@ -830,20 +804,8 @@ TOTAL FORMAT — plain text only:
 EVERY MEAL PLAN MUST END WITH THIS LINE:
 Reply "yes" to save this plan, or let me know if you'd like to change anything.
 
-CUISINE / RESTAURANT AMBIGUITY RULE:
-If the user mentions a cuisine or food type (sushi, Italian, Mexican, etc.) without clearly stating whether they are going OUT or want it planned:
-- DO NOT guess — ask first
-- Say: "Are you going out for sushi or would you like me to plan a sushi meal for you?"
-- Wait for their answer before creating any meal block
-Clear signals to plan it: "plan me sushi", "I want sushi for lunch", "add sushi to my plan"
-Clear signals it's a restaurant: "going out for sushi", "sushi restaurant", "sushi date", "sushi dinner out"
-Ambiguous — always ask: "sushi lunch scheduled", "having sushi", "sushi at 12:30"
-
-IMPORTANT: The total must include ALREADY EATEN calories too.
-Already eaten today: ${totals.calories} cal | ${totals.protein}g P | ${totals.carbs}g C | ${totals.fat}g F
-Total = already eaten + all planned meals in this plan.
-Example: if eaten=545 and plan=1380, total = 1925/2800 cal (69%)
-
+CUISINE / STATED FOODS:
+If the user names specific foods or dishes (sushi rolls, a pasta, specific items) — build the meal block immediately and emit MEAL_DATA. NEVER ask "are you going out or planning this?" The user chooses eaten vs planned by tapping a button, and the meal-type dropdown handles meal type. Only when the user names a cuisine with NO specific dishes AND no other context ("I might do Italian sometime") is it fine to ask what dishes they're thinking of — never "out or planned."
 ══════════════════════════════════════════
 CALORIE TARGETS FOR MEAL PLANS
 ══════════════════════════════════════════
