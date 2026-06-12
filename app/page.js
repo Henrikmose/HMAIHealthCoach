@@ -360,6 +360,37 @@ function stripMealData(text) {
   return text.replace(MEAL_DATA_REGEX, "").trim();
 }
 
+// Honest-wording guard (code-owned, not prompt-owned).
+// The AI is told not to over-promise about photos/macros, but a prompt rule can't GUARANTEE it.
+// This runs on every reply before display, so forbidden promises can never reach the user.
+// A photo identifies foods, not portions — results are always estimates, saved via the buttons.
+function cleanOverpromises(text) {
+  if (!text) return text;
+  let out = text;
+  const swaps = [
+    // "lock in / dial in / nail down (the) (exact) macros/calories/numbers" — with or without "exact"
+    [/\b(lock|dial|nail|zero)\s+(in|down)\b[^.!?\n]*?\b(macros?|calories|numbers|nutrition)\b/gi, "give you my best estimate"],
+    // verb + ... + "exact" + ... + macros/calories/numbers
+    [/\b(get|capture|grab|calculate|give you|tell you)\b[^.!?\n]*?\bexact\b[^.!?\n]*?\b(macros?|calories|numbers|nutrition)\b/gi, "give you my best estimate"],
+    // any leftover "exact macros/calories/numbers/nutrition"
+    [/\bexact\s+(macros?|calories|numbers|nutrition)\b/gi, "an estimated $1"],
+    // "I'll log it / that / this (for you)" — the AI cannot save; only the buttons save
+    [/\bI(?:'|\u2019)?ll\s+log\s+(it|that|this)(\s+for\s+you)?\b/gi, "you can save it with the buttons"],
+    [/\bI(?:'|\u2019)?ll\s+log\s+your\b/gi, "you can save your"],
+    // "text it over" — there is no texting; it's an in-app photo
+    [/\btext\s+it\s+over\b/gi, "send the photo"],
+    // "based on (the) portion size ..." — a photo can't read portion size
+    [/\bbased on (?:the )?portion size[^.!?\n]*/gi, "as a best estimate"],
+  ];
+  for (const [re, rep] of swaps) out = out.replace(re, rep);
+  return out;
+}
+
+// One pass used everywhere a reply is prepared for display: strip the save block, then clean wording.
+function cleanForDisplay(text) {
+  return cleanOverpromises(stripMealData(text));
+}
+
 // Convert MEAL_DATA into save-ready meal rows — one per food item.
 // Each row matches the shape that saveMealViaAPI expects (mealType, food, calories, protein, carbs, fat).
 // This is what kills the merged-row bug: a multi-food meal becomes N rows in actual_meals/planned_meals.
@@ -665,7 +696,7 @@ if (row.response) {
   // The JSON is persisted raw in ai_messages.response (for debuggability and re-extraction), but never shown to the user.
   const rawResponse = row.response;
   const reloadedMealData = extractMealData(rawResponse);
-  const displayResponse = stripMealData(rawResponse);
+  const displayResponse = cleanForDisplay(rawResponse);
   // MEAL_DATA-only architecture: reconstruct mealReview ONLY when MEAL_DATA was emitted.
   // If AI didn't emit MEAL_DATA (e.g., conversational response with no food), no buttons appear.
   // This replaces the prose-based heuristic that was unreliable.
@@ -912,7 +943,7 @@ const reply = data.reply || "Sorry, could not get a response.";
 // Session 1: extract the structured MEAL_DATA JSON block (if present) and strip it from the displayed text.
 // The JSON is for the save handler; the user should never see it in chat.
 const mealData = extractMealData(reply);
-const displayReply = stripMealData(reply);
+const displayReply = cleanForDisplay(reply);
 
 const parsedReplyMeals = parseAllMeals(displayReply);
 // New rule: MEAL_DATA emission is the single source of truth for "this is a save-able single meal."
