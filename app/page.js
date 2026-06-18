@@ -32,13 +32,46 @@ return getLocalDate();
 // INTENT DETECTION
 // ========================================
 
+// ── INTENT: question vs. statement (TENSE-INDEPENDENT) ──
+// Tense must NOT decide anything. The 4 buttons decide eaten-vs-planned.
+function isFoodQuestion(text) {
+  if (!text) return false;
+  const t = text.trim();
+  if (/\?\s*$/.test(t)) return true;
+  return [
+    /^\s*(is|are|was|were|should|shall|can|could|would|will|do|does|did|how|what|which|why|when|where|who)\b/i,
+    /\bis\s+\w+.*\b(good|ok|okay|healthy|better|worse|fine)\b/i,
+    /\bshould i\b/i,
+    /\bhow (much|many)\b/i,
+    /\bwhat'?s in\b/i,
+    /\bgood (option|choice|idea|pick)\b/i,
+    /\bbetter (option|choice|than)\b/i,
+    /\bany (ideas|suggestions|recommendations)\b/i,
+    /\bhelp me (pick|choose|decide)\b/i,
+  ].some((re) => re.test(t));
+}
+function statesAFood(text) {
+  if (!text) return false;
+  const t = text.trim();
+  if (isFoodQuestion(t)) return false;
+  return [
+    /\bi\s+(just\s+)?(ate|had|have|having|eat|drank|drink|consumed|got|getting|ordered|ordering)\b/i,
+    /\bi'?m\s+(having|eating|getting|drinking|ordering)\b/i,
+    /\bi'?ve\s+(just\s+)?(had|eaten|consumed)\b/i,
+    /\bi'?ll\s+(have|eat|get|take|do)\b/i,
+    /\bi\s+will\s+(have|eat|get)\b/i,
+    /\bi'?m\s+going\s+to\s+(have|eat|get)\b/i,
+    /\bgoing\s+with\s+(the\s+)?\w+/i,
+    /\bfor\s+(breakfast|lunch|dinner|a?\s*snack)\b/i,
+  ].some((re) => re.test(t))
+  || (
+    /\b(\d+(\.\d+)?|a|an|some|half|one|two|three|four|couple)\b/i.test(t)
+    && t.split(/\s+/).length <= 12
+    && !/\b(should|good|ok|okay|healthy|better|worse|idea|option|enough|recommend|suggest)\b/i.test(t)
+  );
+}
 function isLogMessage(text) {
-if (!text) return false;
-return [
-/\bi\s+(\w+\s+)?(ate|had|drank|consumed)/i,
-/\bi'?ve\s+(just\s+)?(had|eaten|consumed)/i,
-/\bjust\s+(ate|had|eaten)/i,
-].some((p) => p.test(text));
+  return statesAFood(text);
 }
 
 function isMealPlanningRequest(text) {
@@ -410,6 +443,8 @@ function mealDataToSaveRows(mealData) {
       protein: Math.round(Number(item.protein) || 0),
       carbs: Math.round(Number(item.carbs) || 0),
       fat: Math.round(Number(item.fat) || 0),
+      // Track 2 — carry provenance through to the DB so we can tell where each number came from.
+      source: item.source || "ai_estimate",
     };
   });
 }
@@ -871,7 +906,8 @@ conversationStage: "initial",
 };
 setActiveMealLog(newActiveMealLog);
 context = newActiveMealLog;
-} else if (isFutureMeal(trimmed) && !isMealPlanningRequest(trimmed)) {
+} else if (false && isFutureMeal(trimmed) && !isMealPlanningRequest(trimmed)) {
+// DISABLED: tense must not route. "I'll have X" is a stated food -> food_log branch above (both buttons).
 // Future tense food statement → treat as planned meal
 newActiveMealLog = null;
 setActiveMealLog(null);
@@ -896,7 +932,8 @@ content: "Tap **Add to Eaten** or **Add to Planned** on the meal above to save i
 setIsLoading(false);
 setLoadingStage("");
 return; // Never save from a typed/spoken confirmation
-} else if (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed) || isMealSwap(trimmed)) {
+} else if (!statesAFood(trimmed) && (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed) || isMealSwap(trimmed))) {
+// A stated food (any tense) must NEVER be captured by planning — it goes to the food_log path above.
 // CRITICAL: Check meal planning/swap BEFORE activeMealLog fallback
 // This prevents meal planning requests from being treated as food log follow-ups
 
