@@ -8,48 +8,51 @@ const supabase = createClient(
 // Parse food items from text
 function parseFoodItems(text) {
   if (!text) return [];
+  let s = " " + text.toLowerCase() + " ";
+  s = s.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g, (m,w,n,d)=>{const dd=+d;return dd?String(+w+(+n)/dd):m;});
+  s = s.replace(/(\d+)\s*\/\s*(\d+)/g, (m,n,d)=>{const dd=+d;return dd?String((+n)/dd):m;});
+  s = s.replace(/¼/g,"0.25").replace(/½/g,"0.5").replace(/¾/g,"0.75").replace(/⅓/g,"0.333").replace(/⅔/g,"0.667");
+  s = s.replace(/(\d)([a-z])/gi, "$1 $2");
+  s = s
+    .replace(/\bquarter\s+(?:of\s+)?(?:an?\s+)?/g," 0.25 ")
+    .replace(/\bhalf\s+(?:an?\s+)?/g," 0.5 ")
+    .replace(/\b(?:a|an|one)\s+/g," 1 ")
+    .replace(/\btwo\s+/g," 2 ").replace(/\bthree\s+/g," 3 ").replace(/\bfour\s+/g," 4 ")
+    .replace(/\bfive\s+/g," 5 ").replace(/\bsix\s+/g," 6 ").replace(/\bseven\s+/g," 7 ")
+    .replace(/\beight\s+/g," 8 ").replace(/\bnine\s+/g," 9 ").replace(/\bten\s+/g," 10 ")
+    .replace(/\bsome\s+/g," 1 ").replace(/\bwhole\s+/g," 1 ");
+  s = s.replace(/\b(and|with|plus|also|of)\b/g, " ");
+  // strip non-food filler verbs/pronouns so "I had chicken" doesn't log "i had" as a food
+  s = s.replace(/\b(i|im|ive|id|he|she|we|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|drinking|drunk|got|get|getting|consumed|consume|the|my|me|mine|will|gonna|going|planning|plan|want|wanna|like|grab|grabbed|made|make|having)\b/g, " ");
+  s = s.replace(/\b(for|at|after|before|then|during|today|yesterday|tomorrow|tonight|this|morning|afternoon|evening|lunch|dinner|breakfast|snack|right|now|just)\b/g, " ");
 
-  let normalized = " " + text.toLowerCase() + " ";
-
-  // Fractions -> decimals BEFORE numeric parsing. Fixes "1/4 cup" being read as "4".
-  normalized = normalized.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g, (m, w, n, d) => {
-    const dd = parseInt(d, 10); if (!dd) return m;
-    return String(parseInt(w, 10) + parseInt(n, 10) / dd);
-  });
-  normalized = normalized.replace(/(\d+)\s*\/\s*(\d+)/g, (m, n, d) => {
-    const dd = parseInt(d, 10); if (!dd) return m;
-    return String(parseInt(n, 10) / dd);
-  });
-  normalized = normalized
-    .replace(/¼/g, "0.25").replace(/½/g, "0.5").replace(/¾/g, "0.75")
-    .replace(/⅓/g, "0.333").replace(/⅔/g, "0.667");
-
-  normalized = normalized
-    .replace(/\bquarter\s+(?:of\s+)?(?:an?\s+)?/g, " 0.25 ")
-    .replace(/\bhalf\s+(?:an?\s+)?/g, " 0.5 ")
-    .replace(/\b(?:a|an|one)\s+/g, " 1 ")
-    .replace(/\btwo\s+/g, " 2 ")
-    .replace(/\bthree\s+/g, " 3 ")
-    .replace(/\bfour\s+/g, " 4 ")
-    .replace(/\bfive\s+/g, " 5 ")
-    .replace(/\bwhole\s+/g, " 1 ");
-
-  const unitWords = "oz|ounces|lb|lbs|pounds|g|grams|kg|cup|cups|tbsp|tablespoons|tsp|teaspoons|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
-  const stopWords = "and|with|for|after|before|then|plus|also|while|during|at|on|in|to|today|yesterday|tomorrow|tonight|this\\s+morning|this\\s+afternoon|this\\s+evening|right\\s+now|just\\s+now";
-  const pattern = new RegExp(
-    `(\\d+\\.?\\d*)\\s*(${unitWords})?\\s+(?:of\\s+)?([a-z][a-z\\s,-]*?[a-z])(?=\\s*(?:,|;|\\.|$|\\b(?:${stopWords})\\b))`,
-    "gi"
-  );
-
+  const units = "oz|ounces|ounce|lb|lbs|pounds|pound|g|grams|gram|kg|cup|cups|tbsp|tablespoons|tablespoon|tsp|teaspoons|teaspoon|ml|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
+  const unitRe = new RegExp("^(?:"+units+")$","i");
+  const isNum = t => /^\d*\.?\d+$/.test(t);
+  const tokens = s.split(/\s+/).filter(Boolean);
   const items = [];
-  let match;
-  while ((match = pattern.exec(normalized)) !== null) {
-    const amount = parseFloat(match[1]);
-    const unit = (match[2] || "serving").toLowerCase().trim();
-    const food = match[3].trim();
-    if (food.length > 2 && !isNaN(amount)) {
-      items.push({ food, amount, unit });
-    }
+
+  // leading food with no quantity: words before the first number
+  const firstNum = tokens.findIndex(isNum);
+  if (firstNum > 0) {
+    const lead = tokens.slice(0, firstNum).join(" ").replace(/[^a-z\s-]/gi,"").trim();
+    if (lead.length > 2) items.push({ food: lead, amount: 1, unit: "serving" });
+  } else if (firstNum === -1) {
+    const only = tokens.join(" ").replace(/[^a-z\s-]/gi,"").trim();
+    if (only.length > 2) items.push({ food: only, amount: 1, unit: "serving" });
+    return items;
+  }
+
+  let i = firstNum < 0 ? tokens.length : firstNum;
+  while (i < tokens.length) {
+    if (!isNum(tokens[i])) { i++; continue; }
+    const amount = parseFloat(tokens[i]); i++;
+    let unit = "serving";
+    if (i < tokens.length && unitRe.test(tokens[i])) { unit = tokens[i].toLowerCase().replace(/s$/,''); i++; }
+    const fw = [];
+    while (i < tokens.length && !isNum(tokens[i])) { fw.push(tokens[i]); i++; }
+    const food = fw.join(" ").replace(/[^a-z\s-]/gi,"").trim();
+    if (food.length > 2 && !isNaN(amount)) items.push({ food, amount, unit });
   }
   return items;
 }

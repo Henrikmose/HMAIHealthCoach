@@ -420,6 +420,28 @@ function cleanOverpromises(text) {
 }
 
 // One pass used everywhere a reply is prepared for display: strip the save block, then clean wording.
+// CODE-OWNED TOTALS: the displayed meal-block total must equal the sum of the items.
+// The AI writes a prose "Calories: X / Protein: Yg ..." summary that can disagree with its own
+// breakdown (e.g. 280 vs 274). We overwrite those summary lines with the code-computed sum from
+// the authoritative MEAL_DATA items, so what the user sees always matches the parts and the saved data.
+function applyCodeOwnedTotals(text, mealData) {
+  if (!text || !mealData || !Array.isArray(mealData.items) || mealData.items.length === 0) return text;
+  const t = mealData.items.reduce((a, it) => ({
+    calories: a.calories + Math.round(Number(it.calories) || 0),
+    protein:  a.protein  + (Number(it.protein) || 0),
+    carbs:    a.carbs    + (Number(it.carbs)   || 0),
+    fat:      a.fat      + (Number(it.fat)     || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+  const r1 = (n) => Math.round(n);
+  let out = text;
+  // Replace the summary lines (tolerant of "- " prefix and spacing). Only the first occurrence each.
+  out = out.replace(/(^|\n)(\s*-?\s*Calories:)\s*[\d.]+/i, `$1$2 ${t.calories}`);
+  out = out.replace(/(^|\n)(\s*-?\s*Protein:)\s*[\d.]+\s*g/i, `$1$2 ${r1(t.protein)}g`);
+  out = out.replace(/(^|\n)(\s*-?\s*Carbs:)\s*[\d.]+\s*g/i, `$1$2 ${r1(t.carbs)}g`);
+  out = out.replace(/(^|\n)(\s*-?\s*Fat:)\s*[\d.]+\s*g/i, `$1$2 ${r1(t.fat)}g`);
+  return out;
+}
+
 function cleanForDisplay(text) {
   return cleanOverpromises(stripMealData(text));
 }
@@ -731,7 +753,7 @@ if (row.response) {
   // The JSON is persisted raw in ai_messages.response (for debuggability and re-extraction), but never shown to the user.
   const rawResponse = row.response;
   const reloadedMealData = extractMealData(rawResponse);
-  const displayResponse = cleanForDisplay(rawResponse);
+  const displayResponse = applyCodeOwnedTotals(cleanForDisplay(rawResponse), reloadedMealData);
   // MEAL_DATA-only architecture: reconstruct mealReview ONLY when MEAL_DATA was emitted.
   // If AI didn't emit MEAL_DATA (e.g., conversational response with no food), no buttons appear.
   // This replaces the prose-based heuristic that was unreliable.
@@ -980,7 +1002,7 @@ const reply = data.reply || "Sorry, could not get a response.";
 // Session 1: extract the structured MEAL_DATA JSON block (if present) and strip it from the displayed text.
 // The JSON is for the save handler; the user should never see it in chat.
 const mealData = extractMealData(reply);
-const displayReply = cleanForDisplay(reply);
+const displayReply = applyCodeOwnedTotals(cleanForDisplay(reply), mealData);
 
 const parsedReplyMeals = parseAllMeals(displayReply);
 // New rule: MEAL_DATA emission is the single source of truth for "this is a save-able single meal."
