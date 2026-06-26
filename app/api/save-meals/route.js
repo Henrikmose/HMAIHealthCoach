@@ -56,12 +56,13 @@ export async function POST(req) {
       // Track 2 — provenance of these numbers: "usda_db" | "ai_estimate" | "label" | "custom".
       // planned_meals has no source column, so only attach it for actual_meals (below).
     };
-    if (meal.source) row.source = String(meal.source);
 
     // Add table-specific fields
     if (table === "actual_meals") {
       // Read servings from meal object — supports multi-serving label scans
       row.servings = Number(meal.servings) > 0 ? Number(meal.servings) : 1;
+      // source column exists ONLY on actual_meals — attach it here, never on planned_meals.
+      if (meal.source) row.source = String(meal.source);
     } else {
       row.suggested_time = null;
       row.status = "planned";

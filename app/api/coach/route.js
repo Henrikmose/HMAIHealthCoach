@@ -47,142 +47,180 @@ function isVeryActive(activityLevel) {
 
 // Parse food items and quantities from a message
 // Returns array of { food, amount, unit }
+// ── UNIFIED FOOD ENGINE (shared logic — same as lookup-foods resolver) ──
+// One engine for the whole app: fraction parsing, cooked-default staples, explicit-wins ranking.
 function parseFoodItems(message) {
   if (!message) return [];
-  const items = [];
+  const text = message;
+  let normalized = " " + text.toLowerCase() + " ";
 
-  // Patterns: "8oz chicken", "2 eggs", "1 cup rice", "half avocado", "a banana"
-  const patterns = [
-    // number + unit + food: "8oz chicken breast", "1 cup oatmeal"
-    /(\d+\.?\d*)\s*(oz|lb|lbs|g|kg|cup|cups|tbsp|tsp|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings)\s+(?:of\s+)?([a-z][a-z\s,]+?)(?:\s*[,;]|$)/gi,
-    // number + food (no unit): "2 eggs", "3 chicken wings"
-    /(\d+\.?\d*)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
-    // descriptor + food: "a banana", "half avocado", "whole chicken breast"
-    /\b(a|an|half|whole|one|two|three|four|five)\s+(?:of\s+)?([a-z][a-z\s]+?)(?:\s*[,;]|$)/gi,
-  ];
+  // Fractions -> decimals BEFORE numeric parsing. Fixes "1/4 cup" being read as "4".
+  normalized = normalized.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g, (m, w, n, d) => {
+    const dd = parseInt(d, 10); if (!dd) return m;
+    return String(parseInt(w, 10) + parseInt(n, 10) / dd);
+  });
+  normalized = normalized.replace(/(\d+)\s*\/\s*(\d+)/g, (m, n, d) => {
+    const dd = parseInt(d, 10); if (!dd) return m;
+    return String(parseInt(n, 10) / dd);
+  });
+  normalized = normalized
+    .replace(/¼/g, "0.25").replace(/½/g, "0.5").replace(/¾/g, "0.75")
+    .replace(/⅓/g, "0.333").replace(/⅔/g, "0.667");
 
-  const [p1, p2, p3] = patterns;
-  let match;
-
-  // Pattern 1: number + unit + food
-  while ((match = p1.exec(message)) !== null) {
-    items.push({ amount: parseFloat(match[1]), unit: match[2].toLowerCase(), food: match[3].trim() });
+  normalized = normalized
+    .replace(/\bquarter\s+(?:of\s+)?(?:an?\s+)?/g, " 0.25 ")
+    .replace(/\bhalf\s+(?:an?\s+)?/g, " 0.5 ")
+    .replace(/\b(?:a|an|one)\s+/g, " 1 ")
+    .replace(/\btwo\s+/g, " 2 ")
+    .replace(/\bthree\s+/g, " 3 ")
+    .replace(/\bfour\s+/g, " 4 ")
+    .replace(/\bfive\s+/g, " 5 ")
+    .replace(/\bwhole\s+/g, " 1 ");
+  const unitWords = "oz|ounces|lb|lbs|pounds|g|grams|kg|cup|cups|tbsp|tablespoons|tsp|teaspoons|ml|fl oz|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
+  const stopWords = "and|with|for|after|before|then|plus|also|while|during|at|on|in|to|today|yesterday|tomorrow|tonight|this\\s+morning|this\\s+afternoon|this\\s+evening|right\\s+now|just\\s+now";
+  const pattern = new RegExp(
+    `(\\d+\\.?\\d*)\\s*(${unitWords})?\\s+(?:of\\s+)?([a-z][a-z\\s,-]*?[a-z])(?=\\s*(?:,|;|\\.|$|\\b(?:${stopWords})\\b))`,
+    "gi"
+  );
+  const items = []; let match;
+  while ((match = pattern.exec(normalized)) !== null) {
+    const amount = parseFloat(match[1]);
+    const unit = (match[2] || "serving").toLowerCase().trim();
+    const food = match[3].trim();
+    if (food.length > 2 && !isNaN(amount)) items.push({ food, amount, unit });
   }
-
-  // Pattern 2: number + food (if no unit match found for same position)
-  if (items.length === 0) {
-    while ((match = p2.exec(message)) !== null) {
-      const food = match[2].trim();
-      if (food.length > 2) items.push({ amount: parseFloat(match[1]), unit: 'serving', food });
-    }
-  }
-
   return items;
 }
 
-// Look up a food in the USDA database
-// Penalize oddball/edge-case USDA variants; prefer simple, common cuts.
-function scoreFoodMatch(rowName, query) {
-  const name = (rowName || "").toLowerCase();
-  const q = (query || "").toLowerCase().trim();
-  let score = 0;
+function pickBest(rows, term) {
+  const oddVariants = ['wing','skin','rind','bone','neck','giblet','liver','gizzard','heart','feet','tail',
+    'overripe','underripe','unripe','dried','dehydrated','candied','sweetened','juice','powder','flour','baby food','restaurant','glutinous'];
+  const specialty = ['black','red','wild','brown','green','jasmine','basmati'];
+  const cuts = ['wing','thigh','drumstick','breast','ground','skin'];
+  const commonPrefer = ['breast','white','boneless','skinless','long grain'];
+  const term_l = (term || '').toLowerCase();
+  const termWords = term_l.split(/[\s,]+/).filter(Boolean);
+  const userWantsRaw = /\b(raw|dry|uncooked)\b/.test(term_l);
+  const namedSpecialty = [...specialty, ...cuts].filter(v => term_l.includes(v));
 
-  // Strong penalties for non-food or edge parts the user almost never means
-  const badParts = [
-    "rind", "skin only", "shell", "peel only", "rind only",
-    "cartilage", "bone", "gizzard", "neck", "back", "tail",
-    "fat only", "trimmings", "novel", "imitation", "babyfood", "baby food",
-  ];
-  for (const bad of badParts) if (name.includes(bad)) score -= 50;
+  const scored = rows.map(r => {
+    const name = (r.name || '').toLowerCase();
+    let score = 0;
+    if (name === term_l) score += 100;
+    if (name.startsWith(term_l+',')||name.startsWith(term_l+' ')||name.startsWith(term_l+'s,')||name.startsWith(term_l+'s ')) score += 40;
+    else if (name.startsWith(term_l)) score += 20;
+    for (const w of termWords) if (w.length >= 3 && name.includes(w)) score += 30;
+    if (!userWantsRaw) { if (name.includes('cooked')) score += 30; if (/\b(raw|dry|uncooked)\b/.test(name)) score -= 30; }
+    else { if (/\b(raw|dry|uncooked)\b/.test(name)) score += 30; if (name.includes('cooked')) score -= 10; }
+    if (namedSpecialty.length > 0) {
+      for (const v of namedSpecialty) if (!name.includes(v)) score -= 200;
+    } else {
+      for (const c of commonPrefer) if (name.includes(c)) score += 25;
+      for (const v of specialty) if (name.includes(v)) score -= 40;
+    }
+    for (const v of oddVariants) if (name.includes(v) && !term_l.includes(v)) score -= 35;
+    score -= name.length * 0.15;
+    return { r, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].r;
+}
 
-  // Mild penalty for "with skin" / "meat and skin" when user didn't ask for skin
-  if (!q.includes("skin") && (name.includes("with skin") || name.includes("meat and skin"))) score -= 8;
+// ── COOKED-STAPLES TABLE ──
+// Foods people eat cooked. Values are per-100g of the COOKED food, plus common portion weights.
+// This makes "rice"/"pasta"/"chicken" return truthful cooked numbers + a "(cooked)" label,
+// independent of the raw-only USDA rows and the near-empty conversions table.
+// gramsPerCup / gramsEach are cooked-portion weights. cookKeywords trigger the match.
+const COOKED_STAPLES = [
+  { key:'white rice',   match:['rice'],            label:'White rice (cooked)',   per100:{calories:130,protein:2.7,carbs:28,fat:0.3}, gramsPerCup:158 },
+  { key:'brown rice',   match:['brown rice'],      label:'Brown rice (cooked)',   per100:{calories:123,protein:2.7,carbs:25.6,fat:1.0}, gramsPerCup:195 },
+  { key:'pasta',        match:['pasta','spaghetti','penne','macaroni'], label:'Pasta (cooked)', per100:{calories:158,protein:5.8,carbs:31,fat:0.9}, gramsPerCup:140 },
+  { key:'chicken breast', match:['chicken','chicken breast'], label:'Chicken breast (cooked)', per100:{calories:165,protein:31,carbs:0,fat:3.6}, gramsPerCup:140, gramsPerOz:28.35 },
+  { key:'oats',         match:['oats','oatmeal','porridge'], label:'Oatmeal (cooked)', per100:{calories:71,protein:2.5,carbs:12,fat:1.5}, gramsPerCup:234 },
+  { key:'quinoa',       match:['quinoa'],          label:'Quinoa (cooked)',       per100:{calories:120,protein:4.4,carbs:21,fat:1.9}, gramsPerCup:185 },
+  { key:'potato',       match:['potato','potatoes'], label:'Potato (cooked)',     per100:{calories:87,protein:1.9,carbs:20,fat:0.1}, gramsPerCup:156, gramsEach:170 },
+  { key:'sweet potato', match:['sweet potato'],    label:'Sweet potato (cooked)', per100:{calories:90,protein:2,carbs:21,fat:0.1}, gramsPerCup:200, gramsEach:130 },
+  { key:'ground beef',  match:['ground beef','beef mince','hamburger'], label:'Ground beef (cooked)', per100:{calories:250,protein:26,carbs:0,fat:15}, gramsPerOz:28.35 },
+  { key:'salmon',       match:['salmon'],          label:'Salmon (cooked)',       per100:{calories:206,protein:22,carbs:0,fat:12}, gramsPerOz:28.35 },
+  { key:'lentils',      match:['lentils'],         label:'Lentils (cooked)',      per100:{calories:116,protein:9,carbs:20,fat:0.4}, gramsPerCup:198 },
+  { key:'black beans',  match:['black beans'],     label:'Black beans (cooked)',  per100:{calories:132,protein:8.9,carbs:24,fat:0.5}, gramsPerCup:172 },
+  { key:'chickpeas',    match:['chickpeas','garbanzo'], label:'Chickpeas (cooked)', per100:{calories:164,protein:8.9,carbs:27,fat:2.6}, gramsPerCup:164 },
+];
 
-  // Prefer canonical lean cuts when relevant
-  if (q.includes("chicken") && name.includes("breast")) score += 10;
-  if (name.includes("boneless")) score += 3;
-  if (name.includes("skinless")) score += 3;
+// Generic portion grams when not a staple and DB/units can't resolve it.
+const GENERIC_GRAMS = { cup:150, tbsp:15, tsp:5, slice:30, piece:50, scoop:30, serving:100, oz:28.35, ounce:28.35, g:1, gram:1, kg:1000, lb:453.6, pound:453.6, ml:1, medium:120, small:90, large:150 };
 
-  // Prefer "cooked" when the user didn't say "raw"; prefer "raw" when they did
-  if (q.includes("raw")) { if (name.includes("raw")) score += 4; }
-  else { if (name.includes("cooked")) score += 4; if (name.includes("raw")) score -= 2; }
+function matchCookedStaple(term) {
+  const t = (term || '').toLowerCase().trim();
+  if (/\b(raw|dry|uncooked)\b/.test(t)) return null; // explicit raw -> use DB
 
-  // Shorter names are usually the plain/base food ("Watermelon, raw" > long oddball variants)
-  score -= Math.min(name.length / 25, 6);
+  // Specialty/qualifier words that mean "this is NOT the plain staple" -> send to DB instead.
+  // e.g. "black rice", "salmon sashimi", "fried rice", "rice noodles", "chicken wing".
+  const sendToDB = ['black','red','wild','jasmine','basmati','sashimi','nigiri','roll','sushi',
+    'fried','noodle','noodles','cake','cakes','flour','wing','thigh','drumstick','skin','soup',
+    'crispy','breaded','tempura','smoked','cured','canned','dried','chip','chips','crackers'];
+  for (const w of sendToDB) if (new RegExp('\\b'+w+'\\b').test(t)) return null;
 
-  // Bonus if the row name starts with the query word (closest match)
-  if (name.startsWith(q.split(" ")[0])) score += 5;
+  const sorted = [...COOKED_STAPLES].sort((a,b)=>Math.max(...b.match.map(m=>m.length))-Math.max(...a.match.map(m=>m.length)));
+  for (const st of sorted) {
+    for (const m of st.match) {
+      // require the staple keyword to be present AND the term to be "close" to it
+      // (the term is essentially just the staple, not staple+extra-food like "salmon sashimi")
+      if (new RegExp('\\b'+m.replace(/\s+/g,'\\s+')+'\\b').test(t)) {
+        const extra = t.replace(new RegExp('\\b'+m.replace(/\s+/g,'\\s+')+'\\b'), '').replace(/\b(cooked|fresh|grilled|baked|boiled|steamed|plain|white)\b/g,'').trim();
+        // allow only trivial leftover words (qualifiers we accept); if a whole other food-word remains, skip
+        if (extra.split(/\s+/).filter(Boolean).length === 0) return st;
+      }
+    }
+  }
+  return null;
+}
 
-  return score;
+function gramsForStaple(st, amount, unit) {
+  const u = (unit || 'serving').toLowerCase().replace(/s$/,'');
+  if ((u==='cup') && st.gramsPerCup) return amount * st.gramsPerCup;
+  if ((u==='oz'||u==='ounce') && st.gramsPerOz) return amount * st.gramsPerOz;
+  if ((u==='serving'||u==='piece'||u==='medium') && st.gramsEach) return amount * st.gramsEach;
+  if (u==='g'||u==='gram') return amount;
+  if (u==='kg') return amount*1000;
+  if (u==='lb'||u==='pound') return amount*453.6;
+  if (u==='oz'||u==='ounce') return amount*28.35;
+  if (u==='cup' && !st.gramsPerCup) return amount * (GENERIC_GRAMS.cup);
+  // default: one "serving" of the staple ~ a cup if we have it, else 150g
+  if (st.gramsPerCup) return amount * st.gramsPerCup;
+  if (st.gramsEach) return amount * st.gramsEach;
+  return amount * 150;
 }
 
 async function lookupFood(foodName) {
   if (!foodName) return null;
+  const cols = 'id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
+  const clean = foodName.trim().toLowerCase();
   try {
-    // Pull several candidates, then rank — instead of blindly taking the first.
-    const { data, error } = await supabase
-      .from('foods')
-      .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-      .textSearch('name', foodName.split(' ').join(' & '), { type: 'websearch' })
-      .limit(25);
-
-    let candidates = (!error && data) ? data : [];
-
-    // Fallback: ILIKE search if full-text found nothing
-    if (candidates.length === 0) {
-      const { data: data2 } = await supabase
-        .from('foods')
-        .select('id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g')
-        .ilike('name', `%${foodName}%`)
-        .limit(25);
-      candidates = data2 || [];
-    }
-
-    if (candidates.length === 0) return null;
-
-    // Rank candidates and return the best.
-    candidates.sort((a, b) => scoreFoodMatch(b.name, foodName) - scoreFoodMatch(a.name, foodName));
-    console.log(`lookupFood "${foodName}" → "${candidates[0].name}" (from ${candidates.length} candidates)`);
-    return candidates[0];
-  } catch (e) {
-    console.log('Food lookup error:', e.message);
+    const { data: starts } = await supabase.from('foods').select(cols).ilike('name', `${clean}%`).limit(8);
+    if (starts && starts.length > 0) return pickBest(starts, clean);
+    const { data: startsPlural } = await supabase.from('foods').select(cols).ilike('name', `${clean}s%`).limit(8);
+    if (startsPlural && startsPlural.length > 0) return pickBest(startsPlural, clean);
+    const { data: fts } = await supabase.from('foods').select(cols).textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' }).limit(8);
+    if (fts && fts.length > 0) return pickBest(fts, clean);
+    const { data: contains } = await supabase.from('foods').select(cols).ilike('name', `%${clean}%`).limit(10);
+    if (contains && contains.length > 0) return pickBest(contains, clean);
     return null;
-  }
+  } catch (e) { console.log('Food lookup error:', e.message); return null; }
 }
 
-// Convert amount + unit to grams
 async function convertToGrams(amount, unit, foodId) {
-  const unitLower = unit.toLowerCase().replace(/s$/, ''); // remove plural
-
-  // 1. Try food-specific conversion first
+  const unitLower = (unit||'serving').toLowerCase().replace(/s$/, '');
   if (foodId) {
-    const { data } = await supabase
-      .from('food_specific_conversions')
-      .select('grams_per_unit')
-      .eq('food_id', foodId)
-      .ilike('unit_name', `%${unitLower}%`)
-      .limit(1);
+    const { data } = await supabase.from('food_specific_conversions').select('grams_per_unit').eq('food_id', foodId).ilike('unit_name', `%${unitLower}%`).limit(1);
     if (data?.[0]) return amount * data[0].grams_per_unit;
   }
-
-  // 2. Standard weight/volume conversion
-  const { data } = await supabase
-    .from('unit_conversions')
-    .select('grams_per_unit, ml_per_unit, unit_category')
-    .eq('unit_name', unitLower)
-    .limit(1);
-
-  if (data?.[0]) {
-    if (data[0].grams_per_unit) return amount * data[0].grams_per_unit;
-    // Volume — use water density (1g/ml) as default
-    if (data[0].ml_per_unit) return amount * data[0].ml_per_unit;
-  }
-
-  // 3. Can't convert — return null, AI will estimate
-  return null;
+  const { data } = await supabase.from('unit_conversions').select('grams_per_unit, ml_per_unit').eq('unit_name', unitLower).limit(1);
+  if (data?.[0]) { if (data[0].grams_per_unit) return amount * data[0].grams_per_unit; if (data[0].ml_per_unit) return amount * data[0].ml_per_unit; }
+  // generic fallback so we never drop a food
+  return amount * (GENERIC_GRAMS[unitLower] || GENERIC_GRAMS.serving);
 }
 
-// Calculate macros from DB food + grams
 function calcMacros(food, grams) {
   const factor = grams / 100;
   return {
@@ -200,20 +238,30 @@ async function lookupFoodMacros(message) {
 
   const results = [];
   for (const item of items.slice(0, 5)) { // max 5 foods per message
+    // 1) COOKED-STAPLE PATH — truthful cooked macros + "(cooked)" label, before the raw DB.
+    const staple = matchCookedStaple(item.food);
+    if (staple) {
+      const grams = gramsForStaple(staple, item.amount, item.unit);
+      const f = grams / 100;
+      results.push({
+        food: staple.label, amount: item.amount, unit: item.unit, grams: Math.round(grams),
+        calories: Math.round(staple.per100.calories * f),
+        protein:  Math.round(staple.per100.protein  * f * 10) / 10,
+        carbs:    Math.round(staple.per100.carbs     * f * 10) / 10,
+        fat:      Math.round(staple.per100.fat       * f * 10) / 10,
+        source: 'usda_db', cooked: true,
+      });
+      continue;
+    }
+    // 2) DATABASE PATH
     const food = await lookupFood(item.food);
     if (!food) continue;
-
     const grams = await convertToGrams(item.amount, item.unit, food.id);
     if (!grams) continue;
-
     const macros = calcMacros(food, grams);
     results.push({
-      food: food.name,
-      amount: item.amount,
-      unit: item.unit,
-      grams: Math.round(grams),
-      ...macros,
-      source: 'usda_db',
+      food: food.name, amount: item.amount, unit: item.unit,
+      grams: Math.round(grams), ...macros, source: 'usda_db',
     });
   }
 
