@@ -1027,7 +1027,7 @@ The JSON MUST have this shape:
       "protein": <integer>,
       "carbs": <integer>,
       "fat": <integer>,
-      "source": "usda_db" | "ai_estimate",
+      "source": "usda_db" | "ai_estimate" | "label",
       "usda_food_id": <number or null>
     }
   ]
@@ -1039,6 +1039,7 @@ RULES — READ CAREFULLY:
 - meal_type: use what the user explicitly said. If they didn't specify, use your best inference from context (time of day, food choice). The app will let the user correct it if needed.
 - If a food appeared in the DATABASE LOOKUP section above (marked "from USDA"), set source="usda_db" and use the EXACT numbers from there. Set usda_food_id if provided, else null.
 - If a food was NOT in DATABASE LOOKUP (you estimated it), set source="ai_estimate" and usda_food_id=null.
+- If the food's macros were read from a NUTRITION LABEL in a photo, set source="label" (NOT "ai_estimate") and usda_food_id=null. Label reads are exact values off the package — always tag them "label".
 - canonical_name should be the standard nutritional name. Examples: user types "banana" → "Banana, raw". User types "PB" → "Peanut butter, smooth". User types "Big Mac" → "Big Mac".
 - The JSON must be VALID JSON (parseable by JSON.parse). No trailing commas. Use null, not undefined.
 - If adding to an existing meal ("I also had X"), the items[] array should contain ONLY the NEW item(s).
