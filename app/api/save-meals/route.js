@@ -13,7 +13,10 @@ const supabase = createClient(
 // Only fires for source='ai_estimate'. Label scans use a separate path (source='label').
 async function writeBackAiFood(supabase, meal) {
   try {
-    if (!meal || meal.source !== 'ai_estimate') return;        // only AI-found foods
+    // Cache both AI-found foods AND scanned labels into the shared foods table (per-serving).
+    // Labels are higher-trust (read off the package); AI estimates are the fallback.
+    const wbSource = meal && meal.source ? String(meal.source) : '';
+    if (wbSource !== 'ai_estimate' && wbSource !== 'label') return;
     // Derive a clean food name (strip the trailing ", <qty> <unit>" the save row appends)
     let name = String(meal.canonicalName || meal.food || '').trim();
     name = name.replace(/,\s*[\d.]+\s*[a-z ]+$/i, '').trim();    // "Egg McMuffin, 1 sandwich" -> "Egg McMuffin"
@@ -29,7 +32,7 @@ async function writeBackAiFood(supabase, meal) {
       carbs:    (Number(meal.carbs)    || 0) / servings,
       fat:      (Number(meal.fat)      || 0) / servings,
     };
-    if (perServing.calories <= 0) return;
+    if (perServing.calories <= 0) return;   // no sane macros = unconfident read -> save nothing (re-shoot handled in chat)
 
     // Don't duplicate: skip if a foods row with this name already exists (case-insensitive).
     const { data: existing } = await supabase
@@ -38,15 +41,15 @@ async function writeBackAiFood(supabase, meal) {
 
     await supabase.from('foods').insert([{
       name,
-      category: 'restaurant',
-      source: 'ai_estimate',
+      category: wbSource === 'label' ? 'branded' : 'restaurant',
+      source: wbSource,
       // per-serving macros stored in the per_100g columns; resolver treats source=ai_estimate as per-serving
       calories_per_100g: Math.round(perServing.calories * 10) / 10,
       protein_per_100g:  Math.round(perServing.protein  * 10) / 10,
       carbs_per_100g:    Math.round(perServing.carbs    * 10) / 10,
       fat_per_100g:      Math.round(perServing.fat      * 10) / 10,
     }]);
-    console.log('🧠 write-back cached AI food (per-serving):', name, perServing);
+    console.log(`🧠 write-back cached ${wbSource} food (per-serving):`, name, perServing);
   } catch (e) {
     console.log('write-back skipped (non-fatal):', e.message);
   }
