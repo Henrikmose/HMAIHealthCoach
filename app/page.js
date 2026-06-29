@@ -557,6 +557,7 @@ export default function HomePage() {
 const router = useRouter();
 const [message, setMessage] = useState("");
 const [history, setHistory] = useState([]);
+  const [activeThreadId, setActiveThreadId] = useState(null); // Continue-thread: when set, next message joins this thread
 const [isLoading, setIsLoading] = useState(false);
 const [activeMealLog, setActiveMealLog] = useState(null);
 const [todayMeals, setTodayMeals] = useState([]);
