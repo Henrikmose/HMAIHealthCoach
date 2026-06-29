@@ -481,10 +481,30 @@ function getUnloggedMealPrompt(hour, nothingLogged) {
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { message, context, history = [], userId, localHour, localDate: clientDate, images } = body;
+    const { message, context, history = [], userId, localHour, localDate: clientDate, images, thread_id = null } = body;
     const image = images?.[0] || null; // backward compat for single image checks
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
+
+    // ── CONTINUE-THREAD: when a thread_id is present, load the whole chain from ai_messages
+    // and feed it to the AI as context. Default (no thread) keeps the slice(-1) behavior.
+    const stripMealData = (t) => (t || "").replace(/<<<MEAL_DATA>>>[\s\S]*?<<<END_MEAL_DATA>>>/g, "").trim();
+    let threadHistory = [];
+    if (thread_id) {
+      try {
+        const { data: prior } = await supabase
+          .from("ai_messages")
+          .select("message, response, created_at")
+          .eq("thread_id", thread_id)
+          .order("created_at", { ascending: true });
+        if (prior && prior.length > 0) {
+          for (const row of prior) {
+            if (row.message)  threadHistory.push({ role: "user", content: row.message });
+            if (row.response) threadHistory.push({ role: "assistant", content: stripMealData(row.response) });
+          }
+        }
+      } catch (e) { console.log("thread history load error:", e.message); }
+    }
     const hour = typeof localHour === "number" ? localHour : new Date().getHours();
     const today = getLocalDate(clientDate);
 
@@ -1231,8 +1251,10 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
     }
 
     const conversationMessages = [{ role: "system", content: systemMessage }];
-    if (history?.length > 0) {
-      for (const msg of history.slice(-10)) {
+    // Threaded → use the full thread chain; otherwise → existing slice(-1)-style behavior.
+    const effectiveHistory = (thread_id && threadHistory.length > 0) ? threadHistory : history;
+    if (effectiveHistory?.length > 0) {
+      for (const msg of effectiveHistory.slice(-12)) {
         if (msg.role && msg.content) conversationMessages.push({ role: msg.role, content: msg.content });
       }
     }
@@ -1300,14 +1322,17 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
     }
     console.log("=== RESPONSE ===\n", reply);
 
+    let aiMessageId = null;
     try {
-      await supabase.from("ai_messages").insert([{
+      const { data: inserted } = await supabase.from("ai_messages").insert([{
         user_id: activeUserId, message: message || "", response: reply,
+        thread_id: thread_id || null,
         created_at: new Date().toISOString(),
-      }]);
+      }]).select("id").single();
+      aiMessageId = inserted?.id || null;
     } catch (e) { console.log("Save error:", e); }
 
-    return Response.json({ reply });
+    return Response.json({ reply, aiMessageId });
 
   } catch (error) {
     console.error("AI ERROR:", error);

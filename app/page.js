@@ -737,21 +737,23 @@ async function loadTodayMessages(uid) {
 try {
 // Session 2: filter to today's messages only (was: last 20 messages across all days).
 // Avoids yesterday's stale meal cards reappearing in chat after midnight.
-const todayStart = new Date();
-todayStart.setHours(0, 0, 0, 0);
-const todayStartIso = todayStart.toISOString();
+// Last 24 hours of chat (not just "today") so reopening shows the recent conversation.
+const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-const { data } = await supabase
+const { data, error } = await supabase
 .from("ai_messages").select("*")
 .eq("user_id", uid)
-.gte("created_at", todayStartIso)
+.gte("created_at", since)
 .order("created_at", { ascending: false })
-.limit(20);
+.limit(40);
+
+// Diagnostic: reveals WHY the chat is blank on reopen (rows found vs error). Safe to keep.
+console.log("[chat-reload] uid:", uid, "| since:", since, "| rows:", data?.length ?? 0, error ? ("| error: " + error.message) : "");
 
 if (data && data.length > 0) {
 const rebuilt = [];
 for (const row of data.reverse()) {
-if (row.message) rebuilt.push({ role: "user", content: row.message });
+if (row.message) rebuilt.push({ role: "user", content: row.message, thread_id: row.thread_id || null });
 if (row.response) {
   // Session 1 fix: re-extract structured MEAL_DATA from the stored raw response and strip it from the displayed content.
   // The JSON is persisted raw in ai_messages.response (for debuggability and re-extraction), but never shown to the user.
@@ -812,6 +814,7 @@ const userMsg = {
 role: "user",
 content: trimmed || (pendingImages.length > 0 ? `📷 ${pendingImages.length > 1 ? pendingImages.length + " photos" : "Photo"}` : ""),
 imagePreviews: pendingImages.map(img => img.preview),
+thread_id: activeThreadId,
 };
 let newHistory = [...history, userMsg];
 setHistory(newHistory);
@@ -993,6 +996,7 @@ body: JSON.stringify({
 message: trimmed,
 context,
 history: newHistory.slice(-1).map((m) => ({ role: m.role, content: m.content })),
+thread_id: activeThreadId,
 userId: uid,
 localHour: new Date().getHours(),
 localDate: getLocalDate(),
@@ -1041,6 +1045,8 @@ shouldForceMealReview
 ),
 needsConfirmation: data.needsConfirmation || shouldForceMealReview,
 mealData: mealData || null, // Session 1: attach structured items for per-food save in handleMealReviewAction
+thread_id: activeThreadId,
+aiMessageId: data.aiMessageId || null,
 };
 
 setHistory([
@@ -1749,6 +1755,35 @@ style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 </div>
 )}
 
+{/* ↩ Continue — start/extend a thread from this AI reply */}
+{!isUser && msg.content && (
+  <button
+    onClick={() => {
+      const tid = msg.thread_id || (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()));
+      setActiveThreadId(tid);
+      if (!msg.thread_id) {
+        setHistory(prev => prev.map((m, i) => i === idx ? { ...m, thread_id: tid } : m));
+        if (msg.aiMessageId) {
+          fetch("/api/thread-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ aiMessageId: msg.aiMessageId, thread_id: tid }),
+          }).catch(() => {});
+        }
+      }
+    }}
+    style={{
+      alignSelf: "flex-start",
+      background: (msg.thread_id && msg.thread_id === activeThreadId) ? "#2563eb22" : "transparent",
+      border: "none",
+      color: (msg.thread_id && msg.thread_id === activeThreadId) ? "#3b82f6" : "#9ca3af",
+      fontSize: 13, cursor: "pointer", marginTop: 2, padding: "4px 8px", borderRadius: 8,
+    }}
+  >
+    ↩ Continue
+  </button>
+)}
+
 {/* Meal plan buttons */}
 {showButtons && (
 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
@@ -1937,6 +1972,18 @@ display:"flex", alignItems:"center", justifyContent:"center" }}>
 </div>
 )}
 
+{activeThreadId && (
+  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+    background:"#2563eb22", border:"1px solid #2563eb55", borderRadius:10,
+    padding:"6px 12px", marginBottom:8, fontSize:12, color:"#3b82f6" }}>
+    <span>↩ Continuing this conversation…</span>
+    <button onClick={() => setActiveThreadId(null)}
+      style={{ background:"transparent", border:"none", color:"#3b82f6", cursor:"pointer", fontSize:16, lineHeight:1 }}>
+      ✕
+    </button>
+  </div>
+)}
+
 <div style={{ display:"flex", gap:8, alignItems:"flex-end" }}>
 {/* Camera button */}
 <button onClick={() => pendingImages.length < 4 && setShowPhotoMenu(!showPhotoMenu)}
@@ -1961,7 +2008,7 @@ placeholder={pendingImages.length > 1 ? "Compare these or add a message..." :
 pendingImages.length === 1 ? "Add a message or just send..." : "Ask your coach..."}
 rows={1}
 style={{ flex:1, resize:"none", borderRadius:14, padding:"14px 16px",
-fontSize:14, border:`1px solid ${message ? "#2563eb" : T.border}`,
+fontSize:14, border:`1px solid ${activeThreadId ? "#3b82f6" : (message ? "#2563eb" : T.border)}`,
 background: T.input, color: T.text, outline:"none",
 minHeight:52, maxHeight:120, fontFamily:"'DM Sans', sans-serif",
 transition:"border-color .2s" }}
