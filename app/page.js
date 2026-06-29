@@ -467,6 +467,10 @@ function mealDataToSaveRows(mealData) {
       fat: Math.round(Number(item.fat) || 0),
       // Track 2 — carry provenance through to the DB so we can tell where each number came from.
       source: item.source || "ai_estimate",
+      // Track 2 write-back: carry the clean name + grams so the save route can cache
+      // AI-estimated foods into `foods` (per-100g back-calculation done in code, not AI).
+      canonicalName: item.canonical_name || item.user_text || namePart,
+      grams: Number(item.grams) || 0,
     };
   });
 }
