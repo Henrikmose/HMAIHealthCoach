@@ -14,37 +14,41 @@ const supabase = createClient(
 async function writeBackAiFood(supabase, meal) {
   try {
     if (!meal || meal.source !== 'ai_estimate') return;        // only AI-found foods
-    const grams = Number(meal.grams) || 0;
-    if (grams <= 0) return;                                      // need a weight to normalize per-100g
     // Derive a clean food name (strip the trailing ", <qty> <unit>" the save row appends)
     let name = String(meal.canonicalName || meal.food || '').trim();
-    name = name.replace(/,\s*[\d.]+\s*\w+\s*$/, '').trim();      // "Big Mac, 1 serving" -> "Big Mac"
+    name = name.replace(/,\s*[\d.]+\s*[a-z ]+$/i, '').trim();    // "Egg McMuffin, 1 sandwich" -> "Egg McMuffin"
     if (name.length < 2) return;
-    const cal = Number(meal.calories) || 0;
-    const pro = Number(meal.protein)  || 0;
-    const carb= Number(meal.carbs)    || 0;
-    const fat = Number(meal.fat)      || 0;
-    if (cal <= 0) return;
-    const f = 100 / grams;                                       // scale factor to per-100g (CODE math)
-    const per100 = {
-      calories_per_100g: Math.round(cal  * f * 10) / 10,
-      protein_per_100g:  Math.round(pro  * f * 10) / 10,
-      carbs_per_100g:    Math.round(carb * f * 10) / 10,
-      fat_per_100g:      Math.round(fat  * f * 10) / 10,
+
+    // SERVING-BASED storage: these are restaurant/branded foods eaten as whole items, not weighed.
+    // We store PER-SERVING macros (in the per_100g columns, flagged by source) and the resolver
+    // multiplies by serving count (1 / 0.5 / 2). CODE does all math; AI only supplied the numbers.
+    const servings = Number(meal.servings) > 0 ? Number(meal.servings) : 1;
+    const perServing = {
+      calories: (Number(meal.calories) || 0) / servings,
+      protein:  (Number(meal.protein)  || 0) / servings,
+      carbs:    (Number(meal.carbs)    || 0) / servings,
+      fat:      (Number(meal.fat)      || 0) / servings,
     };
-    // Don't duplicate: only insert if no existing foods row with this name (case-insensitive).
+    if (perServing.calories <= 0) return;
+
+    // Don't duplicate: skip if a foods row with this name already exists (case-insensitive).
     const { data: existing } = await supabase
       .from('foods').select('id').ilike('name', name).limit(1);
-    if (existing && existing.length > 0) return;                 // already cached
+    if (existing && existing.length > 0) return;
+
     await supabase.from('foods').insert([{
       name,
-      category: 'ai_estimate',
+      category: 'restaurant',
       source: 'ai_estimate',
-      ...per100,
+      // per-serving macros stored in the per_100g columns; resolver treats source=ai_estimate as per-serving
+      calories_per_100g: Math.round(perServing.calories * 10) / 10,
+      protein_per_100g:  Math.round(perServing.protein  * 10) / 10,
+      carbs_per_100g:    Math.round(perServing.carbs    * 10) / 10,
+      fat_per_100g:      Math.round(perServing.fat      * 10) / 10,
     }]);
-    console.log('🧠 write-back cached AI food into foods:', name, per100);
+    console.log('🧠 write-back cached AI food (per-serving):', name, perServing);
   } catch (e) {
-    console.log('write-back skipped (non-fatal):', e.message);   // never block the save
+    console.log('write-back skipped (non-fatal):', e.message);
   }
 }
 

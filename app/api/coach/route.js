@@ -202,7 +202,7 @@ function gramsForStaple(st, amount, unit) {
 
 async function lookupFood(foodName) {
   if (!foodName) return null;
-  const cols = 'id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
+  const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
   const clean = foodName.trim().toLowerCase();
   try {
     const { data: starts } = await supabase.from('foods').select(cols).ilike('name', `${clean}%`).limit(8);
@@ -264,6 +264,30 @@ async function lookupFoodMacros(message) {
     // 2) DATABASE PATH
     const food = await lookupFood(item.food);
     if (!food) continue;
+
+    // FOOD TYPE decides the math:
+    //  - usda           -> GRAM-based (per-100g * grams/100)
+    //  - ai_estimate /  -> SERVING-based (per-serving macros * serving count).
+    //    label             A Big Mac is "1 serving"; half = x0.5, two = x2. No grams.
+    const ftype = (food.source || 'usda').toLowerCase();
+    if (ftype === 'ai_estimate' || ftype === 'label') {
+      // The stored per-100g columns actually hold PER-SERVING macros for these rows
+      // (write-back stores them that way). The "amount" is the serving count.
+      const servings = Number(item.amount) || 1;
+      results.push({
+        food: food.name,
+        amount: item.amount, unit: 'serving',
+        servings,
+        calories: Math.round((Number(food.calories_per_100g) || 0) * servings),
+        protein:  Math.round((Number(food.protein_per_100g)  || 0) * servings * 10) / 10,
+        carbs:    Math.round((Number(food.carbs_per_100g)    || 0) * servings * 10) / 10,
+        fat:      Math.round((Number(food.fat_per_100g)      || 0) * servings * 10) / 10,
+        source: ftype,
+      });
+      continue;
+    }
+
+    // USDA gram-based path
     const grams = await convertToGrams(item.amount, item.unit, food.id);
     if (!grams) continue;
     const macros = calcMacros(food, grams);

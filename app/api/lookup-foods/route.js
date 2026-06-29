@@ -142,7 +142,7 @@ function gramsForStaple(st, amount, unit) {
 
 async function lookupFood(foodName) {
   if (!foodName) return null;
-  const cols = 'id, fdc_id, name, category, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
+  const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
   const clean = foodName.trim().toLowerCase();
   try {
     const { data: starts } = await supabase.from('foods').select(cols).ilike('name', `${clean}%`).limit(8);
@@ -214,6 +214,22 @@ export async function POST(req) {
       // 2) DATABASE PATH (non-staples, or explicit raw)
       const food = await lookupFood(item.food);
       if (!food) { missing.push({ food: item.food, amount: item.amount, unit: item.unit }); continue; }
+
+      // SERVING-BASED foods (ai_estimate/label): servings * per-serving macros, no grams.
+      const ftype = (food.source || 'usda').toLowerCase();
+      if (ftype === 'ai_estimate' || ftype === 'label') {
+        const servings = Number(item.amount) || 1;
+        found.push({
+          food: food.name, amount: item.amount, unit: 'serving', servings,
+          calories: Math.round((Number(food.calories_per_100g) || 0) * servings),
+          protein:  Math.round((Number(food.protein_per_100g)  || 0) * servings * 10) / 10,
+          carbs:    Math.round((Number(food.carbs_per_100g)    || 0) * servings * 10) / 10,
+          fat:      Math.round((Number(food.fat_per_100g)      || 0) * servings * 10) / 10,
+          source: ftype,
+        });
+        continue;
+      }
+
       let grams = await convertToGrams(item.amount, item.unit, food.id);
       if (!grams) {
         // fall back to a generic portion weight so we don't drop the food entirely
