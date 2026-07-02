@@ -21,7 +21,16 @@ return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String
 }
 
 function extractTargetDate(text, surroundingTexts) {
-// Check all provided texts for tomorrow/yesterday
+// PRIORITY 1: the trigger message itself. An explicit date cue in the CURRENT request
+// always wins over stale mentions earlier in the conversation. "tonight"/"today" -> today.
+const trigger = (text || "").toLowerCase();
+if (/\b(tonight|today|this (morning|afternoon|evening)|right now)\b/.test(trigger)) return getLocalDate();
+if (trigger.includes("tomorrow")) return addDays(getLocalDate(), 1);
+if (trigger.includes("yesterday")) return addDays(getLocalDate(), -1);
+
+// PRIORITY 2 (fallback only): if the trigger has no date cue, glance at recent context.
+// This is why an earlier "tomorrow" used to leak onto a later "dinner tonight" — now it
+// only applies when the current request said nothing about timing.
 const allTexts = [text, ...(surroundingTexts || [])].join(" ").toLowerCase();
 if (allTexts.includes("tomorrow")) return addDays(getLocalDate(), 1);
 if (allTexts.includes("yesterday")) return addDays(getLocalDate(), -1);
@@ -1294,8 +1303,9 @@ for (const meal of meals) {
 
 // Session 2: refetch DB state immediately so render's mealAlreadyInDb returns true on next paint.
 // This hides the buttons without needing a separate completion tracking set.
+let freshMealsForObs = null;
 if (action === "eat") {
-await loadTodayMeals(uid);
+freshMealsForObs = await loadTodayMeals(uid);
 } else {
 await loadPlannedMeals(uid);
 }
@@ -1309,13 +1319,27 @@ setHistory(prev => prev.map((m, i) =>
 i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
 ));
 
+let obsSuffix = "";
+if (action === "eat") {
+  try {
+    const freshTotals = (freshMealsForObs || todayMeals || []).reduce((t, m) => ({
+      calories: t.calories + (Number(m.calories) || 0),
+      protein:  t.protein  + (Number(m.protein)  || 0),
+      carbs:    t.carbs    + (Number(m.carbs)    || 0),
+      fat:      t.fat      + (Number(m.fat)      || 0),
+    }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+    const obs = standardObservations(freshTotals, goals);
+    if (obs.line) obsSuffix = `\n\n${obs.line}${obs.offer ? "\n\n" + obs.offer : ""}`;
+  } catch (e) { /* best-effort; never block the save */ }
+}
+
 setHistory(prev => [
 ...prev,
 {
 role: "assistant",
-content: action === "eat"
+content: (action === "eat"
 ? "✅ Added to your eaten food"
-: "✅ Added to your planned meals",
+: "✅ Added to your planned meals") + obsSuffix,
 },
 ]);
 } catch (err) {

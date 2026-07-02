@@ -204,6 +204,14 @@ async function lookupFood(foodName) {
   if (!foodName) return null;
   const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
   const clean = foodName.trim().toLowerCase();
+  // COMPOSED DISH GUARD: "tacos with eggs, potato, tortilla", "burrito with rice beans chicken", etc.
+  // A multi-ingredient dish must NOT fuzzy-match a single ingredient (e.g. logging just "potato").
+  // Send it to the AI to estimate the whole dish as one item. Heuristic: contains "with", or is a
+  // long multi-word phrase (4+ words) that isn't a simple "<qualifier> <food>" pair.
+  const wordCount = clean.split(/\s+/).filter(Boolean).length;
+  if (/\bwith\b/.test(clean) || wordCount >= 4) {
+    return null; // -> falls through to AI estimate (composed dish)
+  }
   try {
     const { data: starts } = await supabase.from('foods').select(cols).ilike('name', `${clean}%`).limit(8);
     if (starts && starts.length > 0) return pickBest(starts, clean);
@@ -725,6 +733,8 @@ VOICE
 ══════════════════════════════════════════
 Knowledgeable friend, not a data-entry tool. Lead with strategy, then specifics. Confident and direct — real recommendations, not vague hedging. Specific to THIS person's day — name the real challenge (a workout, a social lunch, an energy dip). Never generic ("eat healthy" is not coaching). Honest — push back on unrealistic goals; say "Real Talk" when needed.
 
+NUMBERS RULE (critical): Do NOT compute or state how the user is tracking against their DAILY goals — never say things like "you're at 70% of your calories", "you're 170g protein, above your goal", "you have 400 cal left today", or any percentage/above-below/remaining figure for the DAY. The APP calculates and displays all of that (it's shown on screen and after each meal). Your job is the qualitative coaching around it — WHAT to eat and WHY — not the arithmetic. If you need to reference where they stand, speak generally ("you've got room for a solid dinner", "protein's worth prioritizing") without inventing numbers. The one exception: when you build a meal/plan, you may state that meal's own macros.
+
 ══════════════════════════════════════════
 FORMATTING — NO MARKDOWN, EVER
 ══════════════════════════════════════════
@@ -1145,6 +1155,16 @@ Calories is a number only; protein/carbs/fat always include "g". Single totals, 
 This is the sum of the meal blocks in THIS plan only. Do not fold in already-eaten meals or earlier messages.
 
 4. End with 2-3 short rules specific to the day. Be decisive — present ONE plan, never "Option A/Option B." Do NOT ask the user to reply "yes" or confirm in chat; the buttons handle saving.
+
+CRITICAL — SAVING THE PLAN (do not skip):
+- If this plan is a SINGLE meal (the user asked to plan ONE meal, e.g. "plan my dinner", "what should I have for lunch") → you MUST end your response with a MEAL_DATA block for that meal, using the exact format below. Without it, the user has no button to save the meal and your plan is useless to them.
+- If this plan is MULTIPLE meals (a whole day / several meals) → do NOT emit MEAL_DATA; the prose meal blocks above render their own per-meal save buttons.
+- This applies inside continued/threaded conversations too: even mid-conversation, a single-meal plan MUST end with MEAL_DATA. Never let the discussion replace the structured block.
+
+SINGLE-MEAL MEAL_DATA FORMAT (only for a one-meal plan):
+<<<MEAL_DATA>>>
+{"meal_type":"dinner","items":[{"food":"<name>","amount":<n>,"unit":"<unit>","calories":<n>,"protein":<n>,"carbs":<n>,"fat":<n>,"source":"usda_db"|"ai_estimate"|"label"}]}
+<<<END_MEAL_DATA>>>
 
 RULES THAT MATTER:
 - Plan only the remaining part of the day. Don't re-plan meals already eaten or planned (shown in the numbers above). Use the REMAINING budget, not the full goal.

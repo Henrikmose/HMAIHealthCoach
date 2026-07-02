@@ -144,6 +144,12 @@ async function lookupFood(foodName) {
   if (!foodName) return null;
   const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
   const clean = foodName.trim().toLowerCase();
+  // COMPOSED DISH GUARD (in sync with coach route): a multi-ingredient dish must not
+  // fuzzy-match a single ingredient. Send it to the AI to estimate as one whole item.
+  const wordCount = clean.split(/\s+/).filter(Boolean).length;
+  if (/\bwith\b/.test(clean) || wordCount >= 4) {
+    return null;
+  }
   try {
     const { data: starts } = await supabase.from('foods').select(cols).ilike('name', `${clean}%`).limit(8);
     if (starts && starts.length > 0) return pickBest(starts, clean);
