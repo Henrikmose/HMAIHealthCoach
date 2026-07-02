@@ -250,6 +250,7 @@ function calcMacros(food, grams) {
 // Main lookup — tries DB, returns null if not found
 async function lookupFoodMacros(message) {
   const items = parseFoodItems(message);
+  console.log("🔎 [resolver] input:", JSON.stringify(message), "| parsed items:", JSON.stringify(items));
   if (items.length === 0) return null;
 
   const results = [];
