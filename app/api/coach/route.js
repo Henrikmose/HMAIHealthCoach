@@ -248,9 +248,39 @@ function calcMacros(food, grams) {
 }
 
 // Main lookup — tries DB, returns null if not found
+// ── WEAK-DESCRIPTION DETECTOR (code, no AI) ─────────────────────────────────
+// A composed/multi-ingredient food with almost no quantities can't be logged
+// accurately (one small potato vs half a cup is a big difference). Rather than
+// guess (or let the AI guess — it collapses "tacos with potato and eggs" to just
+// potato), we ask the user for rough amounts. Returns { weak, question }.
+function detectWeakComposedFood(message) {
+  const t = (message || "").toLowerCase();
+  const composedWords = /\b(taco|tacos|burrito|burritos|sandwich|sandwiches|wrap|wraps|bowl|bowls|salad|salads|smoothie|smoothies|stir\s?fry|casserole|stew|soup|curry|omelet|omelette|scramble|plate|dish)\b/;
+  const isComposed = composedWords.test(t) || /\bwith\b/.test(t);
+  if (!isComposed) return { weak: false };
+
+  // A REAL ingredient amount = number+unit, a fraction, or a "<n> egg/slice/scoop/cup" phrase.
+  // A bare dish count ("3 tacos") does NOT count — we need amounts for the ingredients.
+  const withoutDishCount = t.replace(/\b\d+\s+(tacos?|burritos?|sandwiches?|wraps?|bowls?|omelets?|omelettes?)\b/g, " ");
+  const realQtyCues = (withoutDishCount.match(
+    /\b\d+\.?\d*\s*(oz|ounces?|lb|lbs|pounds?|g|grams?|kg|cups?|tbsp|tsp|tablespoons?|teaspoons?|ml|slices?|pieces?|scoops?|servings?)\b|½|¼|¾|⅓|⅔|\bhalf\b|\bquarter\b|\bthird\b|\b\d+\s+(egg|eggs|slice|slices|scoop|scoops|piece|pieces|cup|cups)\b/g
+  ) || []).length;
+
+  // Ask ONLY when it's composed AND there are zero real ingredient amounts anywhere.
+  // Any single real amount -> proceed (standard sizes fill unspecified parts downstream).
+  const weak = isComposed && realQtyCues === 0;
+  if (!weak) return { weak: false };
+  return {
+    weak: true,
+    question:
+      "Happy to log this — I just need a rough amount for the main ingredients (even approximate). " +
+      "For example: how many eggs, and about how much potato (half a cup? a small one?). " +
+      "I'll use standard sizes for the rest. Tap ↩ Continue to send it."
+  };
+}
+
 async function lookupFoodMacros(message) {
   const items = parseFoodItems(message);
-  console.log("🔎 [resolver] input:", JSON.stringify(message), "| parsed items:", JSON.stringify(items));
   if (items.length === 0) return null;
 
   const results = [];
@@ -587,6 +617,21 @@ export async function POST(req) {
     let dbFoodResults = null;
     if (context?.type === "food_log") {
       const lookupMsg = context.followUpMessage || context.originalMessage || message;
+
+      // WEAK-DESCRIPTION GUARD: if it's a composed food with no real amounts, ask for
+      // a rough size instead of guessing or letting the AI collapse it to one ingredient.
+      const weakCheck = detectWeakComposedFood(lookupMsg);
+      if (weakCheck.weak) {
+        console.log("🡒 weak composed food — asking for amounts instead of guessing:", lookupMsg);
+        try {
+          await supabase.from("ai_messages").insert([{
+            user_id: activeUserId, message: message || "", response: weakCheck.question,
+            thread_id: thread_id || null, created_at: new Date().toISOString(),
+          }]);
+        } catch (e) {}
+        return Response.json({ reply: weakCheck.question });
+      }
+
       dbFoodResults = await lookupFoodMacros(lookupMsg);
       if (dbFoodResults) {
         console.log(`=== DB FOOD LOOKUP (food_log): found ${dbFoodResults.length} food(s) ===`);
