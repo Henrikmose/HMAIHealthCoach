@@ -273,7 +273,7 @@ function detectWeakComposedFood(message) {
   return {
     weak: true,
     question:
-      "Happy to log this — I just need a rough amount for the main ingredients (even approximate). " +
+      "[v78] Happy to log this — I just need a rough amount for the main ingredients (even approximate). " +
       "For example: how many eggs, and about how much potato (half a cup? a small one?). " +
       "I'll use standard sizes for the rest. Tap ↩ Continue to send it."
   };
