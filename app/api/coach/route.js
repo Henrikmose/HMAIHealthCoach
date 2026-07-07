@@ -273,7 +273,7 @@ function detectWeakComposedFood(message) {
   return {
     weak: true,
     question:
-      "[v78] Happy to log this — I just need a rough amount for the main ingredients (even approximate). " +
+      "Happy to log this — I just need a rough amount for the main ingredients (even approximate). " +
       "For example: how many eggs, and about how much potato (half a cup? a small one?). " +
       "I'll use standard sizes for the rest. Tap ↩ Continue to send it."
   };
@@ -525,6 +525,25 @@ export async function POST(req) {
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
 
+    // ── WEAK-DESCRIPTION GUARD (runs before any provider call, regardless of context.type) ──
+    // Composed food stated with NO real amounts ("tacos with potato and eggs") -> ask for rough
+    // amounts instead of guessing / letting the model collapse it to one item. No AI call made.
+    {
+      const guardMsg = (context && (context.followUpMessage || context.originalMessage || context.request)) || message || "";
+      const isLoggingIntent = !context || context.type === "food_log" || context.type === "meal_planning" || context.type === undefined;
+      const weakCheck = detectWeakComposedFood(guardMsg);
+      if (isLoggingIntent && weakCheck.weak) {
+        console.log("[v78] weak composed food — asking for amounts:", guardMsg);
+        try {
+          await supabase.from("ai_messages").insert([{
+            user_id: activeUserId, message: message || "", response: weakCheck.question,
+            thread_id: thread_id || null, created_at: new Date().toISOString(),
+          }]);
+        } catch (e) {}
+        return Response.json({ reply: weakCheck.question });
+      }
+    }
+
     // ── CONTINUE-THREAD: when a thread_id is present, load the whole chain from ai_messages
     // and feed it to the AI as context. Default (no thread) keeps the slice(-1) behavior.
     const stripMealData = (t) => (t || "").replace(/<<<MEAL_DATA>>>[\s\S]*?<<<END_MEAL_DATA>>>/g, "").trim();
@@ -617,20 +636,6 @@ export async function POST(req) {
     let dbFoodResults = null;
     if (context?.type === "food_log") {
       const lookupMsg = context.followUpMessage || context.originalMessage || message;
-
-      // WEAK-DESCRIPTION GUARD: if it's a composed food with no real amounts, ask for
-      // a rough size instead of guessing or letting the AI collapse it to one ingredient.
-      const weakCheck = detectWeakComposedFood(lookupMsg);
-      if (weakCheck.weak) {
-        console.log("🡒 weak composed food — asking for amounts instead of guessing:", lookupMsg);
-        try {
-          await supabase.from("ai_messages").insert([{
-            user_id: activeUserId, message: message || "", response: weakCheck.question,
-            thread_id: thread_id || null, created_at: new Date().toISOString(),
-          }]);
-        } catch (e) {}
-        return Response.json({ reply: weakCheck.question });
-      }
 
       dbFoodResults = await lookupFoodMacros(lookupMsg);
       if (dbFoodResults) {
