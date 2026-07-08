@@ -1238,7 +1238,7 @@ i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : 
 ));
 setHistory(prev => [
 ...prev,
-{ role: "assistant", content: "Canceled — I won't save that meal." },
+{ role: "assistant", content: "Canceled — I won't save that meal.", isConfirmation: true },
 ]);
 return;
 }
@@ -1340,6 +1340,7 @@ role: "assistant",
 content: (action === "eat"
 ? "✅ Added to your eaten food"
 : "✅ Added to your planned meals") + obsSuffix,
+isConfirmation: true,   // status message — no Continue button (nothing to continue)
 },
 ]);
 } catch (err) {
@@ -1780,8 +1781,8 @@ style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 </div>
 )}
 
-{/* ↩ Continue — start/extend a thread from this AI reply */}
-{!isUser && msg.content && (
+{/* ↩ Continue — start/extend a thread from this AI reply (not on status confirmations) */}
+{!isUser && msg.content && !msg.isConfirmation && (
   <button
     onClick={() => {
       const tid = msg.thread_id || (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now()));
