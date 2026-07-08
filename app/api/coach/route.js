@@ -423,9 +423,9 @@ function extractAllEvents(text) {
   // e.g. "workout at 7am", "tennis at 5pm", "dinner at 8"
   const timeEventPatterns = [
     // "X at TIME" pattern
-    /((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date)[^.!?]*?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi,
+    /((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date)[^.!?]*?)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi,
     // "TIME + X" pattern  
-    /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date))/gi,
+    /at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s+(?:for\s+)?((?:workout|gym|run|running|swim|yoga|pilates|hiit|cardio|crossfit|lifting|training|weightlift|hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket|hike|hiking|marathon|race|triathlon|spartan|10k|5k|golf|cycling|bike ride|dinner party|dinner date|restaurant|going out|eating out|wedding|birthday|celebration|gala|banquet|brunch|drinks|bar|cocktail|happy hour|bbq|barbecue|potluck|picnic|lunch date))/gi,
   ];
 
   // Try pattern 1: "event at time"
@@ -657,10 +657,15 @@ export async function POST(req) {
     };
 
     // ── DB Food Lookup (for food_log AND meal_planning when user states specific foods) ──
+    // [v79] lookupMsg is hoisted to THIS scope. It was previously declared with `const` inside
+    // the if-block below, but is ALSO referenced much later in the codeMealData block — a
+    // different scope — which threw "ReferenceError: lookupMsg is not defined" and crashed
+    // every single-meal food log that reached this route with a DB hit ("Something went wrong").
+    let lookupMsg = null;
     let dbFoodResults = null;
     let mealSegments = null; // per-meal resolved groups for multi-meal logs
     if (context?.type === "food_log") {
-      const lookupMsg = context.followUpMessage || context.originalMessage || message;
+      lookupMsg = context.followUpMessage || context.originalMessage || message;
 
       // WEAK-DESCRIPTION GUARD: if it's a composed food with no real amounts, ask for
       // a rough size instead of guessing or letting the AI collapse it to one ingredient.
@@ -1426,7 +1431,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v79] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 
@@ -1506,6 +1511,8 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
         }
       } else if (dbFoodResults && dbFoodResults.length > 0) {
         // Single meal: infer type from time if the user didn't state one.
+        // [v79] lookupMsg is now in scope here (hoisted above) — this line previously threw
+        // ReferenceError and crashed the whole request into the generic error message.
         const singleType = (segmentMeals(lookupMsg, (typeof localHour === "number" ? localHour : 12))[0] || {}).meal_type || "snack";
         codeMealData = { meal_type: singleType, items: buildItems(dbFoodResults, singleType) };
       }
