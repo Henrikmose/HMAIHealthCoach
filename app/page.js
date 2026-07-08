@@ -380,26 +380,48 @@ return meals;
 // and fall back to parseAllMeals if the JSON is missing or malformed.
 
 const MEAL_DATA_REGEX = /<<<MEAL_DATA>>>\s*([\s\S]*?)\s*<<<END_MEAL_DATA>>>/;
+const MEAL_DATA_REGEX_G = /<<<MEAL_DATA>>>\s*([\s\S]*?)\s*<<<END_MEAL_DATA>>>/g;
 
+// Multi-meal aware: a single reply can contain SEVERAL MEAL_DATA blocks (user logs a whole
+// day at once — "for breakfast X, lunch Y, dinner Z"). We parse EVERY block and merge their
+// items into one mealData object, tagging each item with its own block's meal_type so each
+// food still saves to the right meal. Single-meal behavior is unchanged (one block -> one type).
 function extractMealData(text) {
   if (!text) return null;
-  const match = text.match(MEAL_DATA_REGEX);
-  if (!match) return null;
-  try {
-    const parsed = JSON.parse(match[1].trim());
-    // Minimal shape validation — must have meal_type and items[] with at least one entry
-    if (!parsed || typeof parsed !== "object") return null;
-    if (!parsed.meal_type || !Array.isArray(parsed.items) || parsed.items.length === 0) return null;
-    return parsed;
-  } catch (err) {
-    console.warn("MEAL_DATA JSON parse failed:", err.message, match[1].slice(0, 200));
-    return null;
+  const blocks = [];
+  let m;
+  MEAL_DATA_REGEX_G.lastIndex = 0;
+  while ((m = MEAL_DATA_REGEX_G.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      if (parsed && typeof parsed === "object" && parsed.meal_type
+          && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        blocks.push(parsed);
+      }
+    } catch (err) {
+      console.warn("MEAL_DATA JSON parse failed (one block skipped):", err.message);
+    }
   }
+  if (blocks.length === 0) return null;
+  if (blocks.length === 1) return blocks[0]; // single meal: identical to before
+
+  // Multiple meals: merge, tagging each item with its meal_type.
+  const mergedItems = [];
+  for (const b of blocks) {
+    for (const it of b.items) {
+      mergedItems.push({ ...it, meal_type: it.meal_type || b.meal_type });
+    }
+  }
+  return {
+    meal_type: blocks[0].meal_type, // primary type (for the header/dropdown default)
+    items: mergedItems,
+    multi_meal: true,               // marker: this review spans multiple meals
+  };
 }
 
 function stripMealData(text) {
   if (!text) return text;
-  return text.replace(MEAL_DATA_REGEX, "").trim();
+  return text.replace(MEAL_DATA_REGEX_G, "").trim(); // g flag: strip ALL blocks, never leak code
 }
 
 // Honest-wording guard (code-owned, not prompt-owned).
@@ -467,8 +489,8 @@ function mealDataToSaveRows(mealData) {
     const qtyPart = item.amount && item.unit ? `${item.amount} ${item.unit}` : (item.amount ? `${item.amount}` : "");
     const food = qtyPart ? `${namePart}, ${qtyPart}` : namePart;
     return {
-      mealType: mealData.meal_type,
-      displayType: mealData.meal_type, // single meal_type per JSON; suffix logic not needed here
+      mealType: item.meal_type || mealData.meal_type,       // per-item type for multi-meal logs
+      displayType: item.meal_type || mealData.meal_type,
       food,
       calories: Math.round(Number(item.calories) || 0),
       protein: Math.round(Number(item.protein) || 0),
@@ -1027,8 +1049,12 @@ const parsedReplyMeals = parseAllMeals(displayReply);
 // AI emits MEAL_DATA only in food_log context (single meal). Multi-meal plans don't emit it.
 // This routes BOTH past-tense logs AND future-tense plans through the 4-button review.
 const hasMealData = !!mealData && Array.isArray(mealData.items) && mealData.items.length > 0;
+// Multi-meal EATEN log (user logged several meals at once) -> route to the SAME per-meal card
+// renderer that day-plans use, so each meal gets its own Add/Edit/Cancel + type dropdown.
+// We do NOT force the single 4-button review in that case.
+const isMultiMealLog = hasMealData && mealData.multi_meal === true;
 const shouldForceMealReview =
-hasMealData ||
+(hasMealData && !isMultiMealLog) ||
 // Legacy fallback for the (now rare) case where AI doesn't emit MEAL_DATA but user clearly logged a meal.
 // Once MEAL_DATA emission is reliable, this fallback can be removed.
 (isLogMessage(trimmed) &&
@@ -1055,6 +1081,7 @@ shouldForceMealReview
 ),
 needsConfirmation: data.needsConfirmation || shouldForceMealReview,
 mealData: mealData || null, // Session 1: attach structured items for per-food save in handleMealReviewAction
+isEatenLog: isMultiMealLog === true, // multi-meal log -> per-card renderer shows "Add to Eaten" per meal
 thread_id: activeThreadId,
 aiMessageId: data.aiMessageId || null,
 };
@@ -1172,7 +1199,89 @@ async function handleAddAllToPlan(meals, msgIdx, targetDate) {
   }
 
 
-function handleEditPlanMeal(meal) {
+async function handleAddToEaten(meal, msgIdx, targetDate) {
+    // Mirror of handleAddToPlan, but saves to actual_meals (EATEN) instead of planned_meals.
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+    setIsSaving(true);
+    try {
+      const uid = userId;
+      const alreadyExists = (rows) => rows.some(r =>
+        r.date === targetDate &&
+        r.meal_type === meal.mealType &&
+        r.food === meal.food &&
+        Math.abs(Number(r.calories) - Number(meal.calories)) < 5
+      );
+      if (alreadyExists(todayMeals) || alreadyExists(plannedMeals)) {
+        return; // already saved — render hides the button next paint
+      }
+      // Replace existing for breakfast/lunch/dinner; snacks stack.
+      if (meal.mealType !== "snack") {
+        const { data: existing } = await supabase
+          .from("actual_meals")
+          .select("id")
+          .eq("user_id", uid)
+          .eq("meal_type", meal.mealType)
+          .eq("date", targetDate);
+        if (existing && existing.length > 0) {
+          for (const e of existing) {
+            await supabase.from("actual_meals").delete().eq("id", e.id);
+          }
+        }
+      }
+      try {
+        await saveMealViaAPI("actual_meals", { ...meal, date: targetDate }, uid);
+        await loadTodayMeals(uid);
+      } catch (err) {
+        alert(`Could not save meal: ${err.message || "Please try again."}`);
+      }
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
+    }
+  }
+
+  async function handleAddAllToEaten(meals, msgIdx, targetDate) {
+    if (isSavingRef.current) return;
+    isSavingRef.current = true;
+    setIsSaving(true);
+    try {
+      const uid = userId;
+      const failures = [];
+      for (const meal of meals) {
+        const alreadyExists = (rows) => rows.some(r =>
+          r.date === targetDate &&
+          r.meal_type === meal.mealType &&
+          r.food === meal.food &&
+          Math.abs(Number(r.calories) - Number(meal.calories)) < 5
+        );
+        if (alreadyExists(todayMeals) || alreadyExists(plannedMeals)) continue;
+        // Replace existing non-snack of the same type so we don't double up.
+        if (meal.mealType !== "snack") {
+          const { data: existing } = await supabase
+            .from("actual_meals").select("id")
+            .eq("user_id", uid).eq("meal_type", meal.mealType).eq("date", targetDate);
+          if (existing && existing.length > 0) {
+            for (const e of existing) await supabase.from("actual_meals").delete().eq("id", e.id);
+          }
+        }
+        try {
+          await saveMealViaAPI("actual_meals", { ...meal, date: targetDate }, uid);
+        } catch (err) {
+          failures.push(`${meal.food}: ${err.message}`);
+        }
+      }
+      await loadTodayMeals(uid);
+      if (failures.length > 0) {
+        alert(`Some meals could not be saved:\n${failures.join("\n")}`);
+      }
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
+    }
+  }
+
+  function handleEditPlanMeal(meal) {
 const label = getMealLabel(meal.displayType || meal.mealType || "meal");
 setHistory(prev => [
 ...prev,
@@ -1815,7 +1924,9 @@ style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
 {visibleButtonMeals.length > 1 && (
 <button
-onClick={() => handleAddAllToPlan(visibleButtonMeals, buttonSourceIdx, targetDate)}
+onClick={() => (msg.isEatenLog
+                  ? handleAddAllToEaten(visibleButtonMeals, buttonSourceIdx, targetDate)
+                  : handleAddAllToPlan(visibleButtonMeals, buttonSourceIdx, targetDate))}
 disabled={allSaved}
 style={{
 fontSize:12,
@@ -1828,7 +1939,7 @@ border:"none",
 cursor: allSaved ? "default" : "pointer",
 }}
 >
-{allSaved ? "✅ All selected meals added" : `+ Add all ${visibleButtonMeals.length} meals to plan`}
+{allSaved ? "✅ All selected meals added" : `+ Add all ${visibleButtonMeals.length} meals to ${msg.isEatenLog ? "eaten" : "plan"}`}
 </button>
 )}
 
@@ -1861,7 +1972,9 @@ background:T.surface,
 
 <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
 <button
-onClick={() => handleAddToPlan(meal, buttonSourceIdx, targetDate)}
+onClick={() => (msg.isEatenLog
+                    ? handleAddToEaten(meal, buttonSourceIdx, targetDate)
+                    : handleAddToPlan(meal, buttonSourceIdx, targetDate))}
 style={{
 fontSize:12,
 padding:"8px 10px",
@@ -1873,7 +1986,7 @@ color:"#fff",
 cursor:"pointer",
 }}
 >
-{hasExisting ? `↺ Replace ${label}` : `+ Add ${label}`}
+{hasExisting ? `↺ Replace ${label}` : `+ Add ${label}${msg.isEatenLog ? " (eaten)" : ""}`}
 </button>
 
 <button
