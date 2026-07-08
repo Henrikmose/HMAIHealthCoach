@@ -266,8 +266,15 @@ function inferMealTypeFromHour(hour) {
 }
 
 function segmentMeals(message, currentHour = 12) {
+  // [v81] Handles BOTH natural orientations:
+  //   marker-first: "for breakfast 2 eggs, for lunch a salad"   (food AFTER its marker)
+  //   food-first:   "2 eggs for breakfast and a salad for lunch" (food BEFORE its marker)
+  // The old version only understood marker-first, so "X for dinner" produced ZERO
+  // segments (nothing after the marker) and every such log fell to the fallback.
+  // Hard guarantee now: a non-empty message NEVER returns zero segments.
   if (!message) return [];
   const text = message.trim();
+  if (!text) return [];
   const markers = [
     { type: "breakfast", re: /\b(for |as |had )?breakfast\b/gi },
     { type: "lunch",     re: /\b(for |as |had )?lunch\b/gi },
@@ -286,12 +293,57 @@ function segmentMeals(message, currentHour = 12) {
   if (hits.length === 0) {
     return [{ meal_type: inferMealTypeFromHour(currentHour), text, inferred: true }];
   }
+
+  // "Substantive" = still contains real content after stripping filler words.
+  // Decides orientation and whether a chunk is worth becoming a segment.
+  const FILLER_RE = /\b(i|i'?m|i'?ve|i'?d|we|he|she|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|got|get|just|also|then|and|so|um|uh|my|the|a|an|of|for|as|at|around|about|today|yesterday|tomorrow|tonight|this|that|morning|afternoon|evening|earlier|later|right|now|oh|well|ok|okay)\b/gi;
+  const substantive = (s) => {
+    const cleaned = (s || "").replace(FILLER_RE, " ").replace(/[^a-z0-9\s-]/gi, " ").replace(/\s+/g, " ").trim();
+    return cleaned.length > 2;
+  };
+  const trim = (s) => (s || "").replace(/^[\s,.:;\u2014-]+|[\s,.:;]+$/g, "").trim();
+
+  const lead = text.slice(0, hits[0].index);
+  const foodFirst = substantive(lead);
   const segments = [];
-  for (let i = 0; i < hits.length; i++) {
-    const start = hits[i].end;
-    const stop = (i + 1 < hits.length) ? hits[i + 1].index : text.length;
-    const chunk = text.slice(start, stop).replace(/^[\s,:\u2014-]+|[\s,]+$/g, "").trim();
-    if (chunk) segments.push({ meal_type: hits[i].type, text: chunk, inferred: false });
+
+  if (foodFirst) {
+    // Food PRECEDES its marker: the chunk between the previous marker's end and this
+    // marker's start belongs to THIS marker. ("2 eggs for breakfast and a salad for lunch")
+    let prevEnd = 0;
+    for (let i = 0; i < hits.length; i++) {
+      const chunk = trim(text.slice(prevEnd, hits[i].index));
+      if (substantive(chunk)) segments.push({ meal_type: hits[i].type, text: chunk, inferred: false });
+      prevEnd = hits[i].end;
+    }
+    // Trailing text after the LAST marker: if that marker got nothing before it, the tail
+    // is its food ("eggs for breakfast, for lunch a sandwich"); otherwise it's a
+    // continuation of the last meal ("chicken for dinner and then a cookie").
+    const tail = trim(text.slice(hits[hits.length - 1].end));
+    if (substantive(tail)) {
+      const lastType = hits[hits.length - 1].type;
+      const lastSeg = segments[segments.length - 1];
+      if (!lastSeg || lastSeg.meal_type !== lastType) {
+        segments.push({ meal_type: lastType, text: tail, inferred: false });
+      } else {
+        lastSeg.text += " " + tail;
+      }
+    }
+  } else {
+    // Marker PRECEDES its food (original behavior): chunk runs from this marker's end
+    // to the next marker's start. ("for breakfast 2 eggs, for lunch a salad")
+    for (let i = 0; i < hits.length; i++) {
+      const stop = (i + 1 < hits.length) ? hits[i + 1].index : text.length;
+      const chunk = trim(text.slice(hits[i].end, stop));
+      if (substantive(chunk)) segments.push({ meal_type: hits[i].type, text: chunk, inferred: false });
+    }
+  }
+
+  // HARD FLOOR: never return zero segments for a message that reached this point.
+  // Use the full text (the food parser strips meal words itself) with the first
+  // marker's meal type — one card the user can correct beats a dead-end fallback.
+  if (segments.length === 0) {
+    return [{ meal_type: hits[0].type, text, inferred: false }];
   }
   return segments;
 }
@@ -382,7 +434,7 @@ async function lookupFoodMacros(message) {
   return results.length > 0 ? results : null;
 }
 
-// ═══ [v80] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
+// ═══ [v81] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
 // The AI NEVER writes the chat message for a food log. Its only jobs here are:
 //   (a) parse a segment the code parser couldn't (returns structured items, no numbers)
 //   (b) supply macros for ONE unknown food (JSON only → written to `foods` → read back)
@@ -866,7 +918,7 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
-    // ═══ [v80] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
+    // ═══ [v81] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
     // The conversational AI below NEVER runs for a food log. Code segments the
     // message, resolves every food from the database (AI fills gaps in the
     // background via write-back), renders the message, and returns cards.
@@ -900,7 +952,7 @@ export async function POST(req) {
         if (items.length > 0) {
           cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, items });
         }
-        console.log(`  [v80] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
+        console.log(`  [v81] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
       }
 
       // Nothing identifiable anywhere → deterministic clarifying message (code, not AI).
@@ -934,7 +986,7 @@ export async function POST(req) {
         logMessageId = inserted?.id || null;
       } catch (e) { console.log("Save error:", e); }
 
-      console.log(`=== FOOD LOG [v80] | ${cards.length} card(s) | conversational AI: skipped`);
+      console.log(`=== FOOD LOG [v81] | ${cards.length} card(s) | conversational AI: skipped`);
       return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
@@ -1661,7 +1713,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI [v80] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v81] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 
