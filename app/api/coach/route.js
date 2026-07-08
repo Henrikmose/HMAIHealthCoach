@@ -66,7 +66,7 @@ function parseFoodItems(text) {
     .replace(/\bsome\s+/g," 1 ").replace(/\bwhole\s+/g," 1 ");
   s = s.replace(/\b(and|with|plus|also|of)\b/g, " ");
   // strip non-food filler verbs/pronouns so "I had chicken" doesn't log "i had" as a food
-  s = s.replace(/\b(i|im|ive|id|he|she|we|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|drinking|drunk|got|get|getting|consumed|consume|the|my|me|mine|will|gonna|going|planning|plan|want|wanna|like|grab|grabbed|made|make|having)\b/g, " ");
+  s = s.replace(/\b(i|im|ive|id|he|she|we|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|drinking|drunk|got|get|getting|consumed|consume|the|my|me|mine|will|gonna|going|planning|plan|want|wanna|like|grab|grabbed|made|make|having|about|around|roughly|approximately|approx|maybe|nearly|almost|that|which|it|its|what|so|far|well|really|please|is|are|was|were)\b/g, " ");
   s = s.replace(/\b(for|at|after|before|then|during|today|yesterday|tomorrow|tonight|this|morning|afternoon|evening|lunch|dinner|breakfast|snack|right|now|just)\b/g, " ");
 
   const units = "oz|ounces|ounce|lb|lbs|pounds|pound|g|grams|gram|kg|cup|cups|tbsp|tablespoons|tablespoon|tsp|teaspoons|teaspoon|ml|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
@@ -219,8 +219,13 @@ async function lookupFood(foodName) {
     if (startsPlural && startsPlural.length > 0) return pickBest(startsPlural, clean);
     const { data: fts } = await supabase.from('foods').select(cols).textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' }).limit(8);
     if (fts && fts.length > 0) return pickBest(fts, clean);
-    const { data: contains } = await supabase.from('foods').select(cols).ilike('name', `%${clean}%`).limit(10);
-    if (contains && contains.length > 0) return pickBest(contains, clean);
+    // SUBSTRING GUARD: the %contains% stage is a shotgun — short terms match inside
+    // unrelated words ("cal" -> "Squid (CALamari)", "fat" -> "Buttermilk, low FAT").
+    // Only allow it for terms long enough to be a real food name.
+    if (clean.length >= 5) {
+      const { data: contains } = await supabase.from('foods').select(cols).ilike('name', `%${clean}%`).limit(10);
+      if (contains && contains.length > 0) return pickBest(contains, clean);
+    }
     return null;
   } catch (e) { console.log('Food lookup error:', e.message); return null; }
 }
@@ -266,7 +271,7 @@ function inferMealTypeFromHour(hour) {
 }
 
 function segmentMeals(message, currentHour = 12) {
-  // [v81] Handles BOTH natural orientations:
+  // [v82] Handles BOTH natural orientations:
   //   marker-first: "for breakfast 2 eggs, for lunch a salad"   (food AFTER its marker)
   //   food-first:   "2 eggs for breakfast and a salad for lunch" (food BEFORE its marker)
   // The old version only understood marker-first, so "X for dinner" produced ZERO
@@ -295,48 +300,63 @@ function segmentMeals(message, currentHour = 12) {
   }
 
   // "Substantive" = still contains real content after stripping filler words.
-  // Decides orientation and whether a chunk is worth becoming a segment.
-  const FILLER_RE = /\b(i|i'?m|i'?ve|i'?d|we|he|she|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|got|get|just|also|then|and|so|um|uh|my|the|a|an|of|for|as|at|around|about|today|yesterday|tomorrow|tonight|this|that|morning|afternoon|evening|earlier|later|right|now|oh|well|ok|okay)\b/gi;
+  // Includes ANNOUNCEMENT filler ("what I've eaten today so far", "here's everything",
+  // "let me tell you") — a lead like that is narration, not food, and must not flip
+  // the orientation to food-first.
+  const FILLER_RE = /\b(i|i'?m|i'?ve|i'?d|we|he|she|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|got|get|just|also|then|and|so|um|uh|my|the|a|an|of|for|as|at|around|about|today|yesterday|tomorrow|tonight|this|that|morning|afternoon|evening|earlier|later|right|now|oh|well|ok|okay|what|whats|everything|all|here|heres|is|was|been|far|did|tell|you|your|see|if|can|coach|hey|hi|hello|please|lets|let|me|it|its|log|logging|logged)\b/gi;
   const substantive = (s) => {
-    const cleaned = (s || "").replace(FILLER_RE, " ").replace(/[^a-z0-9\s-]/gi, " ").replace(/\s+/g, " ").trim();
+    const cleaned = (s || "").replace(/'/g, "").replace(FILLER_RE, " ").replace(/[^a-z0-9\s-]/gi, " ").replace(/\s+/g, " ").trim();
     return cleaned.length > 2;
   };
   const trim = (s) => (s || "").replace(/^[\s,.:;\u2014-]+|[\s,.:;]+$/g, "").trim();
+  const UNIT_WORDS_RE = /\b(oz|ounce|ounces|cup|cups|g|gram|grams|kg|lb|lbs|pound|pounds|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|serving|servings|bottle|can|bowl|plate|half|quarter)\b/i;
 
   const lead = text.slice(0, hits[0].index);
-  const foodFirst = substantive(lead);
-  const segments = [];
 
-  if (foodFirst) {
-    // Food PRECEDES its marker: the chunk between the previous marker's end and this
-    // marker's start belongs to THIS marker. ("2 eggs for breakfast and a salad for lunch")
+  const buildFoodFirst = () => {
+    const segs = [];
     let prevEnd = 0;
     for (let i = 0; i < hits.length; i++) {
       const chunk = trim(text.slice(prevEnd, hits[i].index));
-      if (substantive(chunk)) segments.push({ meal_type: hits[i].type, text: chunk, inferred: false });
+      if (substantive(chunk)) segs.push({ meal_type: hits[i].type, text: chunk, inferred: false });
       prevEnd = hits[i].end;
     }
-    // Trailing text after the LAST marker: if that marker got nothing before it, the tail
-    // is its food ("eggs for breakfast, for lunch a sandwich"); otherwise it's a
-    // continuation of the last meal ("chicken for dinner and then a cookie").
     const tail = trim(text.slice(hits[hits.length - 1].end));
     if (substantive(tail)) {
       const lastType = hits[hits.length - 1].type;
-      const lastSeg = segments[segments.length - 1];
+      const lastSeg = segs[segs.length - 1];
       if (!lastSeg || lastSeg.meal_type !== lastType) {
-        segments.push({ meal_type: lastType, text: tail, inferred: false });
+        segs.push({ meal_type: lastType, text: tail, inferred: false });
       } else {
         lastSeg.text += " " + tail;
       }
     }
-  } else {
-    // Marker PRECEDES its food (original behavior): chunk runs from this marker's end
-    // to the next marker's start. ("for breakfast 2 eggs, for lunch a salad")
+    return segs;
+  };
+
+  const buildMarkerFirst = () => {
+    const segs = [];
     for (let i = 0; i < hits.length; i++) {
       const stop = (i + 1 < hits.length) ? hits[i + 1].index : text.length;
       const chunk = trim(text.slice(hits[i].end, stop));
-      if (substantive(chunk)) segments.push({ meal_type: hits[i].type, text: chunk, inferred: false });
+      if (substantive(chunk)) segs.push({ meal_type: hits[i].type, text: chunk, inferred: false });
     }
+    return segs;
+  };
+
+  // ORIENTATION DECISION (cascade):
+  // 1. Lead is pure filler/announcement -> marker-first ("...so for breakfast I had X")
+  // 2. Lead contains a quantity (digit or unit word) -> food-first ("8oz chicken ... for dinner")
+  // 3. Ambiguous -> build both, keep the one that assigns food to MORE markers; tie -> marker-first
+  let segments;
+  if (!substantive(lead)) {
+    segments = buildMarkerFirst();
+  } else if (/\d/.test(lead) || UNIT_WORDS_RE.test(lead)) {
+    segments = buildFoodFirst();
+  } else {
+    const ff = buildFoodFirst();
+    const mf = buildMarkerFirst();
+    segments = ff.length > mf.length ? ff : mf;
   }
 
   // HARD FLOOR: never return zero segments for a message that reached this point.
@@ -434,7 +454,7 @@ async function lookupFoodMacros(message) {
   return results.length > 0 ? results : null;
 }
 
-// ═══ [v81] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
+// ═══ [v82] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
 // The AI NEVER writes the chat message for a food log. Its only jobs here are:
 //   (a) parse a segment the code parser couldn't (returns structured items, no numbers)
 //   (b) supply macros for ONE unknown food (JSON only → written to `foods` → read back)
@@ -603,10 +623,42 @@ async function resolveOneFood(item) {
   };
 }
 
+// Words that must NEVER become a food on their own — they're macro/label vocabulary
+// that voice dictation leaves behind ("...has 160 cal 3 g of fat and 30 g of protein").
+const FOOD_STOPWORDS = new Set([
+  "cal", "cals", "calorie", "calories", "kcal",
+  "carb", "carbs", "carbohydrate", "carbohydrates",
+  "fat", "fats", "gram", "grams", "macro", "macros",
+  "sugar", "sugars", "fiber", "fibre", "sodium",
+]);
+
+// Strip dictated nutrition specs ("160 cal", "3 g of fat", "three carbs", "30 g of protein")
+// from a segment BEFORE parsing, so macro words never become phantom foods.
+// The lookahead requires the macro word to be followed by a boundary (and/comma/number/end),
+// so real foods like "2 protein bars" are untouched ("protein" is followed by "bars").
+function stripInlineMacroSpecs(text) {
+  if (!text) return text;
+  const NUMW = "(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|half)";
+  const MACRO = "(?:calories?|cals?|kcal|protein|carbs?|carbohydrates?|fats?|sugars?|fiber|fibre|sodium)";
+  const BOUNDARY = "(?=\\s*(?:and\\b|,|\\.|;|:|$|\\d|one\\b|two\\b|three\\b|four\\b|five\\b|six\\b|seven\\b|eight\\b|nine\\b|ten\\b|that\\b|which\\b|this\\b|it\\b|so\\b))";
+  const re = new RegExp(`\\b${NUMW}\\s*(?:g|grams?|mg)?\\s*(?:of\\s+)?${MACRO}${BOUNDARY}`, "gi");
+  let out = text, prev;
+  do { prev = out; out = out.replace(re, " "); } while (out !== prev);
+  // clean the connectors the specs leave behind ("that has", "which has", "with")
+  out = out.replace(/\b(that|which|it)\s+(has|have|had|contains?|is|was)\b/gi, " ");
+  return out.replace(/\s+/g, " ").trim();
+}
+
 // Resolve a whole segment: code parser first; AI parse ONLY if code found nothing.
 async function resolveSegment(segText) {
-  let parsed = parseFoodItems(segText);
-  if (parsed.length === 0) parsed = await parseSegmentViaAI(segText);
+  const cleanedText = stripInlineMacroSpecs(segText);
+  let parsed = parseFoodItems(cleanedText);
+  if (parsed.length === 0) parsed = await parseSegmentViaAI(cleanedText);
+  // Drop stopword and too-short "foods" — macro vocabulary and dictation debris.
+  parsed = parsed.filter(it => {
+    const f = (it.food || "").trim().toLowerCase();
+    return f.length >= 3 && !FOOD_STOPWORDS.has(f);
+  });
   const items = [];
   const unresolved = [];
   for (const it of parsed.slice(0, 6)) {
@@ -918,7 +970,7 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
-    // ═══ [v81] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
+    // ═══ [v82] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
     // The conversational AI below NEVER runs for a food log. Code segments the
     // message, resolves every food from the database (AI fills gaps in the
     // background via write-back), renders the message, and returns cards.
@@ -952,7 +1004,7 @@ export async function POST(req) {
         if (items.length > 0) {
           cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, items });
         }
-        console.log(`  [v81] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
+        console.log(`  [v82] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
       }
 
       // Nothing identifiable anywhere → deterministic clarifying message (code, not AI).
@@ -986,7 +1038,7 @@ export async function POST(req) {
         logMessageId = inserted?.id || null;
       } catch (e) { console.log("Save error:", e); }
 
-      console.log(`=== FOOD LOG [v81] | ${cards.length} card(s) | conversational AI: skipped`);
+      console.log(`=== FOOD LOG [v82] | ${cards.length} card(s) | conversational AI: skipped`);
       return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
@@ -1713,7 +1765,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI [v81] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v82] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 
