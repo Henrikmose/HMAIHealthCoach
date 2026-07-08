@@ -43,42 +43,70 @@ return getLocalDate();
 
 // ── INTENT: question vs. statement (TENSE-INDEPENDENT) ──
 // Tense must NOT decide anything. The 4 buttons decide eaten-vs-planned.
-function isFoodQuestion(text) {
-  if (!text) return false;
-  const t = text.trim();
+// ── INTENT CLASSIFIER (code, not AI; three stable signals, not a scenario list) ──
+// Decides only ONE thing: is there food to show a meal card for (a log OR a plan), or is this
+// a question? Eaten-vs-planned is NOT decided here — the buttons do that. The three signals
+// back each other up so we don't have to enumerate every phrasing:
+//   1) Question FORM (ends in "?" or a question stem)     -> question   [checked first]
+//   2) A small, stable set of "stating food" phrases      -> food
+//   3) Backup: a quantity + food-ish token present         -> food
+// "what" is disambiguated by what FOLLOWS it: "what I ate" = food; "what is a good" = question.
+
+function isQuestionForm(t) {
   if (/\?\s*$/.test(t)) return true;
   return [
-    /^\s*(is|are|was|were|should|shall|can|could|would|will|do|does|did|how|what|which|why|when|where|who)\b/i,
-    /\bis\s+\w+.*\b(good|ok|okay|healthy|better|worse|fine)\b/i,
-    /\bshould i\b/i,
-    /\bhow (much|many)\b/i,
-    /\bwhat'?s in\b/i,
-    /\bgood (option|choice|idea|pick)\b/i,
-    /\bbetter (option|choice|than)\b/i,
-    /\bany (ideas|suggestions|recommendations)\b/i,
+    /^\s*(how\s+(many|much))\b/i,
+    /^\s*(is|are|was|were)\b/i,
+    /^\s*should\s+i\b/i,
+    /^\s*can\s+i\b/i,
+    /^\s*what\s+should\b/i,
+    /^\s*what('?s|\s+is)\s+a\s+good\b/i,
+    /^\s*(which|why)\b/i,
+    /\bany\s+(ideas|suggestions|recommendations)\b/i,
+    /\bgood\s+(option|choice|idea|pick)\b/i,
     /\bhelp me (pick|choose|decide)\b/i,
   ].some((re) => re.test(t));
 }
+
+function statesFoodPhrase(t) {
+  // "what I ate/had", "I ate/had/having", "for breakfast/lunch/dinner", "I'm planning ..."
+  return [
+    /\b(i\s+(just\s+)?(ate|had|have|having|eat|drank|drink|consumed|ordered)|i'?ve\s+(just\s+)?(had|eaten|consumed)|i'?m\s+(having|eating|drinking|ordering|planning))\b/i,
+    /\bi'?ll\s+(have|eat|get|take)\b/i,
+    /\bi\s+(will|am going to|'?m going to)\s+(have|eat|get)\b/i,
+    /\bfor\s+(breakfast|lunch|dinner|a?\s*snack)\b/i,
+    /\b(what|everything|all|here'?s what|this is what)\s+i\s+(ate|had|'?ve\s+eaten|have\s+eaten|plan|'?m\s+planning)\b/i,
+    /^\s*(breakfast|lunch|dinner|snack)\s*(was|:|-)/i,
+  ].some((re) => re.test(t));
+}
+
+function hasQuantifiedFood(t) {
+  // Backup signal: a quantity token near a word, for phrasings the phrase-set doesn't cover
+  // ("a cup of rice and 6oz salmon"). Deliberately simple; server-side parser is authoritative.
+  const hasQty = /\b(\d+(\.\d+)?|a|an|some|half|one|two|three|four|couple|\u00bd|\u00bc|\u00be)\s*(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|bottle|can|bowl|plate|serving|servings)?\b/i.test(t);
+  const shortEnough = t.split(/\s+/).length <= 40;
+  const notAdvicey = !/\b(should|healthy|better|worse|recommend|suggest|good\s+(for|option|choice))\b/i.test(t);
+  return hasQty && shortEnough && notAdvicey;
+}
+
+// isFoodQuestion kept for compatibility with other call sites: true = it's a question (no card).
+function isFoodQuestion(text) {
+  if (!text) return false;
+  const t = text.trim();
+  if (isQuestionForm(t)) return true;      // question form wins first
+  if (statesFoodPhrase(t)) return false;   // clearly stating food -> not a question
+  return false;                            // default: let statesAFood decide via food content
+}
+
 function statesAFood(text) {
   if (!text) return false;
   const t = text.trim();
-  if (isFoodQuestion(t)) return false;
-  return [
-    /\bi\s+(just\s+)?(ate|had|have|having|eat|drank|drink|consumed|got|getting|ordered|ordering)\b/i,
-    /\bi'?m\s+(having|eating|getting|drinking|ordering)\b/i,
-    /\bi'?ve\s+(just\s+)?(had|eaten|consumed)\b/i,
-    /\bi'?ll\s+(have|eat|get|take|do)\b/i,
-    /\bi\s+will\s+(have|eat|get)\b/i,
-    /\bi'?m\s+going\s+to\s+(have|eat|get)\b/i,
-    /\bgoing\s+with\s+(the\s+)?\w+/i,
-    /\bfor\s+(breakfast|lunch|dinner|a?\s*snack)\b/i,
-  ].some((re) => re.test(t))
-  || (
-    /\b(\d+(\.\d+)?|a|an|some|half|one|two|three|four|couple)\b/i.test(t)
-    && t.split(/\s+/).length <= 12
-    && !/\b(should|good|ok|okay|healthy|better|worse|idea|option|enough|recommend|suggest)\b/i.test(t)
-  );
+  if (isQuestionForm(t)) return false;     // 1) a question is never a food log
+  if (statesFoodPhrase(t)) return true;    // 2) explicit "I ate / for breakfast / what I ate"
+  if (hasQuantifiedFood(t)) return true;   // 3) backup: quantity + food present
+  return false;
 }
+
 function isLogMessage(text) {
   return statesAFood(text);
 }
