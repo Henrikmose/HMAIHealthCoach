@@ -285,6 +285,15 @@ async function lookupFoodMacros(message) {
 
   const results = [];
   for (const item of items.slice(0, 5)) { // max 5 foods per message
+    // 0) COMPOSED-DISH CHECK (must run BEFORE staple/DB matching, or "tacos with potato and
+    //    eggs" matches the potato staple and logs plain potato). A multi-ingredient dish or a
+    //    "with"-phrase is skipped here so the whole dish goes to the AI as one item.
+    const _clean = (item.food || "").toLowerCase();
+    const _wordCount = _clean.split(/\s+/).filter(Boolean).length;
+    if (/\bwith\b/.test(_clean) || _wordCount >= 4) {
+      continue; // skip staple + DB; composed dish -> AI estimate (or weak-guard already asked)
+    }
+
     // 1) COOKED-STAPLE PATH — truthful cooked macros + "(cooked)" label, before the raw DB.
     const staple = matchCookedStaple(item.food);
     if (staple) {
