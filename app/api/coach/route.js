@@ -253,6 +253,49 @@ function calcMacros(food, grams) {
 // accurately (one small potato vs half a cup is a big difference). Rather than
 // guess (or let the AI guess — it collapses "tacos with potato and eggs" to just
 // potato), we ask the user for rough amounts. Returns { weak, question }.
+// ── MEAL SEGMENTER (pure code) ──────────────────────────────────────────────
+// Splits a multi-meal food-log message into {meal_type, text} segments so code (not the
+// AI) decides the meals. Explicit marker ("for breakfast", "as a snack") wins; otherwise
+// infer from time of day. The per-meal card dropdown lets the user override any guess.
+function inferMealTypeFromHour(hour) {
+  if (hour >= 4 && hour < 11) return "breakfast";
+  if (hour >= 11 && hour < 15) return "lunch";
+  if (hour >= 15 && hour < 17) return "snack";
+  if (hour >= 17 && hour < 22) return "dinner";
+  return "snack";
+}
+
+function segmentMeals(message, currentHour = 12) {
+  if (!message) return [];
+  const text = message.trim();
+  const markers = [
+    { type: "breakfast", re: /\b(for |as |had )?breakfast\b/gi },
+    { type: "lunch",     re: /\b(for |as |had )?lunch\b/gi },
+    { type: "dinner",    re: /\b(for |as |had )?dinner\b/gi },
+    { type: "snack",     re: /\b(for |as )?(a )?snack\b/gi },
+  ];
+  const hits = [];
+  for (const m of markers) {
+    m.re.lastIndex = 0;
+    let match;
+    while ((match = m.re.exec(text)) !== null) {
+      hits.push({ type: m.type, index: match.index, end: m.re.lastIndex });
+    }
+  }
+  hits.sort((a, b) => a.index - b.index);
+  if (hits.length === 0) {
+    return [{ meal_type: inferMealTypeFromHour(currentHour), text, inferred: true }];
+  }
+  const segments = [];
+  for (let i = 0; i < hits.length; i++) {
+    const start = hits[i].end;
+    const stop = (i + 1 < hits.length) ? hits[i + 1].index : text.length;
+    const chunk = text.slice(start, stop).replace(/^[\s,:\u2014-]+|[\s,]+$/g, "").trim();
+    if (chunk) segments.push({ meal_type: hits[i].type, text: chunk, inferred: false });
+  }
+  return segments;
+}
+
 function detectWeakComposedFood(message) {
   const t = (message || "").toLowerCase();
   const composedWords = /\b(taco|tacos|burrito|burritos|sandwich|sandwiches|wrap|wraps|bowl|bowls|salad|salads|smoothie|smoothies|stir\s?fry|casserole|stew|soup|curry|omelet|omelette|scramble|plate|dish)\b/;
@@ -285,15 +328,6 @@ async function lookupFoodMacros(message) {
 
   const results = [];
   for (const item of items.slice(0, 5)) { // max 5 foods per message
-    // 0) COMPOSED-DISH CHECK (must run BEFORE staple/DB matching, or "tacos with potato and
-    //    eggs" matches the potato staple and logs plain potato). A multi-ingredient dish or a
-    //    "with"-phrase is skipped here so the whole dish goes to the AI as one item.
-    const _clean = (item.food || "").toLowerCase();
-    const _wordCount = _clean.split(/\s+/).filter(Boolean).length;
-    if (/\bwith\b/.test(_clean) || _wordCount >= 4) {
-      continue; // skip staple + DB; composed dish -> AI estimate (or weak-guard already asked)
-    }
-
     // 1) COOKED-STAPLE PATH — truthful cooked macros + "(cooked)" label, before the raw DB.
     const staple = matchCookedStaple(item.food);
     if (staple) {
@@ -534,37 +568,6 @@ export async function POST(req) {
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
 
-    // ── WEAK-DESCRIPTION GUARD (runs before any provider call, regardless of context.type) ──
-    // Composed food stated with NO real amounts ("tacos with potato and eggs") -> ask for rough
-    // amounts instead of guessing / letting the model collapse it to one item. No AI call made.
-    {
-      // Check BOTH the raw message and any context message — whichever is the real food text.
-      // Drop the isLoggingIntent gate: detectWeakComposedFood already only fires on genuinely
-      // weak composed foods, so if it says weak, we ask — no classification can skip it.
-      const guardCandidates = [
-        message,
-        context && context.followUpMessage,
-        context && context.originalMessage,
-        context && context.request,
-      ].filter(Boolean);
-      let weakHit = null;
-      for (const cand of guardCandidates) {
-        const wc = detectWeakComposedFood(cand);
-        if (wc.weak) { weakHit = wc; break; }
-      }
-      const weakCheck = weakHit || { weak: false };
-      if (weakCheck.weak) {
-        console.log("[v79] weak composed food — asking for amounts. candidates:", JSON.stringify(guardCandidates));
-        try {
-          await supabase.from("ai_messages").insert([{
-            user_id: activeUserId, message: message || "", response: weakCheck.question,
-            thread_id: thread_id || null, created_at: new Date().toISOString(),
-          }]);
-        } catch (e) {}
-        return Response.json({ reply: weakCheck.question });
-      }
-    }
-
     // ── CONTINUE-THREAD: when a thread_id is present, load the whole chain from ai_messages
     // and feed it to the AI as context. Default (no thread) keeps the slice(-1) behavior.
     const stripMealData = (t) => (t || "").replace(/<<<MEAL_DATA>>>[\s\S]*?<<<END_MEAL_DATA>>>/g, "").trim();
@@ -655,15 +658,48 @@ export async function POST(req) {
 
     // ── DB Food Lookup (for food_log AND meal_planning when user states specific foods) ──
     let dbFoodResults = null;
+    let mealSegments = null; // per-meal resolved groups for multi-meal logs
     if (context?.type === "food_log") {
       const lookupMsg = context.followUpMessage || context.originalMessage || message;
 
-      dbFoodResults = await lookupFoodMacros(lookupMsg);
-      if (dbFoodResults) {
-        console.log(`=== DB FOOD LOOKUP (food_log): found ${dbFoodResults.length} food(s) ===`);
-        dbFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
+      // WEAK-DESCRIPTION GUARD: if it's a composed food with no real amounts, ask for
+      // a rough size instead of guessing or letting the AI collapse it to one ingredient.
+      const weakCheck = detectWeakComposedFood(lookupMsg);
+      if (weakCheck.weak) {
+        console.log("🡒 weak composed food — asking for amounts instead of guessing:", lookupMsg);
+        try {
+          await supabase.from("ai_messages").insert([{
+            user_id: activeUserId, message: message || "", response: weakCheck.question,
+            thread_id: thread_id || null, created_at: new Date().toISOString(),
+          }]);
+        } catch (e) {}
+        return Response.json({ reply: weakCheck.question });
+      }
+
+      // MULTI-MEAL SEGMENTATION (code owns the meal split, not the AI).
+      // Split the message into per-meal segments; if there's more than one, resolve each
+      // segment's foods separately so we can tell the AI to emit one block PER meal.
+      const localHourForSeg = (typeof localHour === "number") ? localHour : 12;
+      const segs = segmentMeals(lookupMsg, localHourForSeg);
+      if (segs.length > 1) {
+        console.log(`=== MULTI-MEAL: ${segs.length} segments ===`);
+        for (const seg of segs) {
+          seg.resolved = await lookupFoodMacros(seg.text); // DB-first, AI-only-for-unknowns (existing engine)
+          console.log(`  [${seg.meal_type}] "${seg.text}" -> ${seg.resolved ? seg.resolved.length + " food(s)" : "AI will estimate"}`);
+        }
+        mealSegments = segs;
+        // Also set dbFoodResults to the flattened resolved foods so downstream logic that
+        // checks "did we find foods" still works; per-meal grouping is carried in mealSegments.
+        dbFoodResults = segs.flatMap(sg => sg.resolved || []);
+        if (dbFoodResults.length === 0) dbFoodResults = null;
       } else {
-        console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
+        dbFoodResults = await lookupFoodMacros(lookupMsg);
+        if (dbFoodResults) {
+          console.log(`=== DB FOOD LOOKUP (food_log): found ${dbFoodResults.length} food(s) ===`);
+          dbFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
+        } else {
+          console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
+        }
       }
     }
 
@@ -1077,10 +1113,31 @@ ${dbFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
   Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
 ` : `For any food not in a database lookup, estimate its macros from your nutrition knowledge. Never ask the user for calories or macros — that's your job.`}
 
+${mealSegments ? `
+═══ MULTIPLE MEALS — CODE HAS ALREADY SPLIT THIS INTO MEALS ═══
+The user logged several meals in one message. Code has split it by meal type and resolved the foods.
+Emit ONE meal block AND ONE MEAL_DATA block PER meal below — in this exact grouping. Do NOT merge meals.
+${mealSegments.map(seg => `
+MEAL: ${seg.meal_type}${seg.inferred ? " (inferred from time — user can change via dropdown)" : ""}
+User said: "${seg.text}"
+${seg.resolved && seg.resolved.length > 0
+  ? "Resolved foods (USE THESE EXACT NUMBERS):\n" + seg.resolved.map(r => `  ${r.food} (${r.amount} ${r.unit} = ${r.grams}g): ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`).join("\n")
+  : "No DB match — estimate these foods' macros from your knowledge."}
+`).join("\n")}
+Emit a separate MEAL_DATA block for each MEAL above, each with its own meal_type and items[]. This is REQUIRED so the app can render one card per meal.
+` : ""}
 HOW TO LOG:
 - Build the meal block immediately. "a", "half", "some", "2", "8oz", "medium" are all valid quantities — never re-ask for a quantity that's present, and never re-confirm a quantity or meal type the user already gave. Only ask if a food has NO amount at all (bare "chicken"), about just that one food, one question max.
 - Prep method, doneness, and brand never matter — never ask about them. No commentary on the choice itself — just log it.
 - "I also had X" / "add X to my [meal]" → log ONLY the new item, not a combined block. The dashboard sums entries automatically.
+
+═══ MULTIPLE MEALS IN ONE MESSAGE (very common — the user logs their whole day at once) ═══
+When the user lists several meals in one message (e.g. "for breakfast X, as a snack Y, for lunch Z, for dinner W"):
+- Output a SEPARATE meal block AND a SEPARATE MEAL_DATA block for EACH meal — one per meal type (breakfast, lunch, snack, dinner). Do NOT merge them into one block.
+- Each MEAL_DATA block has its own meal_type and its own items[]. Emit them all, one after another, in your response.
+- DO NOT interrogate. If a quantity is present ("about a cup", "1 waffle", "a bottle"), USE IT — assume a reasonable standard amount and log it. The user corrects anything wrong by tapping Edit on that meal's card. Asking a pile of clarifying questions for a normal day-log is the WRONG behavior.
+- Only if a food has NO amount at all AND you truly cannot estimate a standard portion, make your best standard-portion assumption anyway and log it (the card lets them fix it). Prefer logging over asking.
+- The app renders each meal as its own card with its own Add/Edit/Cancel — so the user can accept the good ones and fix or cancel a wrong one. Your job is to emit all the blocks so those cards can appear.
 
 MEAL BLOCK FORMAT:
 [MealType]
@@ -1100,7 +1157,8 @@ After your conversational response above, you MUST append a structured JSON bloc
 This is parsed by the app to save the meal. Without it, the user cannot save what they logged.
 The user does NOT see this block — it's stripped before display.
 
-EVERY food log response MUST end with this block. No exceptions. Even if you're asking a clarifying question, if you've identified ANY foods in the user's message, emit MEAL_DATA for what you know.
+EVERY food log response MUST end with a MEAL_DATA block. No exceptions. Even if you're asking a clarifying question, if you've identified ANY foods in the user's message, emit MEAL_DATA for what you know.
+IF THE USER LOGGED MULTIPLE MEALS: emit MULTIPLE MEAL_DATA blocks — one per meal type — back to back, each with its own meal_type and items[]. The app parses all of them and renders one card per meal. Never collapse several meals into a single block.
 
 ═══ FORBIDDEN PATTERN — NEVER DO THIS ═══
 DO NOT ask "Want me to log this for you?" or "Should I save this?" or "Shall I add this?" or any similar chat-based save confirmation.
