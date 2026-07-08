@@ -538,11 +538,23 @@ export async function POST(req) {
     // Composed food stated with NO real amounts ("tacos with potato and eggs") -> ask for rough
     // amounts instead of guessing / letting the model collapse it to one item. No AI call made.
     {
-      const guardMsg = (context && (context.followUpMessage || context.originalMessage || context.request)) || message || "";
-      const isLoggingIntent = !context || context.type === "food_log" || context.type === "meal_planning" || context.type === undefined;
-      const weakCheck = detectWeakComposedFood(guardMsg);
-      if (isLoggingIntent && weakCheck.weak) {
-        console.log("[v78] weak composed food — asking for amounts:", guardMsg);
+      // Check BOTH the raw message and any context message — whichever is the real food text.
+      // Drop the isLoggingIntent gate: detectWeakComposedFood already only fires on genuinely
+      // weak composed foods, so if it says weak, we ask — no classification can skip it.
+      const guardCandidates = [
+        message,
+        context && context.followUpMessage,
+        context && context.originalMessage,
+        context && context.request,
+      ].filter(Boolean);
+      let weakHit = null;
+      for (const cand of guardCandidates) {
+        const wc = detectWeakComposedFood(cand);
+        if (wc.weak) { weakHit = wc; break; }
+      }
+      const weakCheck = weakHit || { weak: false };
+      if (weakCheck.weak) {
+        console.log("[v79] weak composed food — asking for amounts. candidates:", JSON.stringify(guardCandidates));
         try {
           await supabase.from("ai_messages").insert([{
             user_id: activeUserId, message: message || "", response: weakCheck.question,
