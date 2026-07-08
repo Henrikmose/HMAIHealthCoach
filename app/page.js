@@ -1069,7 +1069,11 @@ const reply = data.reply || "Sorry, could not get a response.";
 
 // Session 1: extract the structured MEAL_DATA JSON block (if present) and strip it from the displayed text.
 // The JSON is for the save handler; the user should never see it in chat.
-const mealData = extractMealData(reply);
+// Prefer CODE-BUILT mealData from the server (buttons never depend on the AI emitting a block).
+// Fall back to parsing the AI's block only if the server didn't provide structured data.
+const mealData = (data.mealData && Array.isArray(data.mealData.items) && data.mealData.items.length > 0)
+  ? data.mealData
+  : extractMealData(reply);
 const displayReply = applyCodeOwnedTotals(cleanForDisplay(reply), mealData);
 
 const parsedReplyMeals = parseAllMeals(displayReply);

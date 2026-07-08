@@ -1482,7 +1482,36 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
       aiMessageId = inserted?.id || null;
     } catch (e) { console.log("Save error:", e); }
 
-    return Response.json({ reply, aiMessageId });
+    // CODE-BUILT MEAL DATA (buttons must NEVER depend on the AI emitting a MEAL_DATA block).
+    // If code resolved foods for a food log, build the structured mealData here — with
+    // code-computed totals — and return it. The client renders save buttons directly from this.
+    let codeMealData = null;
+    if (context?.type === "food_log") {
+      const buildItems = (foods, mealType) => (foods || []).map(r => ({
+        canonical_name: r.food, food: r.food,
+        amount: r.amount, unit: r.unit, grams: r.grams,
+        calories: Math.round(Number(r.calories) || 0),
+        protein: Math.round(Number(r.protein) || 0),
+        carbs: Math.round(Number(r.carbs) || 0),
+        fat: Math.round(Number(r.fat) || 0),
+        source: r.source || "ai_estimate",
+        meal_type: mealType,
+      }));
+      if (mealSegments && mealSegments.length > 1) {
+        // Multi-meal: one merged mealData tagged per item, multi_meal flag for per-card render.
+        const items = [];
+        for (const seg of mealSegments) items.push(...buildItems(seg.resolved, seg.meal_type));
+        if (items.length > 0) {
+          codeMealData = { meal_type: mealSegments[0].meal_type, items, multi_meal: true };
+        }
+      } else if (dbFoodResults && dbFoodResults.length > 0) {
+        // Single meal: infer type from time if the user didn't state one.
+        const singleType = (segmentMeals(lookupMsg, (typeof localHour === "number" ? localHour : 12))[0] || {}).meal_type || "snack";
+        codeMealData = { meal_type: singleType, items: buildItems(dbFoodResults, singleType) };
+      }
+    }
+
+    return Response.json({ reply, aiMessageId, mealData: codeMealData });
 
   } catch (error) {
     console.error("AI ERROR:", error);
