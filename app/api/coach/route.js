@@ -382,6 +382,216 @@ async function lookupFoodMacros(message) {
   return results.length > 0 ? results : null;
 }
 
+// ═══ [v80] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
+// The AI NEVER writes the chat message for a food log. Its only jobs here are:
+//   (a) parse a segment the code parser couldn't (returns structured items, no numbers)
+//   (b) supply macros for ONE unknown food (JSON only → written to `foods` → read back)
+// Everything the user sees is rendered by code from database values.
+
+async function callStructuredAI(prompt) {
+  const provider = process.env.AI_PROVIDER || "openai";
+  try {
+    if (provider === "claude") {
+      const response = await anthropic.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 500,
+        temperature: 0,
+        messages: [{ role: "user", content: prompt }],
+      });
+      return response.content.find(b => b.type === "text")?.text || "";
+    } else {
+      const completion = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        messages: [{ role: "user", content: prompt }],
+      });
+      return completion.choices[0].message.content || "";
+    }
+  } catch (e) { console.log("structured AI call failed:", e.message); return ""; }
+}
+
+function parseLooseJSON(text) {
+  if (!text) return null;
+  const cleaned = text.replace(/```json|```/g, "").trim();
+  try { return JSON.parse(cleaned); } catch {}
+  const m = cleaned.match(/[\[{][\s\S]*[\]}]/);
+  if (m) { try { return JSON.parse(m[0]); } catch {} }
+  return null;
+}
+
+// (a) UNDERSTANDING fallback — used ONLY when parseFoodItems finds nothing in a segment.
+// Returns structured items (food/amount/unit). Never returns macros or any displayed text.
+async function parseSegmentViaAI(text) {
+  const prompt = `Extract the foods from this food-log text. Return ONLY a JSON array, no markdown, no prose:
+[{"food":"<name>","amount":<number>,"unit":"<unit>"}]
+Use "serving" as the unit when none is stated. Text: "${(text || "").replace(/"/g, "'")}"`;
+  const raw = await callStructuredAI(prompt);
+  const parsed = parseLooseJSON(raw);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .filter(it => it && typeof it.food === "string" && it.food.trim().length > 1)
+    .slice(0, 8)
+    .map(it => ({
+      food: it.food.trim(),
+      amount: Number(it.amount) > 0 ? Number(it.amount) : 1,
+      unit: (typeof it.unit === "string" && it.unit.trim()) ? it.unit.trim().toLowerCase() : "serving",
+    }));
+}
+
+// (b) MACROS for one unknown food. The result NEVER goes toward the screen —
+// it goes into `foods`, and the STORED ROW is what feeds the message.
+async function fetchMacrosViaAI(food, amount, unit) {
+  const isWeightUnit = /^(oz|ounce|ounces|g|gram|grams|kg|lb|lbs|pound|pounds|ml)$/.test((unit || "").toLowerCase());
+  const prompt = `You are a nutrition database. Return ONLY valid JSON, no markdown, no prose:
+{"canonical_name":"<standard name>","grams_per_serving":<number>,"calories":<number>,"protein":<number>,"carbs":<number>,"fat":<number>}
+Values are for ONE standard serving of: ${food}.${isWeightUnit ? "" : ` One serving = 1 ${unit}.`}`;
+  const raw = await callStructuredAI(prompt);
+  const parsed = parseLooseJSON(raw);
+  if (!parsed || typeof parsed !== "object") return null;
+  const n = k => Number(parsed[k]);
+  if (!(n("calories") >= 0)) return null;
+  return {
+    canonical_name: (parsed.canonical_name || food).toString().slice(0, 120),
+    grams_per_serving: n("grams_per_serving") > 0 ? n("grams_per_serving") : 0,
+    calories: Math.round(n("calories") || 0),
+    protein: Math.round((n("protein") || 0) * 10) / 10,
+    carbs: Math.round((n("carbs") || 0) * 10) / 10,
+    fat: Math.round((n("fat") || 0) * 10) / 10,
+  };
+}
+
+// Write the AI-found food to `foods` (source='ai_estimate', per-SERVING values in the
+// per-100g columns — the established write-back convention) and return the STORED row.
+// If a row with this name already exists (another user logged it meanwhile), use that one.
+async function writeBackAIFood(macros) {
+  const cols = "id, name, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g";
+  try {
+    const { data: existing } = await supabase.from("foods")
+      .select(cols).ilike("name", macros.canonical_name).limit(1);
+    if (existing && existing[0]) return existing[0];
+    const { data: inserted, error } = await supabase.from("foods").insert([{
+      name: macros.canonical_name,
+      category: "ai",
+      source: "ai_estimate",
+      calories_per_100g: macros.calories,
+      protein_per_100g: macros.protein,
+      carbs_per_100g: macros.carbs,
+      fat_per_100g: macros.fat,
+    }]).select(cols).single();
+    if (error) { console.log("write-back failed:", error.message); return null; }
+    return inserted; // this IS the read-back: the stored row, straight from the database
+  } catch (e) { console.log("write-back error:", e.message); return null; }
+}
+
+const WEIGHT_UNIT_GRAMS = { oz: 28.35, ounce: 28.35, g: 1, gram: 1, kg: 1000, lb: 453.6, pound: 453.6, ml: 1 };
+
+// Resolve ONE parsed item to numbers. Order: cooked staple → foods DB → AI + write-back.
+// Every displayed number comes from the code tables or a database row — never AI prose.
+async function resolveOneFood(item) {
+  // 1) cooked-staple path (code-owned table)
+  const staple = matchCookedStaple(item.food);
+  if (staple) {
+    const grams = gramsForStaple(staple, item.amount, item.unit);
+    const f = grams / 100;
+    return {
+      user_text: `${item.amount} ${item.unit} ${item.food}`,
+      canonical_name: staple.label, food: staple.label,
+      amount: item.amount, unit: item.unit, grams: Math.round(grams),
+      calories: Math.round(staple.per100.calories * f),
+      protein: Math.round(staple.per100.protein * f * 10) / 10,
+      carbs: Math.round(staple.per100.carbs * f * 10) / 10,
+      fat: Math.round(staple.per100.fat * f * 10) / 10,
+      source: "usda_db", usda_food_id: null,
+    };
+  }
+  // 2) database path (custom/community/USDA — one foods table, source column decides math)
+  let row = await lookupFood(item.food);
+  let aiGramsPerServing = 0;
+  // 3) unknown food → AI supplies macros ONCE → written to foods → stored row is used
+  if (!row) {
+    const macros = await fetchMacrosViaAI(item.food, item.amount, item.unit);
+    if (!macros) return null;
+    aiGramsPerServing = macros.grams_per_serving || 0;
+    row = await writeBackAIFood(macros);
+    if (!row) {
+      // DB write failed — serve the user this once from the same values; nothing cached
+      row = { name: macros.canonical_name, source: "ai_estimate",
+        calories_per_100g: macros.calories, protein_per_100g: macros.protein,
+        carbs_per_100g: macros.carbs, fat_per_100g: macros.fat };
+    }
+  }
+  const ftype = (row.source || "usda").toLowerCase();
+  if (ftype === "ai_estimate" || ftype === "label") {
+    // Serving-based math. Weight units convert via grams-per-serving when the AI supplied it.
+    let servings = Number(item.amount) || 1;
+    const gpu = WEIGHT_UNIT_GRAMS[(item.unit || "").toLowerCase().replace(/s$/, "")];
+    if (gpu && aiGramsPerServing > 0) servings = (servings * gpu) / aiGramsPerServing;
+    servings = Math.round(servings * 100) / 100;
+    return {
+      user_text: `${item.amount} ${item.unit} ${item.food}`,
+      canonical_name: row.name, food: row.name,
+      amount: servings, unit: "serving",
+      grams: aiGramsPerServing > 0 ? Math.round(servings * aiGramsPerServing) : 0,
+      calories: Math.round((Number(row.calories_per_100g) || 0) * servings),
+      protein: Math.round((Number(row.protein_per_100g) || 0) * servings * 10) / 10,
+      carbs: Math.round((Number(row.carbs_per_100g) || 0) * servings * 10) / 10,
+      fat: Math.round((Number(row.fat_per_100g) || 0) * servings * 10) / 10,
+      source: ftype, usda_food_id: null,
+    };
+  }
+  // USDA gram-based math
+  const grams = await convertToGrams(item.amount, item.unit, row.id);
+  const m = calcMacros(row, grams);
+  return {
+    user_text: `${item.amount} ${item.unit} ${item.food}`,
+    canonical_name: row.name, food: row.name,
+    amount: item.amount, unit: item.unit, grams: Math.round(grams),
+    calories: m.calories, protein: m.protein, carbs: m.carbs, fat: m.fat,
+    source: "usda_db", usda_food_id: row.id || null,
+  };
+}
+
+// Resolve a whole segment: code parser first; AI parse ONLY if code found nothing.
+async function resolveSegment(segText) {
+  let parsed = parseFoodItems(segText);
+  if (parsed.length === 0) parsed = await parseSegmentViaAI(segText);
+  const items = [];
+  const unresolved = [];
+  for (const it of parsed.slice(0, 6)) {
+    const r = await resolveOneFood(it);
+    if (r) items.push(r); else unresolved.push(it.food);
+  }
+  return { items, unresolved };
+}
+
+// Code-rendered card text — identical layout every single time, no AI involvement.
+function renderCardText(card) {
+  const label = card.meal_type.charAt(0).toUpperCase() + card.meal_type.slice(1);
+  const foodsLine = card.items.map(i => `${i.food}, ${i.amount} ${i.unit}`).join("; ");
+  const t = card.items.reduce((a, i) => ({
+    calories: a.calories + (Number(i.calories) || 0),
+    protein: a.protein + (Number(i.protein) || 0),
+    carbs: a.carbs + (Number(i.carbs) || 0),
+    fat: a.fat + (Number(i.fat) || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+  const breakdown = card.items.map(i =>
+    `${i.food} — ${Math.round(i.calories)} cal, ${Math.round(i.protein)}g P, ${Math.round(i.carbs)}g C, ${Math.round(i.fat)}g F`
+  ).join(" | ");
+  let text =
+    `${label}\n` +
+    `- Foods: ${foodsLine}\n` +
+    `- Calories: ${Math.round(t.calories)}\n` +
+    `- Protein: ${Math.round(t.protein)}g\n` +
+    `- Carbs: ${Math.round(t.carbs)}g\n` +
+    `- Fat: ${Math.round(t.fat)}g`;
+  if (card.items.length > 1) text += `\n\nBreakdown: ${breakdown}`;
+  return text;
+}
+
+function renderMealDataBlock(card) {
+  return `<<<MEAL_DATA>>>\n${JSON.stringify({ meal_type: card.meal_type, items: card.items })}\n<<<END_MEAL_DATA>>>`;
+}
+
 function classifyEventType(text) {
   const lower = text.toLowerCase();
   if (/hockey|soccer|football|basketball|tennis|volleyball|baseball|rugby|lacrosse|cricket/.test(lower)) return "sport";
@@ -656,19 +866,18 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
-    // ── DB Food Lookup (for food_log AND meal_planning when user states specific foods) ──
-    // [v79] lookupMsg is hoisted to THIS scope. It was previously declared with `const` inside
-    // the if-block below, but is ALSO referenced much later in the codeMealData block — a
-    // different scope — which threw "ReferenceError: lookupMsg is not defined" and crashed
-    // every single-meal food log that reached this route with a DB hit ("Something went wrong").
+    // ═══ [v80] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
+    // The conversational AI below NEVER runs for a food log. Code segments the
+    // message, resolves every food from the database (AI fills gaps in the
+    // background via write-back), renders the message, and returns cards.
+    let dbFoodResults = null;   // kept for the planning path below
+    let mealSegments = null;    // legacy var; food_log no longer reaches the AI section
     let lookupMsg = null;
-    let dbFoodResults = null;
-    let mealSegments = null; // per-meal resolved groups for multi-meal logs
     if (context?.type === "food_log") {
       lookupMsg = context.followUpMessage || context.originalMessage || message;
 
-      // WEAK-DESCRIPTION GUARD: if it's a composed food with no real amounts, ask for
-      // a rough size instead of guessing or letting the AI collapse it to one ingredient.
+      // WEAK-DESCRIPTION GUARD (unchanged): composed food with zero real amounts →
+      // ask for rough sizes instead of guessing.
       const weakCheck = detectWeakComposedFood(lookupMsg);
       if (weakCheck.weak) {
         console.log("🡒 weak composed food — asking for amounts instead of guessing:", lookupMsg);
@@ -681,31 +890,52 @@ export async function POST(req) {
         return Response.json({ reply: weakCheck.question });
       }
 
-      // MULTI-MEAL SEGMENTATION (code owns the meal split, not the AI).
-      // Split the message into per-meal segments; if there's more than one, resolve each
-      // segment's foods separately so we can tell the AI to emit one block PER meal.
       const localHourForSeg = (typeof localHour === "number") ? localHour : 12;
       const segs = segmentMeals(lookupMsg, localHourForSeg);
-      if (segs.length > 1) {
-        console.log(`=== MULTI-MEAL: ${segs.length} segments ===`);
-        for (const seg of segs) {
-          seg.resolved = await lookupFoodMacros(seg.text); // DB-first, AI-only-for-unknowns (existing engine)
-          console.log(`  [${seg.meal_type}] "${seg.text}" -> ${seg.resolved ? seg.resolved.length + " food(s)" : "AI will estimate"}`);
+      const cards = [];
+      const allUnresolved = [];
+      for (const seg of segs) {
+        const { items, unresolved } = await resolveSegment(seg.text);
+        allUnresolved.push(...unresolved);
+        if (items.length > 0) {
+          cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, items });
         }
-        mealSegments = segs;
-        // Also set dbFoodResults to the flattened resolved foods so downstream logic that
-        // checks "did we find foods" still works; per-meal grouping is carried in mealSegments.
-        dbFoodResults = segs.flatMap(sg => sg.resolved || []);
-        if (dbFoodResults.length === 0) dbFoodResults = null;
-      } else {
-        dbFoodResults = await lookupFoodMacros(lookupMsg);
-        if (dbFoodResults) {
-          console.log(`=== DB FOOD LOOKUP (food_log): found ${dbFoodResults.length} food(s) ===`);
-          dbFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
-        } else {
-          console.log("=== DB FOOD LOOKUP: no match — AI will estimate ===");
-        }
+        console.log(`  [v80] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
       }
+
+      // Nothing identifiable anywhere → deterministic clarifying message (code, not AI).
+      if (cards.length === 0) {
+        const fallbackMsg = "I couldn't identify the foods in that — could you say it again with rough amounts? For example: \"2 eggs and a slice of toast\".";
+        try {
+          await supabase.from("ai_messages").insert([{
+            user_id: activeUserId, message: message || "", response: fallbackMsg,
+            thread_id: thread_id || null, created_at: new Date().toISOString(),
+          }]);
+        } catch (e) {}
+        return Response.json({ reply: fallbackMsg });
+      }
+
+      // Code-rendered display text — identical format every time.
+      let displayText = cards.map(renderCardText).join("\n\n");
+      if (allUnresolved.length > 0) {
+        displayText += `\n\n(I couldn't identify: ${allUnresolved.join(", ")} — send a follow-up with rough amounts and I'll add ${allUnresolved.length > 1 ? "them" : "it"}.)`;
+      }
+
+      // Option A persistence: the STORED response is the code-generated text plus one
+      // MEAL_DATA block per card. Reload re-extracts the exact same cards from this.
+      const storedResponse = displayText + "\n\n" + cards.map(renderMealDataBlock).join("\n");
+
+      let logMessageId = null;
+      try {
+        const { data: inserted } = await supabase.from("ai_messages").insert([{
+          user_id: activeUserId, message: message || "", response: storedResponse,
+          thread_id: thread_id || null, created_at: new Date().toISOString(),
+        }]).select("id").single();
+        logMessageId = inserted?.id || null;
+      } catch (e) { console.log("Save error:", e); }
+
+      console.log(`=== FOOD LOG [v80] | ${cards.length} card(s) | conversational AI: skipped`);
+      return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
     // Planning lookup: only when the user NAMED specific foods (e.g. "I'm planning 8oz chicken and 1/4 cup rice").
@@ -1431,7 +1661,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI [v79] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v80] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 

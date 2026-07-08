@@ -251,7 +251,29 @@ return "snack";                                    // 8pm-4:59am (late/early)
 }
 
 // ========================================
-// MEAL PARSER
+// STANDARD OBSERVATIONS (code-owned, DB-derived)
+// ========================================
+// [v80] This function was CALLED in the previous build but never DEFINED — the
+// try/catch around the call swallowed the ReferenceError, so post-save shortfall
+// observations silently never fired. Now implemented, in code, from DB totals.
+
+function standardObservations(totals, goals) {
+  const calPct = goals.calories > 0 ? Math.round((totals.calories / goals.calories) * 100) : 0;
+  const hour = new Date().getHours();
+  let line = `📊 You're at ${Math.round(totals.calories)}/${goals.calories} cal (${calPct}%) for today.`;
+  let offer = null;
+  const proteinPct = goals.protein > 0 ? totals.protein / goals.protein : 1;
+  if (hour >= 16 && proteinPct < 0.6) {
+    line += ` Protein is at ${Math.round(totals.protein)}g of ${goals.protein}g — worth prioritizing in your next meal.`;
+    offer = "👉 Tap ↩ Continue and ask if you want a high-protein idea.";
+  } else if (calPct > 100) {
+    line += ` You're over your daily target — keep the rest of the day light.`;
+  }
+  return { line, offer };
+}
+
+// ========================================
+// MEAL PARSER (planning path — AI prose day plans)
 // Supports multiple Snacks (pre-game, post-game etc.)
 // Only one Breakfast, Lunch, or Dinner per plan.
 // ========================================
@@ -400,23 +422,18 @@ return meals;
 }
 
 // ========================================
-// STRUCTURED MEAL DATA (JSON) — Batch 2.1 output, Session 1 consumer
+// MEAL CARDS — [v80] STRUCTURED, ONE CARD PER MEAL
 // ========================================
-// Claude appends <<<MEAL_DATA>>>{...}<<<END_MEAL_DATA>>> to food-log responses.
-// The JSON contains per-food items with canonical names and DB-resolved or AI-estimated macros.
-// We extract it for accurate per-food saves, strip it from the displayed message,
-// and fall back to parseAllMeals if the JSON is missing or malformed.
+// A "card" = { meal_type, items: [...] }. Cards are the single source for the
+// save UI. Server food-log responses return them directly (data.mealCards).
+// AI paths that still emit <<<MEAL_DATA>>> blocks (photo, single-meal planning)
+// are parsed into the SAME card shape — one card per block, never merged.
 
-const MEAL_DATA_REGEX = /<<<MEAL_DATA>>>\s*([\s\S]*?)\s*<<<END_MEAL_DATA>>>/;
 const MEAL_DATA_REGEX_G = /<<<MEAL_DATA>>>\s*([\s\S]*?)\s*<<<END_MEAL_DATA>>>/g;
 
-// Multi-meal aware: a single reply can contain SEVERAL MEAL_DATA blocks (user logs a whole
-// day at once — "for breakfast X, lunch Y, dinner Z"). We parse EVERY block and merge their
-// items into one mealData object, tagging each item with its own block's meal_type so each
-// food still saves to the right meal. Single-meal behavior is unchanged (one block -> one type).
-function extractMealData(text) {
-  if (!text) return null;
-  const blocks = [];
+function extractMealCards(text) {
+  if (!text) return [];
+  const cards = [];
   let m;
   MEAL_DATA_REGEX_G.lastIndex = 0;
   while ((m = MEAL_DATA_REGEX_G.exec(text)) !== null) {
@@ -424,27 +441,13 @@ function extractMealData(text) {
       const parsed = JSON.parse(m[1].trim());
       if (parsed && typeof parsed === "object" && parsed.meal_type
           && Array.isArray(parsed.items) && parsed.items.length > 0) {
-        blocks.push(parsed);
+        cards.push({ meal_type: parsed.meal_type, items: parsed.items });
       }
     } catch (err) {
       console.warn("MEAL_DATA JSON parse failed (one block skipped):", err.message);
     }
   }
-  if (blocks.length === 0) return null;
-  if (blocks.length === 1) return blocks[0]; // single meal: identical to before
-
-  // Multiple meals: merge, tagging each item with its meal_type.
-  const mergedItems = [];
-  for (const b of blocks) {
-    for (const it of b.items) {
-      mergedItems.push({ ...it, meal_type: it.meal_type || b.meal_type });
-    }
-  }
-  return {
-    meal_type: blocks[0].meal_type, // primary type (for the header/dropdown default)
-    items: mergedItems,
-    multi_meal: true,               // marker: this review spans multiple meals
-  };
+  return cards;
 }
 
 function stripMealData(text) {
@@ -454,8 +457,8 @@ function stripMealData(text) {
 
 // Honest-wording guard (code-owned, not prompt-owned).
 // The AI is told not to over-promise about photos/macros, but a prompt rule can't GUARANTEE it.
-// This runs on every reply before display, so forbidden promises can never reach the user.
-// A photo identifies foods, not portions — results are always estimates, saved via the buttons.
+// This runs on every AI-authored reply before display, so forbidden promises never reach the user.
+// (Code-authored food-log text skips this — there is nothing to clean.)
 function cleanOverpromises(text) {
   if (!text) return text;
   let out = text;
@@ -478,14 +481,11 @@ function cleanOverpromises(text) {
   return out;
 }
 
-// One pass used everywhere a reply is prepared for display: strip the save block, then clean wording.
-// CODE-OWNED TOTALS: the displayed meal-block total must equal the sum of the items.
-// The AI writes a prose "Calories: X / Protein: Yg ..." summary that can disagree with its own
-// breakdown (e.g. 280 vs 274). We overwrite those summary lines with the code-computed sum from
-// the authoritative MEAL_DATA items, so what the user sees always matches the parts and the saved data.
-function applyCodeOwnedTotals(text, mealData) {
-  if (!text || !mealData || !Array.isArray(mealData.items) || mealData.items.length === 0) return text;
-  const t = mealData.items.reduce((a, it) => ({
+// CODE-OWNED TOTALS (AI-authored text only): the displayed meal-block total must equal
+// the sum of the card items. Code-authored food-log text is already correct by construction.
+function applyCodeOwnedTotals(text, card) {
+  if (!text || !card || !Array.isArray(card.items) || card.items.length === 0) return text;
+  const t = card.items.reduce((a, it) => ({
     calories: a.calories + Math.round(Number(it.calories) || 0),
     protein:  a.protein  + (Number(it.protein) || 0),
     carbs:    a.carbs    + (Number(it.carbs)   || 0),
@@ -493,7 +493,6 @@ function applyCodeOwnedTotals(text, mealData) {
   }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
   const r1 = (n) => Math.round(n);
   let out = text;
-  // Replace the summary lines (tolerant of "- " prefix and spacing). Only the first occurrence each.
   out = out.replace(/(^|\n)(\s*-?\s*Calories:)\s*[\d.]+/i, `$1$2 ${t.calories}`);
   out = out.replace(/(^|\n)(\s*-?\s*Protein:)\s*[\d.]+\s*g/i, `$1$2 ${r1(t.protein)}g`);
   out = out.replace(/(^|\n)(\s*-?\s*Carbs:)\s*[\d.]+\s*g/i, `$1$2 ${r1(t.carbs)}g`);
@@ -505,20 +504,19 @@ function cleanForDisplay(text) {
   return cleanOverpromises(stripMealData(text));
 }
 
-// Convert MEAL_DATA into save-ready meal rows — one per food item.
-// Each row matches the shape that saveMealViaAPI expects (mealType, food, calories, protein, carbs, fat).
-// This is what kills the merged-row bug: a multi-food meal becomes N rows in actual_meals/planned_meals.
-function mealDataToSaveRows(mealData) {
-  if (!mealData || !Array.isArray(mealData.items)) return [];
-  return mealData.items.map((item, idx) => {
-    // Build a clean food string from the item parts.
-    // Prefer canonical_name + amount + unit. Fall back to user_text if canonical is missing.
-    const namePart = item.canonical_name || item.user_text || "Unknown food";
+// Convert ONE card into save-ready meal rows — one row per food item.
+// Also used (with the same food-string construction) to detect "already saved" state,
+// so save and detection can never drift apart.
+function cardToSaveRows(card, mealTypeOverride) {
+  if (!card || !Array.isArray(card.items)) return [];
+  const mealType = mealTypeOverride || card.meal_type;
+  return card.items.map((item) => {
+    const namePart = item.canonical_name || item.food || item.user_text || "Unknown food";
     const qtyPart = item.amount && item.unit ? `${item.amount} ${item.unit}` : (item.amount ? `${item.amount}` : "");
     const food = qtyPart ? `${namePart}, ${qtyPart}` : namePart;
     return {
-      mealType: item.meal_type || mealData.meal_type,       // per-item type for multi-meal logs
-      displayType: item.meal_type || mealData.meal_type,
+      mealType,
+      displayType: mealType,
       food,
       calories: Math.round(Number(item.calories) || 0),
       protein: Math.round(Number(item.protein) || 0),
@@ -526,12 +524,20 @@ function mealDataToSaveRows(mealData) {
       fat: Math.round(Number(item.fat) || 0),
       // Track 2 — carry provenance through to the DB so we can tell where each number came from.
       source: item.source || "ai_estimate",
-      // Track 2 write-back: carry the clean name + grams so the save route can cache
-      // AI-estimated foods into `foods` (per-100g back-calculation done in code, not AI).
-      canonicalName: item.canonical_name || item.user_text || namePart,
+      // Track 2 write-back: carry the clean name + grams for the save route's cache logic.
+      canonicalName: item.canonical_name || item.food || item.user_text || namePart,
       grams: Number(item.grams) || 0,
     };
   });
+}
+
+function cardTotals(card) {
+  return (card?.items || []).reduce((a, i) => ({
+    calories: a.calories + (Number(i.calories) || 0),
+    protein: a.protein + (Number(i.protein) || 0),
+    carbs: a.carbs + (Number(i.carbs) || 0),
+    fat: a.fat + (Number(i.fat) || 0),
+  }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
 }
 
 // ========================================
@@ -626,9 +632,8 @@ const [plannedMeals, setPlannedMeals] = useState([]);
 const isSavingRef = useRef(false);
 const [isSaving, setIsSaving] = useState(false);
 
-// Meal type dropdown overrides per message idx.
-// Default value comes from msg.mealData.meal_type, falls back to time-of-day inference.
-// User can override via the dropdown next to Add to Eaten / Add to Planned.
+// Meal type dropdown overrides, keyed per CARD: `${msgIdx}:${cardIdx}`.
+// Default value comes from the card's meal_type; user overrides via the dropdown.
 const [selectedMealTypes, setSelectedMealTypes] = useState({});
 const [userId, setUserId] = useState(null);
 const [userName, setUserName] = useState("");
@@ -638,8 +643,8 @@ const [showPhotoMenu, setShowPhotoMenu] = useState(false);
 const [loadingStage, setLoadingStage] = useState("");
 
 // Session 2: dismissedPlanKeys persists to localStorage scoped to today's date.
-// NOT a database — purely a UI marker so cancelled meal cards stay hidden across navigation.
-// Nothing about cancelled meals touches actual_meals or planned_meals. Clears at midnight.
+// This is the PLANNING-path (prose day plan) dismissal marker — unchanged in v80.
+// (Known limitation: per-device. On the cleanup list; out of Step 2 scope.)
 const [dismissedPlanKeys, setDismissedPlanKeys] = useState(() => {
 if (typeof window !== "undefined") {
 const storedDate = localStorage.getItem("dismissedPlanKeysDate");
@@ -653,21 +658,8 @@ try { return new Set(JSON.parse(stored)); } catch { return new Set(); }
 return new Set();
 });
 
-// Session 2: dismissedReviewIds persists the same way — ephemeral UI markers for 4-button review Cancel/Edit.
-// Note: these are message indices, which are stable within a session but reset when message order changes.
-// For best behavior, we also store a content-hash so reloads can recover dismissals.
-const [dismissedReviewIds, setDismissedReviewIds] = useState(() => {
-if (typeof window !== "undefined") {
-const storedDate = localStorage.getItem("dismissedReviewIdsDate");
-if (storedDate === getLocalDate()) {
-const stored = localStorage.getItem("dismissedReviewIds");
-if (stored) {
-try { return new Set(JSON.parse(stored)); } catch { return new Set(); }
-}
-}
-}
-return new Set();
-});
+// [v80] dismissedReviewIds (localStorage) is GONE. Card dismissals now live in the
+// ai_messages.dismissed_cards jsonb column — cross-device, permanent, survives everything.
 
 // Persist dismissedPlanKeys whenever it changes
 useEffect(() => {
@@ -676,14 +668,6 @@ localStorage.setItem("dismissedPlanKeysDate", getLocalDate());
 localStorage.setItem("dismissedPlanKeys", JSON.stringify([...dismissedPlanKeys]));
 }
 }, [dismissedPlanKeys]);
-
-// Persist dismissedReviewIds whenever it changes
-useEffect(() => {
-if (typeof window !== "undefined") {
-localStorage.setItem("dismissedReviewIdsDate", getLocalDate());
-localStorage.setItem("dismissedReviewIds", JSON.stringify([...dismissedReviewIds]));
-}
-}, [dismissedReviewIds]);
 
 const messagesEndRef = useRef(null);
 const textareaRef = useRef(null);
@@ -714,9 +698,6 @@ loadTodayMessages(userId);
 }, [userId]);
 
 // Session 2: refresh DB-derived state when user returns to Coach tab from Dashboard or background.
-// This is what fixes the orphan-button / re-tappable / cancelled-reappearing / edited-reverting symptoms.
-// Without this, todayMeals + plannedMeals stay stale (loaded once on mount), so mealAlreadyInDb
-// keeps returning false for meals saved in a different tab/screen.
 useEffect(() => {
 if (!userId) return;
 
@@ -773,30 +754,30 @@ const { data } = await supabase
 .eq("user_id", uid)
 .eq("date", getLocalDate());
 setTodayMeals(data || []);
+return data || [];
 } catch (e) {
 console.log("Meals load error:", e);
+return [];
 }
 }
 
 async function loadPlannedMeals(uid) {
 try {
-// Fix: load today AND all future planned meals so mealAlreadyInDb can match
-// tomorrow/future plans (was: .eq("date", getLocalDate()) which only loaded today,
-// causing duplicates when planning for future dates because cards never recognized as saved).
+// Load today AND all future planned meals so saved-detection can match future plans.
 const { data } = await supabase
 .from("planned_meals").select("*")
 .eq("user_id", uid)
 .gte("date", getLocalDate());
 setPlannedMeals(data || []);
+return data || [];
 } catch (e) {
 console.log("Planned meals load error:", e);
+return [];
 }
 }
 
 async function loadTodayMessages(uid) {
 try {
-// Session 2: filter to today's messages only (was: last 20 messages across all days).
-// Avoids yesterday's stale meal cards reappearing in chat after midnight.
 // Last 24 hours of chat (not just "today") so reopening shows the recent conversation.
 const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -815,29 +796,25 @@ const rebuilt = [];
 for (const row of data.reverse()) {
 if (row.message) rebuilt.push({ role: "user", content: row.message, thread_id: row.thread_id || null });
 if (row.response) {
-  // Session 1 fix: re-extract structured MEAL_DATA from the stored raw response and strip it from the displayed content.
-  // The JSON is persisted raw in ai_messages.response (for debuggability and re-extraction), but never shown to the user.
+  // [v80] Re-extract cards from the stored response. For code-authored food logs the
+  // stored text IS the code-rendered message + per-card MEAL_DATA blocks (Option A).
+  // For legacy/AI-authored messages (photo, planning) the same extraction applies.
   const rawResponse = row.response;
-  const reloadedMealData = extractMealData(rawResponse);
-  const displayResponse = applyCodeOwnedTotals(cleanForDisplay(rawResponse), reloadedMealData);
-  // MEAL_DATA-only architecture: reconstruct mealReview ONLY when MEAL_DATA was emitted.
-  // If AI didn't emit MEAL_DATA (e.g., conversational response with no food), no buttons appear.
-  // This replaces the prose-based heuristic that was unreliable.
-  const hasMealData = reloadedMealData?.items?.length > 0;
+  const reloadedCards = extractMealCards(rawResponse);
+  let displayResponse = cleanForDisplay(rawResponse);
+  if (reloadedCards.length === 1) {
+    displayResponse = applyCodeOwnedTotals(displayResponse, reloadedCards[0]);
+  }
   rebuilt.push({
     role: "assistant",
     content: displayResponse,
-    mealData: reloadedMealData || null,
-    // Resolved fix (Session 2.5): carry the ai_messages row id + resolved flag forward.
-    // When resolved === true, render NO buttons of any kind for this message (action already taken).
+    mealCards: reloadedCards.length > 0 ? reloadedCards : null,
+    // dismissed_cards column: cross-device dismissal state. Tolerate the column
+    // missing (pre-migration) — treat as none dismissed.
+    dismissedCards: Array.isArray(row.dismissed_cards) ? row.dismissed_cards : [],
     aiMessageId: row.id,
     resolved: row.resolved === true,
-    // mealReview attaches when MEAL_DATA exists and message isn't resolved.
-    mealReview: row.resolved === true ? null : (
-      hasMealData
-        ? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
-        : null
-    ),
+    thread_id: row.thread_id || null,
   });
 }
 }
@@ -905,88 +882,15 @@ let newActiveMealLog = activeMealLog;
 // Check if user is confirming a previously suggested meal — MUST check before planning detection
 // Look at last 4 AI messages in case the most recent was a text-only response
 const recentAiMsgs = [...history].reverse().filter(m => m.role === "assistant").slice(0, 4);
-const anyRecentAiHadMeals = recentAiMsgs.some(m => parseAllMeals(m.content).length > 0);
+const anyRecentAiHadMeals = recentAiMsgs.some(m => parseAllMeals(m.content).length > 0 || (m.mealCards && m.mealCards.length > 0));
 const lastAiHadMeals = anyRecentAiHadMeals;
 
-if (isLogMessage(trimmed)) {
-// DB-FIRST ARCHITECTURE: Try USDA lookup before calling AI
-setLoadingStage("Looking up foods in database...");
-
-try {
-const lookupResponse = await fetch("/api/lookup-foods", {
-method: "POST",
-headers: { "Content-Type": "application/json" },
-body: JSON.stringify({ message: trimmed }),
-});
-
-const lookupData = await lookupResponse.json();
-
-// If ALL foods found in DB, skip AI entirely
-// If ALL foods found in DB, build a meal review (same 4-button UI as the AI path) — skip Claude entirely.
-// The user still confirms via Add to Eaten / Add to Planned / Edit / Cancel.
-if (lookupData.found && lookupData.found.length > 0 && lookupData.missing.length === 0) {
-  const mealType = extractMealType(trimmed) || inferMealTypeFromHour(hour);
-  const mealTypeLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1).toLowerCase();
-
-  // Build the meal block text in the exact format parseAllMeals expects.
-  const foodsLine = lookupData.found.map(f => `${f.food}, ${f.amount} ${f.unit}`).join("; ");
-  const totalCals = lookupData.found.reduce((s, f) => s + f.calories, 0);
-  const totalProtein = lookupData.found.reduce((s, f) => s + f.protein, 0);
-  const totalCarbs = lookupData.found.reduce((s, f) => s + f.carbs, 0);
-  const totalFat = lookupData.found.reduce((s, f) => s + f.fat, 0);
-
-  const breakdown = lookupData.found.map(f =>
-    `${f.food} — ${f.calories} cal, ${f.protein}g P, ${f.carbs}g C, ${f.fat}g F`
-  ).join(" | ");
-
-  const mealBlock =
-    `${mealTypeLabel}\n` +
-    `- Foods: ${foodsLine}\n` +
-    `- Calories: ${Math.round(totalCals)}\n` +
-    `- Protein: ${Math.round(totalProtein)}g\n` +
-    `- Carbs: ${Math.round(totalCarbs)}g\n` +
-    `- Fat: ${Math.round(totalFat)}g\n\n` +
-    `Breakdown: ${breakdown}`;
-
- // Build mealData in the SAME shape the button handler (mealDataToSaveRows) expects,
-  // so the 4 buttons save correctly. Without this, DB-first meals show buttons that can't save.
-  const reviewMealData = {
-    meal_type: mealType,
-    items: lookupData.found.map(f => ({
-      user_text: `${f.amount} ${f.unit} ${f.food}`,
-      canonical_name: f.food,
-      amount: f.amount,
-      unit: f.unit,
-      grams: f.grams || 0,
-      calories: f.calories,
-      protein: f.protein,
-      carbs: f.carbs,
-      fat: f.fat,
-      source: "usda_db",
-      usda_food_id: f.usda_food_id || null,
-    })),
-  };
-
-  // Assistant message attaches mealReview actions AND structured mealData so the buttons save.
-  const reviewMessage = {
-    role: "assistant",
-    content: `Review this meal before saving:\n\n${mealBlock}`,
-    mealReview: { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] },
-    mealData: reviewMealData,
-  };
-
-  setHistory([...newHistory, reviewMessage]);
-  setIsLoading(false);
-  setLoadingStage("");
-  return; // Skip AI call entirely — DB had everything we needed
-
-}
-} catch (lookupError) {
-console.log("DB lookup failed, falling back to AI:", lookupError);
-}
-
-// If DB lookup failed or foods missing, proceed with AI
-setLoadingStage("Asking coach...");
+if (isLogMessage(trimmed) && imagesToSend.length === 0) {
+// [v80] ONE ENGINE: every food log goes to the server pipeline. The old client-side
+// lookup-foods shortcut is gone — it duplicated the resolver AND merged whole-day
+// logs into one meal because it never segmented. The server pipeline is code-owned
+// end to end (segmenter → DB resolver → AI-gap write-back → code-rendered cards).
+setLoadingStage("Looking up foods...");
 newActiveMealLog = {
 type: "food_log",
 originalMessage: trimmed,
@@ -995,12 +899,6 @@ conversationStage: "initial",
 };
 setActiveMealLog(newActiveMealLog);
 context = newActiveMealLog;
-} else if (false && isFutureMeal(trimmed) && !isMealPlanningRequest(trimmed)) {
-// DISABLED: tense must not route. "I'll have X" is a stated food -> food_log branch above (both buttons).
-// Future tense food statement → treat as planned meal
-newActiveMealLog = null;
-setActiveMealLog(null);
-context = { type: "meal_planning", request: trimmed, isFutureMeal: true };
 } else if (imagesToSend.length > 0) {
 const photoIntent = detectPhotoIntent(trimmed);
 newActiveMealLog = null;
@@ -1013,19 +911,16 @@ message: trimmed,
 };
 } else if (isConfirmation(trimmed) && lastAiHadMeals) {
 // RULE: The 4 buttons are the ONLY way to save. Typing/saying "yes" never saves anything.
-// If a meal review with buttons is on screen, nudge the user to tap a button instead.
 setHistory([...newHistory, {
 role: "assistant",
-content: "Tap **Add to Eaten** or **Add to Planned** on the meal above to save it. (You can also change the meal type, Edit, or Cancel there.)"
+content: "Tap Add to Eaten or Add to Planned on the meal above to save it. (You can also change the meal type, Edit, or Cancel there.)",
+isConfirmation: true,
 }]);
 setIsLoading(false);
 setLoadingStage("");
 return; // Never save from a typed/spoken confirmation
 } else if (!statesAFood(trimmed) && (isMealPlanningRequest(trimmed) || isWeightGoalRequest(trimmed) || isMealSwap(trimmed))) {
 // A stated food (any tense) must NEVER be captured by planning — it goes to the food_log path above.
-// CRITICAL: Check meal planning/swap BEFORE activeMealLog fallback
-// This prevents meal planning requests from being treated as food log follow-ups
-
 if (isMealSwap(trimmed) && history.some(m => m.role === "assistant" && parseAllMeals(m.content).length > 0)) {
 // Delete the previous AI message with meals to avoid confusion
 const lastAiMealIdx = history.findLastIndex(m => m.role === "assistant" && parseAllMeals(m.content).length > 0);
@@ -1067,53 +962,29 @@ images: imagesToSend.length > 0 ? imagesToSend.map(img => ({ base64: img.base64,
 const data = await res.json();
 const reply = data.reply || "Sorry, could not get a response.";
 
-// Session 1: extract the structured MEAL_DATA JSON block (if present) and strip it from the displayed text.
-// The JSON is for the save handler; the user should never see it in chat.
-// Prefer CODE-BUILT mealData from the server (buttons never depend on the AI emitting a block).
-// Fall back to parsing the AI's block only if the server didn't provide structured data.
-const mealData = (data.mealData && Array.isArray(data.mealData.items) && data.mealData.items.length > 0)
-  ? data.mealData
-  : extractMealData(reply);
-const displayReply = applyCodeOwnedTotals(cleanForDisplay(reply), mealData);
-
-const parsedReplyMeals = parseAllMeals(displayReply);
-// New rule: MEAL_DATA emission is the single source of truth for "this is a save-able single meal."
-// AI emits MEAL_DATA only in food_log context (single meal). Multi-meal plans don't emit it.
-// This routes BOTH past-tense logs AND future-tense plans through the 4-button review.
-const hasMealData = !!mealData && Array.isArray(mealData.items) && mealData.items.length > 0;
-// Multi-meal EATEN log (user logged several meals at once) -> route to the SAME per-meal card
-// renderer that day-plans use, so each meal gets its own Add/Edit/Cancel + type dropdown.
-// We do NOT force the single 4-button review in that case.
-const isMultiMealLog = hasMealData && mealData.multi_meal === true;
-const shouldForceMealReview =
-(hasMealData && !isMultiMealLog) ||
-// Legacy fallback for the (now rare) case where AI doesn't emit MEAL_DATA but user clearly logged a meal.
-// Once MEAL_DATA emission is reliable, this fallback can be removed.
-(isLogMessage(trimmed) &&
-(parsedReplyMeals.length > 0 ||
-/foods:|calories:|protein:|carbs:|fat:|breakdown:/i.test(displayReply)));
-
-const cleanedReplyForReview = displayReply
-.replace(/you'?ve logged this meal\.?\s*✅?/gi, "")
-.replace(/meal logged\.?\s*✅?/gi, "")
-.replace(/logged as eaten\.?/gi, "")
-.trim();
+// [v80] Card resolution:
+// 1) Server-built cards (food logs) — code-authored text, use verbatim, no cleaning needed.
+// 2) AI-authored replies (photo, single-meal planning) — extract cards from the
+//    MEAL_DATA blocks, strip/clean the text, enforce code-owned totals on single cards.
+let mealCards = (Array.isArray(data.mealCards) && data.mealCards.length > 0) ? data.mealCards : null;
+let displayReply;
+if (mealCards) {
+displayReply = reply; // code-rendered by the server — display exactly as-is
+} else {
+const extracted = extractMealCards(reply);
+if (extracted.length > 0) mealCards = extracted;
+displayReply = cleanForDisplay(reply);
+if (mealCards && mealCards.length === 1) {
+displayReply = applyCodeOwnedTotals(displayReply, mealCards[0]);
+}
+}
 
 const assistantMessage = {
 role: "assistant",
-content: shouldForceMealReview && !displayReply.includes("Review this meal before saving:")
-? `Review this meal before saving:
-
-${cleanedReplyForReview}`
-: displayReply,
-mealReview: data.mealReview || (
-shouldForceMealReview
-? { actions: ["add_to_eaten", "add_to_planned", "edit", "cancel"] }
-: null
-),
-needsConfirmation: data.needsConfirmation || shouldForceMealReview,
-mealData: mealData || null, // Session 1: attach structured items for per-food save in handleMealReviewAction
-isEatenLog: isMultiMealLog === true, // multi-meal log -> per-card renderer shows "Add to Eaten" per meal
+content: displayReply,
+mealCards: mealCards || null,
+dismissedCards: [],
+resolved: false,
 thread_id: activeThreadId,
 aiMessageId: data.aiMessageId || null,
 };
@@ -1123,14 +994,6 @@ setHistory([
 assistantMessage,
 ]);
 
-// The AI response index in history — used to close it after saving
-const aiMsgIdx = newHistory.length;
-
-
-
-// Photo logs now flow through the same 4-button review as text logs (Rule 1: no auto-save, ever).
-// Previously had an auto-save block here that wrote to actual_meals without user confirmation.
-// Removed — the photo response goes through shouldForceMealReview / planning UI just like text.
 } catch (err) {
 console.error("Send error:", err);
 setHistory([
@@ -1153,8 +1016,6 @@ setIsSaving(true);
 try {
 const uid = userId;
 
-// Session 2: check if this meal already exists in DB instead of in savedPlanKeys.
-// mealAlreadyInDb logic is duplicated here as a guard (the function is defined in render scope).
 const alreadyExists = (rows) => rows.some(r =>
 r.date === targetDate &&
 r.meal_type === meal.mealType &&
@@ -1203,7 +1064,6 @@ async function handleAddAllToPlan(meals, msgIdx, targetDate) {
     const uid = userId;
     const failures = [];
     for (const meal of meals) {
-      // Session 2: skip meals already in DB instead of using savedPlanKeys.
       const alreadyExists = (rows) => rows.some(r =>
         r.date === targetDate &&
         r.meal_type === meal.mealType &&
@@ -1219,94 +1079,10 @@ async function handleAddAllToPlan(meals, msgIdx, targetDate) {
           failures.push(`${meal.food}: ${err.message}`);
         }
     }
-    // Session 2: always refetch — even partial successes affect plannedMeals.
     await loadPlannedMeals(uid);
     if (failures.length > 0) {
       alert(`Some meals could not be saved:\n${failures.join("\n")}`);
     }
-    } finally {
-      isSavingRef.current = false;
-      setIsSaving(false);
-    }
-  }
-
-
-async function handleAddToEaten(meal, msgIdx, targetDate) {
-    // Mirror of handleAddToPlan, but saves to actual_meals (EATEN) instead of planned_meals.
-    if (isSavingRef.current) return;
-    isSavingRef.current = true;
-    setIsSaving(true);
-    try {
-      const uid = userId;
-      const alreadyExists = (rows) => rows.some(r =>
-        r.date === targetDate &&
-        r.meal_type === meal.mealType &&
-        r.food === meal.food &&
-        Math.abs(Number(r.calories) - Number(meal.calories)) < 5
-      );
-      if (alreadyExists(todayMeals) || alreadyExists(plannedMeals)) {
-        return; // already saved — render hides the button next paint
-      }
-      // Replace existing for breakfast/lunch/dinner; snacks stack.
-      if (meal.mealType !== "snack") {
-        const { data: existing } = await supabase
-          .from("actual_meals")
-          .select("id")
-          .eq("user_id", uid)
-          .eq("meal_type", meal.mealType)
-          .eq("date", targetDate);
-        if (existing && existing.length > 0) {
-          for (const e of existing) {
-            await supabase.from("actual_meals").delete().eq("id", e.id);
-          }
-        }
-      }
-      try {
-        await saveMealViaAPI("actual_meals", { ...meal, date: targetDate }, uid);
-        await loadTodayMeals(uid);
-      } catch (err) {
-        alert(`Could not save meal: ${err.message || "Please try again."}`);
-      }
-    } finally {
-      isSavingRef.current = false;
-      setIsSaving(false);
-    }
-  }
-
-  async function handleAddAllToEaten(meals, msgIdx, targetDate) {
-    if (isSavingRef.current) return;
-    isSavingRef.current = true;
-    setIsSaving(true);
-    try {
-      const uid = userId;
-      const failures = [];
-      for (const meal of meals) {
-        const alreadyExists = (rows) => rows.some(r =>
-          r.date === targetDate &&
-          r.meal_type === meal.mealType &&
-          r.food === meal.food &&
-          Math.abs(Number(r.calories) - Number(meal.calories)) < 5
-        );
-        if (alreadyExists(todayMeals) || alreadyExists(plannedMeals)) continue;
-        // Replace existing non-snack of the same type so we don't double up.
-        if (meal.mealType !== "snack") {
-          const { data: existing } = await supabase
-            .from("actual_meals").select("id")
-            .eq("user_id", uid).eq("meal_type", meal.mealType).eq("date", targetDate);
-          if (existing && existing.length > 0) {
-            for (const e of existing) await supabase.from("actual_meals").delete().eq("id", e.id);
-          }
-        }
-        try {
-          await saveMealViaAPI("actual_meals", { ...meal, date: targetDate }, uid);
-        } catch (err) {
-          failures.push(`${meal.food}: ${err.message}`);
-        }
-      }
-      await loadTodayMeals(uid);
-      if (failures.length > 0) {
-        alert(`Some meals could not be saved:\n${failures.join("\n")}`);
-      }
     } finally {
       isSavingRef.current = false;
       setIsSaving(false);
@@ -1329,14 +1105,14 @@ const key = getMealKey(msgIdx, meal);
 setDismissedPlanKeys(prev => new Set([...prev, key]));
 }
 
-// Session 2.5: persist resolution to ai_messages.resolved so buttons disappear permanently.
-// Called from all 4 action paths (eat / plan / edit / cancel) after the action is processed.
-async function markMessageResolved(msg) {
-let id = msg?.aiMessageId;
+// ========================================
+// [v80] CARD STATE — cross-device, database-backed
+// ========================================
 
-// Fresh in-session messages don't have an ID yet (route.js inserts but doesn't return id).
-// Fallback: find the most recent unresolved row for this user — that's almost certainly the one
-// the user is acting on (only one assistant message at a time can be in review state).
+// Resolve the ai_messages row id for a message (with the same fallback markMessageResolved used:
+// fresh in-session messages always carry aiMessageId now, but keep the fallback for safety).
+async function getDbIdForMsg(msg) {
+let id = msg?.aiMessageId;
 if (!id && userId) {
 try {
 const { data } = await supabase
@@ -1348,10 +1124,14 @@ const { data } = await supabase
 .limit(1);
 if (data && data.length > 0) id = data[0].id;
 } catch (e) {
-console.warn("Could not look up ai_messages row for resolution:", e.message);
+console.warn("Could not look up ai_messages row:", e.message);
 }
+}
+return id || null;
 }
 
+async function markMessageResolved(msg) {
+const id = await getDbIdForMsg(msg);
 if (!id) return;
 try {
 await supabase
@@ -1363,137 +1143,199 @@ console.warn("Could not mark message resolved:", e.message);
 }
 }
 
-async function handleMealReviewAction(action, msg, idx, overrideMealType) {
-// Session 2.5: resolved=true survives reload via ai_messages column. All 4 action paths set it.
-// Fix 1: double-tap protection — applies to all 4 actions, prevents double-save when network slow.
+// Persist a card dismissal to ai_messages.dismissed_cards (jsonb) — gone on EVERY device.
+async function persistDismissedCards(msg, dismissed) {
+const id = await getDbIdForMsg(msg);
+if (!id) return;
+try {
+await supabase
+.from("ai_messages")
+.update({ dismissed_cards: dismissed })
+.eq("id", id);
+} catch (e) {
+// Column may not exist pre-migration — dismissal still works this session via state.
+console.warn("Could not persist dismissed_cards (run the migration?):", e.message);
+}
+}
+
+// Is this card fully saved in the DB (every item row matches)? Cross-device by nature.
+function cardSavedInDb(card, mealType, targetDate, todayRows, plannedRows) {
+const rows = cardToSaveRows(card, mealType);
+if (rows.length === 0) return false;
+const matches = (dbRows, r) => dbRows.some(dbr =>
+dbr.date === targetDate &&
+dbr.meal_type === r.mealType &&
+dbr.food === r.food &&
+Math.abs(Number(dbr.calories) - Number(r.calories)) < 5
+);
+return rows.every(r => matches(todayRows, r) || matches(plannedRows, r));
+}
+
+// After any card action: if every card on the message is saved-or-dismissed, flip resolved.
+async function checkAndResolveMessage(msg, msgIdx, dismissed, targetDate, freshToday, freshPlanned) {
+const cards = msg.mealCards || [];
+const todayRows = freshToday || todayMeals;
+const plannedRows = freshPlanned || plannedMeals;
+const allHandled = cards.every((card, ci) => {
+if (dismissed.includes(ci)) return true;
+const typeKey = `${msgIdx}:${ci}`;
+const currentType = selectedMealTypes[typeKey] || card.meal_type;
+return cardSavedInDb(card, currentType, targetDate, todayRows, plannedRows);
+});
+if (allHandled && cards.length > 0) {
+await markMessageResolved(msg);
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, resolved: true } : m));
+}
+}
+
+// The single card action handler — eat / plan / edit / cancel, per card.
+async function handleCardAction(action, msg, msgIdx, cardIdx, mealType, targetDate) {
 if (isSavingRef.current) return;
 isSavingRef.current = true;
 setIsSaving(true);
 try {
+const card = (msg.mealCards || [])[cardIdx];
+if (!card) return;
 
-if (action === "cancel") {
-setDismissedReviewIds(prev => new Set([...prev, idx]));
-await markMessageResolved(msg);
-setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
-));
+if (action === "cancel" || action === "edit") {
+// Cancel and Edit are the SAME operation on the card: permanently dismissed,
+// everywhere, forever. Edit just invites a fresh log message afterwards —
+// the correction flows through the normal pipeline as a brand-new card.
+const newDismissed = [...(msg.dismissedCards || []), cardIdx];
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: newDismissed } : m));
+await persistDismissedCards(msg, newDismissed);
 setHistory(prev => [
 ...prev,
-{ role: "assistant", content: "Canceled — I won't save that meal.", isConfirmation: true },
+{
+role: "assistant",
+content: action === "cancel"
+? "Canceled — I won't save that meal."
+: "Got it — tell me what you actually had instead, and I'll build a fresh card.",
+isConfirmation: true,
+},
 ]);
+await checkAndResolveMessage({ ...msg, dismissedCards: newDismissed }, msgIdx, newDismissed, targetDate, null, null);
 return;
 }
 
-if (action === "edit") {
-setDismissedReviewIds(prev => new Set([...prev, idx]));
-await markMessageResolved(msg);
-setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
-));
-setHistory(prev => [
-...prev,
-{ role: "assistant", content: "Got it — tell me what you actually had instead." },
-]);
-return;
-}
-
-try {
-const uid = userId;
-
-// MEAL_DATA is now the single source for the 4-button review.
-// Prose parsing fallback removed — if AI didn't emit MEAL_DATA, no buttons appear.
-let meals = [];
-if (msg.mealData) {
-meals = mealDataToSaveRows(msg.mealData);
-console.log("💾 Using structured MEAL_DATA — items count:", meals.length);
-}
-
-if (!meals.length) {
+// eat / plan
+const rows = cardToSaveRows(card, mealType);
+if (rows.length === 0) {
 alert("No meal data found to save. Try logging again.");
 return;
 }
-
-// Apply meal type override from dropdown if user changed it.
-if (overrideMealType) {
-meals = meals.map(m => ({
-...m,
-mealType: overrideMealType,
-displayType: overrideMealType,
-}));
-console.log("💾 Meal type overridden to:", overrideMealType);
-}
-
 const table = action === "eat" ? "actual_meals" : "planned_meals";
 
-const reviewTargetDate = msg.mealReview?.targetDate || getLocalDate();
+console.log("💾 Saving card:", { cardIdx, count: rows.length, table, date: targetDate, mealType });
 
-console.log("💾 Attempting to save meals:", {
-  count: meals.length,
-  table,
-  date: reviewTargetDate,
-  userId: uid,
-  meals: meals
-});
-
-for (const meal of meals) {
-        await saveMealViaAPI(table, {
-          ...meal,
-          date: reviewTargetDate,
-        }, uid);
-      }
-
-// Session 2: refetch DB state immediately so render's mealAlreadyInDb returns true on next paint.
-// This hides the buttons without needing a separate completion tracking set.
-let freshMealsForObs = null;
-if (action === "eat") {
-freshMealsForObs = await loadTodayMeals(uid);
-} else {
-await loadPlannedMeals(uid);
+try {
+for (const row of rows) {
+await saveMealViaAPI(table, { ...row, date: targetDate }, userId);
 }
 
-// Session 2.5: persist resolution to DB so buttons stay hidden on reload.
-await markMessageResolved(msg);
-
-// Keep the in-memory mutation for immediate visual feedback this session.
-// On reload, the resolved flag from ai_messages will handle the same purpose.
-setHistory(prev => prev.map((m, i) => 
-i === idx ? { ...m, mealReview: null, reviewCompleted: true, resolved: true } : m
-));
+// Refetch DB state so saved-detection hides this card on next paint.
+let freshToday = null, freshPlanned = null;
+if (action === "eat") {
+freshToday = await loadTodayMeals(userId);
+} else {
+freshPlanned = await loadPlannedMeals(userId);
+}
 
 let obsSuffix = "";
 if (action === "eat") {
-  try {
-    const freshTotals = (freshMealsForObs || todayMeals || []).reduce((t, m) => ({
-      calories: t.calories + (Number(m.calories) || 0),
-      protein:  t.protein  + (Number(m.protein)  || 0),
-      carbs:    t.carbs    + (Number(m.carbs)    || 0),
-      fat:      t.fat      + (Number(m.fat)      || 0),
-    }), { calories: 0, protein: 0, carbs: 0, fat: 0 });
-    const obs = standardObservations(freshTotals, goals);
-    if (obs.line) obsSuffix = `\n\n${obs.line}${obs.offer ? "\n\n" + obs.offer : ""}`;
-  } catch (e) { /* best-effort; never block the save */ }
+try {
+const freshTotals = (freshToday || []).reduce((t, m) => ({
+calories: t.calories + (Number(m.calories) || 0),
+protein: t.protein + (Number(m.protein) || 0),
+carbs: t.carbs + (Number(m.carbs) || 0),
+fat: t.fat + (Number(m.fat) || 0),
+}), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+const obs = standardObservations(freshTotals, goals);
+if (obs.line) obsSuffix = `\n\n${obs.line}${obs.offer ? "\n" + obs.offer : ""}`;
+} catch (e) { /* best-effort; never block the save */ }
 }
 
+const label = getMealLabel(mealType);
 setHistory(prev => [
 ...prev,
 {
 role: "assistant",
 content: (action === "eat"
-? "✅ Added to your eaten food"
-: "✅ Added to your planned meals") + obsSuffix,
-isConfirmation: true,   // status message — no Continue button (nothing to continue)
+? `✅ ${label} added to your eaten food`
+: `✅ ${label} added to your planned meals`) + obsSuffix,
+isConfirmation: true,
 },
 ]);
+
+await checkAndResolveMessage(msg, msgIdx, msg.dismissedCards || [], targetDate, freshToday, freshPlanned);
 } catch (err) {
-console.error("❌ MEAL SAVE ERROR:", err);
-console.error("Error details:", {
-  message: err.message,
-  stack: err.stack,
-  userId: userId,
-  table: action === "eat" ? "actual_meals" : "planned_meals"
-});
+console.error("❌ CARD SAVE ERROR:", err);
 alert(`Could not save meal: ${err.message || 'Unknown error'}. Please try again.`);
 }
+} finally {
+isSavingRef.current = false;
+setIsSaving(false);
+}
+}
+
+// Save ALL visible cards in one tap (whole-day logs). Each card keeps its own meal type.
+async function handleAddAllCards(action, msg, msgIdx, visibleCardIdxs, targetDate) {
+if (isSavingRef.current) return;
+isSavingRef.current = true;
+setIsSaving(true);
+try {
+const table = action === "eat" ? "actual_meals" : "planned_meals";
+const failures = [];
+for (const ci of visibleCardIdxs) {
+const card = (msg.mealCards || [])[ci];
+if (!card) continue;
+const typeKey = `${msgIdx}:${ci}`;
+const mealType = selectedMealTypes[typeKey] || card.meal_type;
+const rows = cardToSaveRows(card, mealType);
+for (const row of rows) {
+try {
+await saveMealViaAPI(table, { ...row, date: targetDate }, userId);
+} catch (err) {
+failures.push(`${row.food}: ${err.message}`);
+}
+}
+}
+let freshToday = null, freshPlanned = null;
+if (action === "eat") {
+freshToday = await loadTodayMeals(userId);
+} else {
+freshPlanned = await loadPlannedMeals(userId);
+}
+
+let obsSuffix = "";
+if (action === "eat" && failures.length === 0) {
+try {
+const freshTotals = (freshToday || []).reduce((t, m) => ({
+calories: t.calories + (Number(m.calories) || 0),
+protein: t.protein + (Number(m.protein) || 0),
+carbs: t.carbs + (Number(m.carbs) || 0),
+fat: t.fat + (Number(m.fat) || 0),
+}), { calories: 0, protein: 0, carbs: 0, fat: 0 });
+const obs = standardObservations(freshTotals, goals);
+if (obs.line) obsSuffix = `\n\n${obs.line}${obs.offer ? "\n" + obs.offer : ""}`;
+} catch (e) {}
+}
+
+if (failures.length > 0) {
+alert(`Some meals could not be saved:\n${failures.join("\n")}`);
+} else {
+setHistory(prev => [
+...prev,
+{
+role: "assistant",
+content: (action === "eat"
+? `✅ All ${visibleCardIdxs.length} meals added to your eaten food`
+: `✅ All ${visibleCardIdxs.length} meals added to your planned meals`) + obsSuffix,
+isConfirmation: true,
+},
+]);
+}
+await checkAndResolveMessage(msg, msgIdx, msg.dismissedCards || [], targetDate, freshToday, freshPlanned);
 } finally {
 isSavingRef.current = false;
 setIsSaving(false);
@@ -1687,7 +1529,7 @@ transition:"all .2s" }}>
 {history.map((msg, idx) => {
 const isUser = msg.role === "user";
 
-// Find meals — only look back 3 messages 
+// Find meals — only look back 3 messages (planning-path confirmation flows)
 const findRecentMeals = (beforeIdx) => {
 const limit = Math.max(0, beforeIdx - 3);
 for (let i = beforeIdx - 1; i >= limit; i--) {
@@ -1713,21 +1555,17 @@ const isPhotoSelection = !isUser && prevUserMsg && (
 const { meals: confirmMeals, sourceIdx } = (thisIsPostConfirmAI || isPhotoSelection)
 ? findRecentMeals(idx) : { meals: [], sourceIdx: -1 };
 
-const thisMeals = !isUser ? parseAllMeals(msg.content) : [];
+// PLANNING PATH ONLY: prose meal blocks in AI day plans. A message that carries
+// structured mealCards NEVER uses this path — cards own the save UI.
+const thisMeals = (!isUser && !msg.mealCards) ? parseAllMeals(msg.content) : [];
 
 const triggerText = !isUser && history[idx - 1]?.role === "user"
 ? history[idx - 1].content : "";
 const surroundingTexts = history.slice(Math.max(0, idx - 6), idx).map(m => m.content || "");
 const targetDate = extractTargetDate(triggerText, surroundingTexts);
 
-// Meal-plan review buttons:
-// If the assistant returned one or more meal blocks and this is NOT a food-log review,
-// render each meal as its own planned-meal action.
-// This supports full-day plans and partial plans like breakfast+lunch or snack+dinner.
-// Session 2.5: if the message has been resolved (any of the 4 actions taken), show NO buttons.
-// This is the rule the user articulated: once resolved, gone forever, no buttons of any kind.
 const planMealsFromThisMessage =
-!isUser && !msg.mealReview && !msg.reviewCompleted && !msg.resolved && thisMeals.length > 0
+!isUser && !msg.mealCards && !msg.resolved && thisMeals.length > 0
 ? thisMeals
 : [];
 
@@ -1743,8 +1581,7 @@ const buttonSourceIdx = planMealsFromThisMessage.length > 0
 ? idx
 : (sourceIdx >= 0 ? sourceIdx : idx);
 
-// Hide buttons for meals already saved in the database (by content match).
-            // This is the source of truth — survives reloads, sessions, devices.
+// Hide plan buttons for meals already saved in the database (by content match).
             const mealAlreadyInDb = (m) => {
             
               const matches = (rows) => rows.some(r =>
@@ -1764,10 +1601,22 @@ const buttonSourceIdx = planMealsFromThisMessage.length > 0
             });
 
 const showButtons = visibleButtonMeals.length > 0;
-// Session 2: allSaved is implicit — when all meals are in DB, mealAlreadyInDb filters them all out,
-// visibleButtonMeals becomes empty, and showButtons becomes false. The whole planning UI hides.
-// No separate "all saved" indicator needed; the UI just collapses cleanly.
 const allSaved = false;
+
+// [v80] CARD VISIBILITY — one card per meal, each with its own lifecycle:
+// hidden when the message is resolved, when the card index is in dismissed_cards
+// (cross-device, DB-backed), or when every item row already matches the DB (saved).
+const dismissed = msg.dismissedCards || [];
+const visibleCardIdxs = (!isUser && !msg.resolved && msg.mealCards)
+? msg.mealCards.map((_, ci) => ci).filter(ci => {
+const card = msg.mealCards[ci];
+if (dismissed.includes(ci)) return false;
+const typeKey = `${idx}:${ci}`;
+const currentType = selectedMealTypes[typeKey] || card.meal_type;
+if (cardSavedInDb(card, currentType, targetDate, todayMeals, plannedMeals)) return false;
+return true;
+})
+: [];
 
 return (
 <div key={idx} style={{ display:"flex",
@@ -1806,36 +1655,33 @@ color: isUser ? "#fff" : T.text,
 border: isUser ? "none" : `1px solid ${T.aiBorder}`,
 }}>
 {msg.content}
-{!isUser && !msg.resolved && msg.mealReview?.actions?.length > 0 && (() => {
-// MEAL_DATA is the only source for the 4-button review now.
-// If AI didn't emit MEAL_DATA, no buttons appear — user re-asks the AI to log it properly.
-const reviewMeals = msg.mealData ? mealDataToSaveRows(msg.mealData) : [];
+</div>
+)}
 
-if (reviewMeals.length === 0) return null; // No structured data = no save buttons
+{/* [v80] MEAL CARDS — one save box per meal, own dropdown, own buttons */}
+{visibleCardIdxs.length > 0 && (
+<div style={{ display:"flex", flexDirection:"column", gap:8 }}>
 
-// Determine the current meal type for the dropdown.
-// Priority: user-changed value > AI's value from MEAL_DATA > time-of-day inference.
-const aiMealType = msg.mealData?.meal_type || msg.mealData?.mealType;
-const defaultMealType = aiMealType || inferMealTypeFromHour(new Date().getHours());
-const currentMealType = selectedMealTypes[idx] || defaultMealType;
+{visibleCardIdxs.length > 1 && (
+<button
+onClick={() => handleAddAllCards("eat", msg, idx, visibleCardIdxs, targetDate)}
+disabled={isSaving}
+style={{
+fontSize:12, padding:"10px 16px", borderRadius:12, fontWeight:700,
+background: isSaving ? "#10b98155" : "#10b981", color:"#fff",
+border:"none", cursor:"pointer",
+}}
+>
+✅ Add all {visibleCardIdxs.length} meals to eaten
+</button>
+)}
 
-const todayStr = getLocalDate();
-const reviewTargetDate = msg.mealReview?.targetDate || todayStr;
-const mealInDb = (m) => {
-const matches = (rows) => rows.some(r =>
-r.date === reviewTargetDate &&
-r.meal_type === currentMealType &&
-r.food === m.food &&
-Math.abs(Number(r.calories) - Number(m.calories)) < 5
-);
-return matches(todayMeals) || matches(plannedMeals);
-};
-
-const allInDb = reviewMeals.length > 0 && reviewMeals.every(mealInDb);
-const reviewDone = dismissedReviewIds.has(idx) || msg.reviewCompleted || allInDb;
-
-// Don't show buttons if already completed
-if (reviewDone) return null;
+{visibleCardIdxs.map(ci => {
+const card = msg.mealCards[ci];
+const typeKey = `${idx}:${ci}`;
+const currentMealType = selectedMealTypes[typeKey] || card.meal_type;
+const label = getMealLabel(currentMealType);
+const t = cardTotals(card);
 
 const buttonBase = {
 color:"#fff",
@@ -1844,19 +1690,22 @@ borderRadius:10,
 padding:"8px 12px",
 fontWeight:600,
 cursor:"pointer",
-fontSize: 14,
+fontSize: 13,
 };
-
-const onMealTypeChange = (e) => {
-setSelectedMealTypes(prev => ({ ...prev, [idx]: e.target.value }));
-};
-
-const mealTypeLabel = currentMealType.charAt(0).toUpperCase() + currentMealType.slice(1);
 
 return (
-<div style={{ display:"flex", flexWrap:"wrap", gap:8, marginTop:12, alignItems:"center" }}>
+<div key={ci} style={{
+display:"flex", flexDirection:"column", gap:8,
+padding:"12px", borderRadius:12,
+border:`1px solid ${T.border}`, background:T.surface,
+}}>
+<div style={{ fontSize:12, fontWeight:800, color:T.text }}>
+{label} · {Math.round(t.calories)} cal · {Math.round(t.protein)}g P
+</div>
+
+<div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
 <button
-onClick={() => handleMealReviewAction("eat", msg, idx, currentMealType)}
+onClick={() => handleCardAction("eat", msg, idx, ci, currentMealType, targetDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#10b98155" : "#10b981" }}
 >
@@ -1866,7 +1715,7 @@ style={{ ...buttonBase, background: isSaving ? "#10b98155" : "#10b981" }}
 <div style={{ position:"relative", display:"inline-block" }}>
 <select
 value={currentMealType}
-onChange={onMealTypeChange}
+onChange={(e) => setSelectedMealTypes(prev => ({ ...prev, [typeKey]: e.target.value }))}
 disabled={isSaving}
 style={{
 ...buttonBase,
@@ -1894,7 +1743,7 @@ fontSize:10,
 </div>
 
 <button
-onClick={() => handleMealReviewAction("plan", msg, idx, currentMealType)}
+onClick={() => handleCardAction("plan", msg, idx, ci, currentMealType, targetDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
 >
@@ -1902,7 +1751,7 @@ style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
 </button>
 
 <button
-onClick={() => handleMealReviewAction("edit", msg, idx)}
+onClick={() => handleCardAction("edit", msg, idx, ci, currentMealType, targetDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#f59e0b55" : "#f59e0b" }}
 >
@@ -1910,15 +1759,16 @@ style={{ ...buttonBase, background: isSaving ? "#f59e0b55" : "#f59e0b" }}
 </button>
 
 <button
-onClick={() => handleMealReviewAction("cancel", msg, idx)}
+onClick={() => handleCardAction("cancel", msg, idx, ci, currentMealType, targetDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 >
 ❌ Cancel
 </button>
 </div>
+</div>
 );
-})()}
+})}
 </div>
 )}
 
@@ -1951,14 +1801,12 @@ style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
   </button>
 )}
 
-{/* Meal plan buttons */}
+{/* Meal plan buttons (planning path — prose day plans, unchanged) */}
 {showButtons && (
 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
 {visibleButtonMeals.length > 1 && (
 <button
-onClick={() => (msg.isEatenLog
-                  ? handleAddAllToEaten(visibleButtonMeals, buttonSourceIdx, targetDate)
-                  : handleAddAllToPlan(visibleButtonMeals, buttonSourceIdx, targetDate))}
+onClick={() => handleAddAllToPlan(visibleButtonMeals, buttonSourceIdx, targetDate)}
 disabled={allSaved}
 style={{
 fontSize:12,
@@ -1971,14 +1819,12 @@ border:"none",
 cursor: allSaved ? "default" : "pointer",
 }}
 >
-{allSaved ? "✅ All selected meals added" : `+ Add all ${visibleButtonMeals.length} meals to ${msg.isEatenLog ? "eaten" : "plan"}`}
+{allSaved ? "✅ All selected meals added" : `+ Add all ${visibleButtonMeals.length} meals to plan`}
 </button>
 )}
 
 {visibleButtonMeals.map(meal => {
 const key = getMealKey(buttonSourceIdx, meal);
-// Session 2: visibleButtonMeals already filters out DB-saved meals via mealAlreadyInDb.
-// Belt-and-suspenders DB check here in case of any timing edge case.
 const isSaved = mealAlreadyInDb(meal);
 const label = getMealLabel(meal.displayType);
 const hasExisting = meal.mealType !== "snack" && plannedMeals.some(
@@ -2004,9 +1850,7 @@ background:T.surface,
 
 <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
 <button
-onClick={() => (msg.isEatenLog
-                    ? handleAddToEaten(meal, buttonSourceIdx, targetDate)
-                    : handleAddToPlan(meal, buttonSourceIdx, targetDate))}
+onClick={() => handleAddToPlan(meal, buttonSourceIdx, targetDate)}
 style={{
 fontSize:12,
 padding:"8px 10px",
@@ -2018,7 +1862,7 @@ color:"#fff",
 cursor:"pointer",
 }}
 >
-{hasExisting ? `↺ Replace ${label}` : `+ Add ${label}${msg.isEatenLog ? " (eaten)" : ""}`}
+{hasExisting ? `↺ Replace ${label}` : `+ Add ${label}`}
 </button>
 
 <button
