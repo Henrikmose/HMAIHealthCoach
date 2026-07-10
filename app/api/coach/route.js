@@ -203,7 +203,15 @@ function gramsForStaple(st, amount, unit) {
 async function lookupFood(foodName) {
   if (!foodName) return null;
   const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
-  const clean = foodName.trim().toLowerCase();
+  // [v84] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
+  // (a leading "-" turns the full-text stage into a NOT-query that matches nearly the
+  // whole table — the espresso incident), and junk/too-short terms never reach the DB.
+  const clean = foodName.trim().toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/(^|\s)-+/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (clean.length < 3) return null;
   // COMPOSED DISH GUARD: "tacos with eggs, potato, tortilla", "burrito with rice beans chicken", etc.
   // A multi-ingredient dish must NOT fuzzy-match a single ingredient (e.g. logging just "potato").
   // Send it to the AI to estimate the whole dish as one item. Heuristic: contains "with", or is a
@@ -271,7 +279,7 @@ function inferMealTypeFromHour(hour) {
 }
 
 function segmentMeals(message, currentHour = 12) {
-  // [v82] Handles BOTH natural orientations:
+  // [v84] Handles BOTH natural orientations:
   //   marker-first: "for breakfast 2 eggs, for lunch a salad"   (food AFTER its marker)
   //   food-first:   "2 eggs for breakfast and a salad for lunch" (food BEFORE its marker)
   // The old version only understood marker-first, so "X for dinner" produced ZERO
@@ -454,7 +462,7 @@ async function lookupFoodMacros(message) {
   return results.length > 0 ? results : null;
 }
 
-// ═══ [v82] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
+// ═══ [v84] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
 // The AI NEVER writes the chat message for a food log. Its only jobs here are:
 //   (a) parse a segment the code parser couldn't (returns structured items, no numbers)
 //   (b) supply macros for ONE unknown food (JSON only → written to `foods` → read back)
@@ -557,6 +565,37 @@ async function writeBackAIFood(macros) {
 
 const WEIGHT_UNIT_GRAMS = { oz: 28.35, ounce: 28.35, g: 1, gram: 1, kg: 1000, lb: 453.6, pound: 453.6, ml: 1 };
 
+// ═══ [v84] CARD-CARRIED DATES ═══════════════════════════════════════════════
+// The target date is decided ONCE, here, at log time, from the log message itself —
+// then stored inside each card. The client renders the stored date and lets the user
+// correct it with one tap. Render-time date recomputation (which sampled surrounding
+// chat and produced today/tomorrow chaos) is dead.
+function shiftDate(dateStr, days) {
+  const d = new Date(dateStr + "T12:00:00");
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function detectLogDate(text, todayStr) {
+  const t = (text || "").toLowerCase();
+  if (/\byesterday\b/.test(t)) return shiftDate(todayStr, -1);
+  if (/\b(day before yesterday)\b/.test(t)) return shiftDate(todayStr, -2);
+  if (/\btomorrow\b/.test(t)) return shiftDate(todayStr, 1);
+  if (/\blast night\b/.test(t)) {
+    // "last night" before ~11am means the previous calendar day
+    return todayStr; // conservative default; hour-aware version below overrides
+  }
+  return todayStr;
+}
+
+function detectLogDateWithHour(text, todayStr, hour) {
+  const t = (text || "").toLowerCase();
+  if (/\blast night\b/.test(t) && typeof hour === "number" && hour < 11) {
+    return shiftDate(todayStr, -1);
+  }
+  return detectLogDate(text, todayStr);
+}
+
 // Resolve ONE parsed item to numbers. Order: cooked staple → foods DB → AI + write-back.
 // Every displayed number comes from the code tables or a database row — never AI prose.
 async function resolveOneFood(item) {
@@ -632,18 +671,28 @@ const FOOD_STOPWORDS = new Set([
   "sugar", "sugars", "fiber", "fibre", "sodium",
 ]);
 
-// Strip dictated nutrition specs ("160 cal", "3 g of fat", "three carbs", "30 g of protein")
-// from a segment BEFORE parsing, so macro words never become phantom foods.
-// The lookahead requires the macro word to be followed by a boundary (and/comma/number/end),
-// so real foods like "2 protein bars" are untouched ("protein" is followed by "bars").
+// Strip dictated OR pasted nutrition specs from a segment BEFORE parsing, so macro
+// words never become phantom foods. Handles BOTH orders:
+//   speech order: "60 cal", "3 g of fat", "three carbs"
+//   label order:  "Calories: 60", "Protein 7g" (pasted/typed nutrition panels)
+// Bullet dashes are killed first — a leading "- " once turned "- protein" into a
+// full-text NOT-query that matched the whole foods table (the espresso incident).
+// The number-first boundary allows another macro word to follow ("60 cal fat 2 g"),
+// while "2 protein bars" stays safe: "bars" is not a boundary word.
 function stripInlineMacroSpecs(text) {
   if (!text) return text;
+  let out = text.replace(/(^|\n)\s*[-•*]\s*/g, "$1 "); // bullets die at the source
   const NUMW = "(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|half)";
   const MACRO = "(?:calories?|cals?|kcal|protein|carbs?|carbohydrates?|fats?|sugars?|fiber|fibre|sodium)";
-  const BOUNDARY = "(?=\\s*(?:and\\b|,|\\.|;|:|$|\\d|one\\b|two\\b|three\\b|four\\b|five\\b|six\\b|seven\\b|eight\\b|nine\\b|ten\\b|that\\b|which\\b|this\\b|it\\b|so\\b))";
-  const re = new RegExp(`\\b${NUMW}\\s*(?:g|grams?|mg)?\\s*(?:of\\s+)?${MACRO}${BOUNDARY}`, "gi");
-  let out = text, prev;
-  do { prev = out; out = out.replace(re, " "); } while (out !== prev);
+  const BOUNDARY = `(?=\\s*(?:and\\b|,|\\.|;|:|$|\\d|one\\b|two\\b|three\\b|four\\b|five\\b|six\\b|seven\\b|eight\\b|nine\\b|ten\\b|that\\b|which\\b|this\\b|it\\b|so\\b|of\\b|${MACRO}))`;
+  const numberFirst = new RegExp(`\\b${NUMW}\\s*(?:g|grams?|mg)?\\s*(?:of\\s+)?${MACRO}${BOUNDARY}`, "gi");
+  const labelOrder = new RegExp(`\\b${MACRO}\\s*[:=]?\\s*${NUMW}\\s*(?:g|grams?|mg)?\\b`, "gi");
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(labelOrder, " ");
+    out = out.replace(numberFirst, " ");
+  } while (out !== prev);
   // clean the connectors the specs leave behind ("that has", "which has", "with")
   out = out.replace(/\b(that|which|it)\s+(has|have|had|contains?|is|was)\b/gi, " ");
   return out.replace(/\s+/g, " ").trim();
@@ -655,9 +704,16 @@ async function resolveSegment(segText) {
   let parsed = parseFoodItems(cleanedText);
   if (parsed.length === 0) parsed = await parseSegmentViaAI(cleanedText);
   // Drop stopword and too-short "foods" — macro vocabulary and dictation debris.
+  // Normalized first (leading dashes/punctuation removed), and compounds made ENTIRELY
+  // of stopwords ("cal fat") are dropped too — "60 cal fat 2g" must never become a food.
   parsed = parsed.filter(it => {
-    const f = (it.food || "").trim().toLowerCase();
-    return f.length >= 3 && !FOOD_STOPWORDS.has(f);
+    const f = (it.food || "").trim().toLowerCase().replace(/^[^a-z0-9]+/, "").replace(/\s+/g, " ").trim();
+    it.food = f;
+    if (f.length < 3) return false;
+    if (FOOD_STOPWORDS.has(f)) return false;
+    const words = f.split(" ");
+    if (words.every(w => FOOD_STOPWORDS.has(w))) return false;
+    return true;
   });
   const items = [];
   const unresolved = [];
@@ -693,7 +749,223 @@ function renderCardText(card) {
 }
 
 function renderMealDataBlock(card) {
-  return `<<<MEAL_DATA>>>\n${JSON.stringify({ meal_type: card.meal_type, items: card.items })}\n<<<END_MEAL_DATA>>>`;
+  return `<<<MEAL_DATA>>>\n${JSON.stringify({ meal_type: card.meal_type, date: card.date || null, items: card.items })}\n<<<END_MEAL_DATA>>>`;
+}
+
+// ═══ [v84] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
+// Same division of labor as everything else in CURA:
+//   AI  = language only. It EXTRACTS facts/goal parameters into blocks. Nothing more.
+//   CODE = assigns tiers, computes every number, stores, and applies stored facts.
+// Blocks ride on coach turns that already happen — zero extra AI calls.
+
+// Code-assigned tiers. The AI never decides enforcement level.
+// 1 = HARD (allergies, diet style, exclusions, health conditions)
+// 2 = SOFT (likes/dislikes, lifestyle, nutrient habits)
+// 3 = TIME-BOUNDED (auto-retires by date)
+const FACT_KINDS = {
+  dietary_style: 1, allergen: 1, intolerance: 1, restriction: 1, health_condition: 1,
+  love: 2, dislike: 2, lifestyle: 2, nutrient: 2,
+  constraint: 3,
+};
+
+function normalizeFactBlock(o) {
+  if (!o || typeof o !== "object") return null;
+  const kind = (o.kind || "").toString().toLowerCase().trim();
+  if (!(kind in FACT_KINDS)) return null;
+  const value = (o.value || "").toString().trim();
+  if (value.length < 2 || value.length > 120) return null;
+  const fact = {
+    kind, value,
+    reason: (o.reason || "").toString().slice(0, 200),
+    tier: FACT_KINDS[kind],
+    expires_at: null,
+    frequency_per_week: null,
+  };
+  if (o.expires_at && /^\d{4}-\d{2}-\d{2}$/.test(String(o.expires_at))) {
+    fact.expires_at = String(o.expires_at);
+    fact.tier = 3;
+  }
+  if (kind === "constraint") fact.tier = 3;
+  if (kind === "nutrient" && Number(o.frequency_per_week) > 0) {
+    fact.frequency_per_week = Math.min(21, Math.round(Number(o.frequency_per_week)));
+  }
+  return fact;
+}
+
+// The current goal_type's built-in calorie adjustment (from the profile wizard's table).
+// Backing this out of the stored calories gives estimated maintenance — no height needed.
+function goalTypeAdjustment(goalType) {
+  const t = (goalType || "").toString().toLowerCase();
+  if (t.includes("loss") || t.includes("lose") || t.includes("cut")) return -400;
+  if (t.includes("gain") || t.includes("muscle") || t.includes("bulk")) return 300;
+  if (t.includes("performance")) return 200;
+  return 0;
+}
+
+// Maintenance estimate — two paths, best available wins:
+//  1) TRUE Mifflin-St Jeor when the profile has height_cm (persisted by the wizard as
+//     of v83), age, and weight — same formula and multipliers as the wizard.
+//  2) DELTA method otherwise: back the goal-type adjustment out of the stored calories.
+function estimateMaintenance(profile, currentGoals) {
+  const h = Number(profile?.height_cm);
+  const a = Number(profile?.age);
+  const w = Number(profile?.current_weight);
+  if (h > 0 && a > 0 && w > 0) {
+    const wKg = (profile?.weight_unit || "kg").toString().toLowerCase().startsWith("lb") ? w / 2.205 : w;
+    const isFemale = (profile?.gender || "").toString().toLowerCase().startsWith("f");
+    const bmr = 10 * wKg + 6.25 * h - 5 * a + (isFemale ? -161 : 5);
+    const mult = {
+      sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, "very-active": 1.9,
+    }[(profile?.activity_level || "moderate").toString().toLowerCase()] || 1.55;
+    return Math.round(bmr * mult);
+  }
+  return (Number(currentGoals?.calories) || 2200) - goalTypeAdjustment(currentGoals?.goal_type);
+}
+
+// GOAL math — 100% code. Delta-based against estimated maintenance, with a mandatory
+// safety clamp: max 1.5 lb/week rate and an absolute calorie floor. "Lose 20 lbs in
+// 3 weeks" gets clamped to a safe rate and the card says so.
+function computeGoalTargets(profile, currentGoals, params) {
+  const dir = params.direction === "gain" ? 1 : params.direction === "maintain" ? 0 : -1;
+  let amountLbs = Math.abs(Number(params.amount)) || 0;
+  const unit = (params.amount_unit || "lb").toString().toLowerCase();
+  if (unit.startsWith("k")) amountLbs *= 2.2046;
+
+  const weeks = Number(params.timeframe_weeks) > 0 ? Number(params.timeframe_weeks) : null;
+  const maintenance = estimateMaintenance(profile, currentGoals);
+
+  const MAX_RATE_LBS_WK = 1.5;
+  let ratePerWeek = (dir !== 0) ? (weeks ? amountLbs / weeks : 1) : 0;
+  let clamped = false;
+  if (ratePerWeek > MAX_RATE_LBS_WK) { ratePerWeek = MAX_RATE_LBS_WK; clamped = true; }
+
+  let dailyDelta = dir * ratePerWeek * 3500 / 7;
+  let calories = Math.round(maintenance + dailyDelta);
+
+  const floorCal = (profile?.gender || "").toString().toLowerCase().startsWith("f") ? 1200 : 1500;
+  if (calories < floorCal) {
+    calories = floorCal;
+    clamped = true;
+    dailyDelta = calories - maintenance;
+    ratePerWeek = Math.abs(dailyDelta) * 7 / 3500;
+  }
+
+  const estWeeks = (dir !== 0 && amountLbs > 0)
+    ? Math.ceil(amountLbs / Math.max(ratePerWeek, 0.1)) : null;
+
+  // Macro ratios from the existing wizard table
+  const ratios = dir > 0 ? { p: 0.30, c: 0.45, f: 0.25 }
+              : dir < 0 ? { p: 0.35, c: 0.35, f: 0.30 }
+              :           { p: 0.25, c: 0.45, f: 0.30 };
+  const protein = Math.round(calories * ratios.p / 4);
+  const carbs = Math.round(calories * ratios.c / 4);
+  const fat = Math.round(calories * ratios.f / 9);
+
+  const goal_type = dir > 0 ? "muscle_gain" : dir < 0 ? "fat_loss" : "maintain";
+
+  const cw = Number(profile?.current_weight) || null;
+  const wu = (profile?.weight_unit || "lb").toString();
+  let target_weight = null;
+  if (cw && dir !== 0 && amountLbs > 0) {
+    const amtInUnit = wu.toLowerCase().startsWith("k") ? amountLbs / 2.2046 : amountLbs;
+    target_weight = Math.round((cw + dir * amtInUnit) * 10) / 10;
+  }
+
+  return {
+    calories, protein, carbs, fat, goal_type, target_weight, weight_unit: wu,
+    clamped, weekly_rate_lbs: Math.round(ratePerWeek * 100) / 100,
+    est_weeks: estWeeks, maintenance,
+    direction: params.direction, amount: params.amount, amount_unit: unit,
+  };
+}
+
+// The PROFILE slot of the assembled context object (spec §6). Code-built compact summary
+// of currently-active facts. The `activity` slot intentionally does not exist yet — the
+// activity_log table isn't live; when it is, it fills a slot here and nothing upstream moves.
+async function assembleProfileSlot(userId) {
+  try {
+    const today = getLocalDate();
+    const [dp, hc, np, uf] = await Promise.all([
+      supabase.from("user_dietary_preferences").select("*").eq("user_id", userId).eq("is_active", true).limit(1),
+      supabase.from("user_health_conditions").select("condition, reason").eq("user_id", userId).eq("is_active", true),
+      supabase.from("user_nutrient_preferences").select("nutrient, frequency_per_week, reason").eq("user_id", userId).eq("is_active", true),
+      supabase.from("user_facts").select("kind, value, reason, expires_at").eq("user_id", userId).eq("is_active", true),
+    ]);
+    const lines = [];
+    const arr = (a) => (Array.isArray(a) && a.length ? a.join(", ") : null);
+    const d = dp?.data?.[0];
+    if (d) {
+      if (arr(d.dietary_style)) lines.push(`Dietary style (HARD — never violate in any suggestion): ${arr(d.dietary_style)}`);
+      if (arr(d.allergens)) lines.push(`ALLERGIES (SAFETY-CRITICAL — never suggest, ever): ${arr(d.allergens)}`);
+      if (arr(d.intolerances)) lines.push(`Intolerances (never suggest): ${arr(d.intolerances)}`);
+      if (arr(d.restrictions)) lines.push(`Hard exclusions (never suggest): ${arr(d.restrictions)}`);
+      if (arr(d.loves)) lines.push(`Enjoys: ${arr(d.loves)}`);
+      if (arr(d.dislikes)) lines.push(`Dislikes (avoid suggesting): ${arr(d.dislikes)}`);
+    }
+    for (const c of hc?.data || []) {
+      lines.push(`Health condition: ${c.condition}${c.reason ? ` (${c.reason})` : ""}`);
+    }
+    for (const n of np?.data || []) {
+      lines.push(`Nutrient habit: ${n.nutrient}${n.frequency_per_week ? ` ${n.frequency_per_week}x/week` : ""}${n.reason ? ` — ${n.reason}` : ""}`);
+    }
+    for (const f of uf?.data || []) {
+      if (f.expires_at && f.expires_at < today) continue; // time-bounded: active-by-date, not by flag
+      if (f.kind === "constraint") {
+        lines.push(`Active commitment${f.expires_at ? ` (until ${f.expires_at})` : ""}: ${f.value}`);
+      } else {
+        lines.push(`Lifestyle: ${f.value}${f.reason ? ` (${f.reason})` : ""}`);
+      }
+    }
+    if (lines.length === 0) return "";
+    return `\n\nSTORED PROFILE FACTS (from past conversations and the user's profile — apply them silently; don't recite them unless asked. They shape what you SUGGEST. They must NEVER block, judge, or comment negatively on what the user LOGS):\n- ${lines.join("\n- ")}\n`;
+  } catch (e) {
+    return ""; // missing table (pre-migration) or read error — coach just runs without facts
+  }
+}
+
+const INTEL_CAPTURE_PROMPT = `
+
+FACT & GOAL CAPTURE (silent — never mention these blocks in your prose):
+If the user CLEARLY states a durable fact about themselves, append one FACT_DATA block per fact AFTER your reply:
+<<<FACT_DATA>>>{"kind":"allergen","value":"shellfish","reason":"","expires_at":null}<<<END_FACT_DATA>>>
+Valid kinds: dietary_style (vegan, vegetarian, pescatarian, keto...), allergen, intolerance, restriction (foods they always avoid, e.g. "no pork"), love, dislike, health_condition, nutrient (include "frequency_per_week" if stated, e.g. ginger 5x/week), lifestyle (e.g. "works nights, skips breakfast"), constraint (time-bounded commitment — include "expires_at" as YYYY-MM-DD if a timeframe was given).
+RULES: Only facts the user explicitly stated about themselves — never inferences, never one-off mentions ("I had shrimp" is NOT a fact; "I'm allergic to shrimp" is). When unsure, emit nothing. Do not re-emit facts already listed in STORED PROFILE FACTS.
+If the user states a weight/body goal ("I want to lose 10 lbs in 2 months"), append:
+<<<GOAL_DATA>>>{"direction":"lose","amount":10,"amount_unit":"lb","timeframe_weeks":8}<<<END_GOAL_DATA>>>
+Parameters ONLY — direction (lose/gain/maintain), amount, amount_unit (lb/kg), timeframe_weeks (null if unstated). NEVER compute or state new calorie/macro targets yourself; code computes them and shows the user a confirmation card.`;
+
+// Post-process the AI reply: validate FACT blocks (code assigns tier), replace GOAL
+// parameter blocks with CODE-COMPUTED targets. Invalid blocks are stripped entirely.
+async function enrichIntelligenceBlocks(reply, userId) {
+  if (!reply) return reply;
+  const hasFact = reply.includes("<<<FACT_DATA>>>");
+  const hasGoal = reply.includes("<<<GOAL_DATA>>>");
+  if (!hasFact && !hasGoal) return reply;
+  let out = reply;
+  if (hasFact) {
+    out = out.replace(/<<<FACT_DATA>>>\s*([\s\S]*?)\s*<<<END_FACT_DATA>>>/g, (m, body) => {
+      const fact = normalizeFactBlock(parseLooseJSON(body));
+      return fact ? `<<<FACT_DATA>>>\n${JSON.stringify(fact)}\n<<<END_FACT_DATA>>>` : "";
+    });
+  }
+  if (hasGoal) {
+    let profile = null, currentGoals = null;
+    try {
+      const { data } = await supabase.from("user_profiles").select("*").eq("user_id", userId).single();
+      profile = data;
+    } catch {}
+    try {
+      const { data } = await supabase.from("goals").select("*").eq("user_id", userId).single();
+      currentGoals = data;
+    } catch {}
+    out = out.replace(/<<<GOAL_DATA>>>\s*([\s\S]*?)\s*<<<END_GOAL_DATA>>>/g, (m, body) => {
+      const parsed = parseLooseJSON(body);
+      if (!parsed || !parsed.direction || !["lose", "gain", "maintain"].includes(String(parsed.direction))) return "";
+      const computed = computeGoalTargets(profile, currentGoals, parsed);
+      return `<<<GOAL_DATA>>>\n${JSON.stringify(computed)}\n<<<END_GOAL_DATA>>>`;
+    });
+  }
+  return out;
 }
 
 function classifyEventType(text) {
@@ -970,7 +1242,7 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
-    // ═══ [v82] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
+    // ═══ [v84] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
     // The conversational AI below NEVER runs for a food log. Code segments the
     // message, resolves every food from the database (AI fills gaps in the
     // background via write-back), renders the message, and returns cards.
@@ -995,6 +1267,10 @@ export async function POST(req) {
       }
 
       const localHourForSeg = (typeof localHour === "number") ? localHour : 12;
+      // [v84] Decide the target date ONCE, from THIS log message ("yesterday" in the
+      // sentence itself — never from surrounding chat), and carry it on every card.
+      const todayStr = getLocalDate(clientDate);
+      const logDate = detectLogDateWithHour(lookupMsg, todayStr, localHourForSeg);
       const segs = segmentMeals(lookupMsg, localHourForSeg);
       const cards = [];
       const allUnresolved = [];
@@ -1002,9 +1278,9 @@ export async function POST(req) {
         const { items, unresolved } = await resolveSegment(seg.text);
         allUnresolved.push(...unresolved);
         if (items.length > 0) {
-          cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, items });
+          cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, date: logDate, items });
         }
-        console.log(`  [v82] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
+        console.log(`  [v84] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
       }
 
       // Nothing identifiable anywhere → deterministic clarifying message (code, not AI).
@@ -1038,7 +1314,7 @@ export async function POST(req) {
         logMessageId = inserted?.id || null;
       } catch (e) { console.log("Save error:", e); }
 
-      console.log(`=== FOOD LOG [v82] | ${cards.length} card(s) | conversational AI: skipped`);
+      console.log(`=== FOOD LOG [v84] | ${cards.length} card(s) | conversational AI: skipped`);
       return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
@@ -1739,6 +2015,17 @@ For MULTIPLE LABEL comparison mode: do NOT emit MEAL_DATA on the comparison resp
 THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo response ends with MEAL_DATA.`;
     }
 
+    // ═══ [v84] INTELLIGENCE: inject the code-assembled PROFILE slot + capture rules.
+    // Coaching/planning turns only — never photos (vision prompt stays clean), and
+    // food logs never reach here (early return). Zero extra AI calls: the blocks
+    // ride on this turn's existing response.
+    const intelEligible = !(images?.length > 0) && context?.type !== "photo";
+    if (intelEligible) {
+      const profileSlot = await assembleProfileSlot(activeUserId);
+      if (profileSlot) systemMessage += profileSlot;
+      systemMessage += INTEL_CAPTURE_PROMPT;
+    }
+
     const conversationMessages = [{ role: "system", content: systemMessage }];
     // Threaded → use the full thread chain; otherwise → existing slice(-1)-style behavior.
     const effectiveHistory = (thread_id && threadHistory.length > 0) ? threadHistory : history;
@@ -1765,7 +2052,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI [v82] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v84] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 
@@ -1810,6 +2097,10 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
       reply = completion.choices[0].message.content;
     }
     console.log("=== RESPONSE ===\n", reply);
+
+    // [v84] Validate FACT blocks and replace GOAL parameters with code-computed targets
+    // BEFORE the reply is stored or returned — the client only ever sees enriched blocks.
+    reply = await enrichIntelligenceBlocks(reply, activeUserId);
 
     let aiMessageId = null;
     try {

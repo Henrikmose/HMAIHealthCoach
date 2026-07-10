@@ -441,7 +441,7 @@ function extractMealCards(text) {
       const parsed = JSON.parse(m[1].trim());
       if (parsed && typeof parsed === "object" && parsed.meal_type
           && Array.isArray(parsed.items) && parsed.items.length > 0) {
-        cards.push({ meal_type: parsed.meal_type, items: parsed.items });
+        cards.push({ meal_type: parsed.meal_type, date: parsed.date || null, items: parsed.items });
       }
     } catch (err) {
       console.warn("MEAL_DATA JSON parse failed (one block skipped):", err.message);
@@ -452,7 +452,62 @@ function extractMealCards(text) {
 
 function stripMealData(text) {
   if (!text) return text;
-  return text.replace(MEAL_DATA_REGEX_G, "").trim(); // g flag: strip ALL blocks, never leak code
+  return text
+    .replace(MEAL_DATA_REGEX_G, "")
+    .replace(FACT_DATA_REGEX_G, "")
+    .replace(GOAL_DATA_REGEX_G, "")
+    .trim(); // g flags: strip ALL blocks, never leak code
+}
+
+// ═══ [v83] INTELLIGENCE CARDS — FACT_DATA / GOAL_DATA ═══
+// Same lifecycle as meal cards: extracted from the stored response, rendered as
+// confirmation cards, dismissed/saved state persisted in ai_messages.dismissed_cards
+// (string tokens "f0"/"g0" so they never collide with numeric meal-card indices).
+
+const FACT_DATA_REGEX_G = /<<<FACT_DATA>>>\s*([\s\S]*?)\s*<<<END_FACT_DATA>>>/g;
+const GOAL_DATA_REGEX_G = /<<<GOAL_DATA>>>\s*([\s\S]*?)\s*<<<END_GOAL_DATA>>>/g;
+
+function extractBlocks(text, regex) {
+  if (!text) return [];
+  const out = [];
+  let m;
+  regex.lastIndex = 0;
+  while ((m = regex.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      if (parsed && typeof parsed === "object") out.push(parsed);
+    } catch (err) { /* skip malformed block */ }
+  }
+  return out;
+}
+
+function extractFactCards(text) {
+  return extractBlocks(text, FACT_DATA_REGEX_G).filter(f => f.kind && f.value);
+}
+
+function extractGoalCards(text) {
+  return extractBlocks(text, GOAL_DATA_REGEX_G).filter(g => Number(g.calories) > 0);
+}
+
+const FACT_KIND_LABELS = {
+  dietary_style: "Diet style",
+  allergen: "Allergy",
+  intolerance: "Intolerance",
+  restriction: "Won't eat",
+  love: "Loves",
+  dislike: "Dislikes",
+  health_condition: "Health condition",
+  nutrient: "Nutrient goal",
+  lifestyle: "Lifestyle",
+  constraint: "Commitment",
+};
+
+function factCardLabel(fact) {
+  const kind = FACT_KIND_LABELS[fact.kind] || fact.kind;
+  let label = `${kind}: ${fact.value}`;
+  if (fact.kind === "nutrient" && fact.frequency_per_week) label += ` (${fact.frequency_per_week}x/week)`;
+  if (fact.expires_at) label += ` — until ${fact.expires_at}`;
+  return label;
 }
 
 // Honest-wording guard (code-owned, not prompt-owned).
@@ -561,6 +616,17 @@ snack_3: "Snack 3",
 return labels[displayType] || displayType.charAt(0).toUpperCase() + displayType.slice(1);
 }
 
+// [v84] Friendly label for a card's date: Today / Yesterday / Tomorrow / "Jul 9"
+function dateLabel(dateStr) {
+if (!dateStr) return "Today";
+const today = getLocalDate();
+if (dateStr === today) return "Today";
+if (dateStr === addDays(today, -1)) return "Yesterday";
+if (dateStr === addDays(today, 1)) return "Tomorrow";
+const d = new Date(dateStr + "T12:00:00");
+return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 // ========================================
 // API SAVE (server-side route bypasses RLS)
 // ========================================
@@ -635,6 +701,9 @@ const [isSaving, setIsSaving] = useState(false);
 // Meal type dropdown overrides, keyed per CARD: `${msgIdx}:${cardIdx}`.
 // Default value comes from the card's meal_type; user overrides via the dropdown.
 const [selectedMealTypes, setSelectedMealTypes] = useState({});
+// [v84] Per-card DATE overrides, same key scheme. Default comes from card.date
+// (decided by the server at log time); the select makes a wrong guess one tap to fix.
+const [selectedCardDates, setSelectedCardDates] = useState({});
 const [userId, setUserId] = useState(null);
 const [userName, setUserName] = useState("");
 const [goals, setGoals] = useState({ calories: 2200, protein: 180, carbs: 220, fat: 70 });
@@ -801,6 +870,8 @@ if (row.response) {
   // For legacy/AI-authored messages (photo, planning) the same extraction applies.
   const rawResponse = row.response;
   const reloadedCards = extractMealCards(rawResponse);
+  const reloadedFacts = extractFactCards(rawResponse);
+  const reloadedGoals = extractGoalCards(rawResponse);
   let displayResponse = cleanForDisplay(rawResponse);
   if (reloadedCards.length === 1) {
     displayResponse = applyCodeOwnedTotals(displayResponse, reloadedCards[0]);
@@ -809,6 +880,8 @@ if (row.response) {
     role: "assistant",
     content: displayResponse,
     mealCards: reloadedCards.length > 0 ? reloadedCards : null,
+    factCards: reloadedFacts.length > 0 ? reloadedFacts : null,
+    goalCards: reloadedGoals.length > 0 ? reloadedGoals : null,
     // dismissed_cards column: cross-device dismissal state. Tolerate the column
     // missing (pre-migration) — treat as none dismissed.
     dismissedCards: Array.isArray(row.dismissed_cards) ? row.dismissed_cards : [],
@@ -967,6 +1040,8 @@ const reply = data.reply || "Sorry, could not get a response.";
 // 2) AI-authored replies (photo, single-meal planning) — extract cards from the
 //    MEAL_DATA blocks, strip/clean the text, enforce code-owned totals on single cards.
 let mealCards = (Array.isArray(data.mealCards) && data.mealCards.length > 0) ? data.mealCards : null;
+const factCards = extractFactCards(reply);
+const goalCards = extractGoalCards(reply);
 let displayReply;
 if (mealCards) {
 displayReply = reply; // code-rendered by the server — display exactly as-is
@@ -983,6 +1058,8 @@ const assistantMessage = {
 role: "assistant",
 content: displayReply,
 mealCards: mealCards || null,
+factCards: factCards.length > 0 ? factCards : null,
+goalCards: goalCards.length > 0 ? goalCards : null,
 dismissedCards: [],
 resolved: false,
 thread_id: activeThreadId,
@@ -1233,6 +1310,12 @@ for (const row of rows) {
 await saveMealViaAPI(table, { ...row, date: targetDate }, userId);
 }
 
+// [v84] On success the card is ALSO dismissed (cross-device, DB-backed). Saved-detection
+// by DB match only sees today's meals, so backdated saves used to leave zombie cards.
+const savedDismissed = [...(msg.dismissedCards || []), cardIdx];
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: savedDismissed } : m));
+await persistDismissedCards(msg, savedDismissed);
+
 // Refetch DB state so saved-detection hides this card on next paint.
 let freshToday = null, freshPlanned = null;
 if (action === "eat") {
@@ -1242,7 +1325,7 @@ freshPlanned = await loadPlannedMeals(userId);
 }
 
 let obsSuffix = "";
-if (action === "eat") {
+if (action === "eat" && targetDate === getLocalDate()) {
 try {
 const freshTotals = (freshToday || []).reduce((t, m) => ({
 calories: t.calories + (Number(m.calories) || 0),
@@ -1256,18 +1339,19 @@ if (obs.line) obsSuffix = `\n\n${obs.line}${obs.offer ? "\n" + obs.offer : ""}`;
 }
 
 const label = getMealLabel(mealType);
+const when = dateLabel(targetDate);
 setHistory(prev => [
 ...prev,
 {
 role: "assistant",
 content: (action === "eat"
-? `✅ ${label} added to your eaten food`
-: `✅ ${label} added to your planned meals`) + obsSuffix,
+? `✅ ${label} (${when}) added to your eaten food`
+: `✅ ${label} (${when}) added to your planned meals`) + obsSuffix,
 isConfirmation: true,
 },
 ]);
 
-await checkAndResolveMessage(msg, msgIdx, msg.dismissedCards || [], targetDate, freshToday, freshPlanned);
+await checkAndResolveMessage({ ...msg, dismissedCards: savedDismissed }, msgIdx, savedDismissed, targetDate, freshToday, freshPlanned);
 } catch (err) {
 console.error("❌ CARD SAVE ERROR:", err);
 alert(`Could not save meal: ${err.message || 'Unknown error'}. Please try again.`);
@@ -1286,19 +1370,32 @@ setIsSaving(true);
 try {
 const table = action === "eat" ? "actual_meals" : "planned_meals";
 const failures = [];
+const savedIdxs = [];
 for (const ci of visibleCardIdxs) {
 const card = (msg.mealCards || [])[ci];
 if (!card) continue;
 const typeKey = `${msgIdx}:${ci}`;
 const mealType = selectedMealTypes[typeKey] || card.meal_type;
+// [v84] each card saves to ITS OWN date (override > card-carried > message default)
+const cardDate = selectedCardDates[typeKey] || card.date || targetDate;
 const rows = cardToSaveRows(card, mealType);
+let cardFailed = false;
 for (const row of rows) {
 try {
-await saveMealViaAPI(table, { ...row, date: targetDate }, userId);
+await saveMealViaAPI(table, { ...row, date: cardDate }, userId);
 } catch (err) {
 failures.push(`${row.food}: ${err.message}`);
+cardFailed = true;
 }
 }
+if (!cardFailed) savedIdxs.push(ci);
+}
+// [v84] dismiss every successfully saved card (cross-device; survives backdating)
+let newDismissed = msg.dismissedCards || [];
+if (savedIdxs.length > 0) {
+newDismissed = [...newDismissed, ...savedIdxs];
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: newDismissed } : m));
+await persistDismissedCards(msg, newDismissed);
 }
 let freshToday = null, freshPlanned = null;
 if (action === "eat") {
@@ -1308,7 +1405,7 @@ freshPlanned = await loadPlannedMeals(userId);
 }
 
 let obsSuffix = "";
-if (action === "eat" && failures.length === 0) {
+if (action === "eat" && failures.length === 0 && freshToday) {
 try {
 const freshTotals = (freshToday || []).reduce((t, m) => ({
 calories: t.calories + (Number(m.calories) || 0),
@@ -1335,7 +1432,52 @@ isConfirmation: true,
 },
 ]);
 }
-await checkAndResolveMessage(msg, msgIdx, msg.dismissedCards || [], targetDate, freshToday, freshPlanned);
+await checkAndResolveMessage({ ...msg, dismissedCards: newDismissed }, msgIdx, newDismissed, targetDate, freshToday, freshPlanned);
+} finally {
+isSavingRef.current = false;
+setIsSaving(false);
+}
+}
+
+// [v83] Fact/goal confirmation cards. Save writes through /api/facts; both save and
+// dismiss push a string token ("f0"/"g0") into the same dismissed_cards store the meal
+// cards use — cross-device, permanent, and collision-free with numeric meal indices.
+async function handleIntelCard(action, msg, msgIdx, token, payload) {
+if (isSavingRef.current) return;
+isSavingRef.current = true;
+setIsSaving(true);
+try {
+const newDismissed = [...(msg.dismissedCards || []), token];
+if (action === "save") {
+try {
+const res = await fetch("/api/facts", {
+method: "POST",
+headers: { "Content-Type": "application/json" },
+body: JSON.stringify({ userId, ...payload, source: "chat" }),
+});
+const data = await res.json();
+if (!data.success) throw new Error(data.error || "Save failed");
+} catch (err) {
+alert(`Could not save: ${err.message}`);
+return; // card stays visible so the user can retry
+}
+}
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: newDismissed } : m));
+await persistDismissedCards(msg, newDismissed);
+if (action === "save" && payload.goal) {
+await loadGoals(userId); // header ring + macro bars pick up the new targets
+setHistory(prev => [...prev, {
+role: "assistant",
+content: `✅ Targets updated: ${payload.goal.calories} cal · ${payload.goal.protein}g P / ${payload.goal.carbs}g C / ${payload.goal.fat}g F`,
+isConfirmation: true,
+}]);
+} else if (action === "save") {
+setHistory(prev => [...prev, {
+role: "assistant",
+content: `✅ Saved to your profile: ${factCardLabel(payload.fact)}`,
+isConfirmation: true,
+}]);
+}
 } finally {
 isSavingRef.current = false;
 setIsSaving(false);
@@ -1613,7 +1755,9 @@ const card = msg.mealCards[ci];
 if (dismissed.includes(ci)) return false;
 const typeKey = `${idx}:${ci}`;
 const currentType = selectedMealTypes[typeKey] || card.meal_type;
-if (cardSavedInDb(card, currentType, targetDate, todayMeals, plannedMeals)) return false;
+// [v84] the card's own date (override > card-carried > legacy message-context fallback)
+const cardDate = selectedCardDates[typeKey] || card.date || targetDate;
+if (cardSavedInDb(card, currentType, cardDate, todayMeals, plannedMeals)) return false;
 return true;
 })
 : [];
@@ -1680,8 +1824,19 @@ border:"none", cursor:"pointer",
 const card = msg.mealCards[ci];
 const typeKey = `${idx}:${ci}`;
 const currentMealType = selectedMealTypes[typeKey] || card.meal_type;
+// [v84] the date this card will save to — server-decided, user-correctable
+const cardDate = selectedCardDates[typeKey] || card.date || targetDate;
 const label = getMealLabel(currentMealType);
 const t = cardTotals(card);
+const todayStr = getLocalDate();
+const dateOptions = [
+{ value: addDays(todayStr, -1), label: "Yesterday" },
+{ value: todayStr, label: "Today" },
+{ value: addDays(todayStr, 1), label: "Tomorrow" },
+];
+if (!dateOptions.some(o => o.value === cardDate)) {
+dateOptions.unshift({ value: cardDate, label: dateLabel(cardDate) });
+}
 
 const buttonBase = {
 color:"#fff",
@@ -1700,12 +1855,12 @@ padding:"12px", borderRadius:12,
 border:`1px solid ${T.border}`, background:T.surface,
 }}>
 <div style={{ fontSize:12, fontWeight:800, color:T.text }}>
-{label} · {Math.round(t.calories)} cal · {Math.round(t.protein)}g P
+{label} · <span style={{ color: cardDate === todayStr ? T.text : "#f59e0b" }}>{dateLabel(cardDate)}</span> · {Math.round(t.calories)} cal · {Math.round(t.protein)}g P
 </div>
 
 <div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
 <button
-onClick={() => handleCardAction("eat", msg, idx, ci, currentMealType, targetDate)}
+onClick={() => handleCardAction("eat", msg, idx, ci, currentMealType, cardDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#10b98155" : "#10b981" }}
 >
@@ -1742,8 +1897,38 @@ fontSize:10,
 }}>▾</span>
 </div>
 
+{/* [v84] date selector — a wrong server guess is one tap to fix, BEFORE saving */}
+<div style={{ position:"relative", display:"inline-block" }}>
+<select
+value={cardDate}
+onChange={(e) => setSelectedCardDates(prev => ({ ...prev, [typeKey]: e.target.value }))}
+disabled={isSaving}
+style={{
+...buttonBase,
+background: cardDate === todayStr ? "#374151" : "#b45309",
+appearance:"none",
+WebkitAppearance:"none",
+paddingRight: 26,
+cursor:"pointer",
+}}
+>
+{dateOptions.map(o => (
+<option key={o.value} value={o.value}>{o.label}</option>
+))}
+</select>
+<span style={{
+position:"absolute",
+right:8,
+top:"50%",
+transform:"translateY(-50%)",
+pointerEvents:"none",
+color:"#fff",
+fontSize:10,
+}}>▾</span>
+</div>
+
 <button
-onClick={() => handleCardAction("plan", msg, idx, ci, currentMealType, targetDate)}
+onClick={() => handleCardAction("plan", msg, idx, ci, currentMealType, cardDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
 >
@@ -1751,7 +1936,7 @@ style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
 </button>
 
 <button
-onClick={() => handleCardAction("edit", msg, idx, ci, currentMealType, targetDate)}
+onClick={() => handleCardAction("edit", msg, idx, ci, currentMealType, cardDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#f59e0b55" : "#f59e0b" }}
 >
@@ -1759,11 +1944,100 @@ style={{ ...buttonBase, background: isSaving ? "#f59e0b55" : "#f59e0b" }}
 </button>
 
 <button
-onClick={() => handleCardAction("cancel", msg, idx, ci, currentMealType, targetDate)}
+onClick={() => handleCardAction("cancel", msg, idx, ci, currentMealType, cardDate)}
 disabled={isSaving}
 style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 >
 ❌ Cancel
+</button>
+</div>
+</div>
+);
+})}
+</div>
+)}
+
+{/* [v83] FACT / GOAL confirmation cards — the review gate for the intelligence layer */}
+{!isUser && ((msg.factCards && msg.factCards.length > 0) || (msg.goalCards && msg.goalCards.length > 0)) && (
+<div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+{(msg.factCards || []).map((fact, fi) => {
+const token = `f${fi}`;
+if ((msg.dismissedCards || []).includes(token)) return null;
+return (
+<div key={token} style={{ display:"flex", flexDirection:"column", gap:8,
+padding:"12px", borderRadius:12, border:"1px solid #8b5cf655", background:T.surface }}>
+<div style={{ fontSize:12, fontWeight:800, color:T.text }}>
+🧠 Save to your profile?
+</div>
+<div style={{ fontSize:13, color:T.text }}>
+{factCardLabel(fact)}
+{fact.reason ? <span style={{ color:T.sub }}> — {fact.reason}</span> : null}
+</div>
+<div style={{ display:"flex", gap:6 }}>
+<button
+onClick={() => handleIntelCard("save", msg, idx, token, { fact })}
+disabled={isSaving}
+style={{ color:"#fff", border:"none", borderRadius:10, padding:"8px 12px",
+fontWeight:600, cursor:"pointer", fontSize:13,
+background: isSaving ? "#8b5cf655" : "#8b5cf6" }}
+>
+💾 Save
+</button>
+<button
+onClick={() => handleIntelCard("dismiss", msg, idx, token, { fact })}
+disabled={isSaving}
+style={{ color:"#fff", border:"none", borderRadius:10, padding:"8px 12px",
+fontWeight:600, cursor:"pointer", fontSize:13,
+background: isSaving ? "#ef444455" : "#ef4444" }}
+>
+❌ No
+</button>
+</div>
+</div>
+);
+})}
+
+{(msg.goalCards || []).map((goal, gi) => {
+const token = `g${gi}`;
+if ((msg.dismissedCards || []).includes(token)) return null;
+return (
+<div key={token} style={{ display:"flex", flexDirection:"column", gap:8,
+padding:"12px", borderRadius:12, border:"1px solid #2563eb55", background:T.surface }}>
+<div style={{ fontSize:12, fontWeight:800, color:T.text }}>
+🎯 New daily targets (computed, not guessed)
+</div>
+<div style={{ fontSize:13, color:T.text, lineHeight:1.5 }}>
+{goal.calories} cal · {goal.protein}g P / {goal.carbs}g C / {goal.fat}g F
+{goal.direction && goal.direction !== "maintain" && goal.est_weeks ? (
+<div style={{ color:T.sub, fontSize:12 }}>
+{goal.direction === "lose" ? "Losing" : "Gaining"} ~{goal.weekly_rate_lbs} lb/week · about {goal.est_weeks} weeks
+{goal.target_weight ? ` · target ${goal.target_weight} ${goal.weight_unit}` : ""}
+</div>
+) : null}
+{goal.clamped ? (
+<div style={{ color:"#f59e0b", fontSize:12, marginTop:2 }}>
+⚠️ Adjusted to a safe rate — faster isn't sustainable or healthy.
+</div>
+) : null}
+</div>
+<div style={{ display:"flex", gap:6 }}>
+<button
+onClick={() => handleIntelCard("save", msg, idx, token, { goal })}
+disabled={isSaving}
+style={{ color:"#fff", border:"none", borderRadius:10, padding:"8px 12px",
+fontWeight:600, cursor:"pointer", fontSize:13,
+background: isSaving ? "#2563eb55" : "#2563eb" }}
+>
+✅ Update my targets
+</button>
+<button
+onClick={() => handleIntelCard("dismiss", msg, idx, token, { goal })}
+disabled={isSaving}
+style={{ color:"#fff", border:"none", borderRadius:10, padding:"8px 12px",
+fontWeight:600, cursor:"pointer", fontSize:13,
+background: isSaving ? "#ef444455" : "#ef4444" }}
+>
+❌ Keep current
 </button>
 </div>
 </div>
