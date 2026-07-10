@@ -35,6 +35,37 @@ function convertMacrosFromPercentages(pPct, cPct, fPct, calories) {
   };
 }
 
+// ── [v84] Recalculation math — same Mifflin-St Jeor as the wizard and the chat
+// goal engine. Goal matching uses includes() so both "fat-loss" (wizard) and
+// "fat_loss" (chat goal cards) resolve correctly.
+function calculateBMR(weightKg, heightCm, age, gender) {
+  const base = 10 * weightKg + 6.25 * heightCm - 5 * age;
+  return gender === "female" ? base - 161 : base + 5;
+}
+
+function calculateTDEE(bmr, activityLevel) {
+  const multipliers = {
+    sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725, "very-active": 1.9,
+  };
+  return Math.round(bmr * (multipliers[activityLevel] || 1.55));
+}
+
+function goalCalorieAdjustment(goalType) {
+  const t = (goalType || "").toLowerCase();
+  if (t.includes("loss") || t.includes("lose") || t.includes("cut")) return -400;
+  if (t.includes("gain") || t.includes("muscle") || t.includes("bulk")) return 300;
+  if (t.includes("performance")) return 200;
+  return 0;
+}
+
+function goalMacroRatios(goalType) {
+  const t = (goalType || "").toLowerCase();
+  if (t.includes("loss") || t.includes("lose") || t.includes("cut")) return { p: 0.35, c: 0.35, f: 0.30 };
+  if (t.includes("gain") || t.includes("muscle") || t.includes("bulk")) return { p: 0.30, c: 0.45, f: 0.25 };
+  if (t.includes("performance")) return { p: 0.30, c: 0.50, f: 0.20 };
+  return { p: 0.25, c: 0.45, f: 0.30 };
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const [userId, setUserId] = useState(null);
@@ -54,6 +85,11 @@ export default function ProfilePage() {
   const [currentWeight, setCurrentWeight] = useState("");
   const [targetWeight, setTargetWeight] = useState("");
   const [weightUnit, setWeightUnit] = useState("lbs");
+
+  // ── [v84] Height (for Mifflin-St Jeor recalculation) ──
+  const [heightFeet, setHeightFeet] = useState("");
+  const [heightInches, setHeightInches] = useState("");
+  const [recalcNote, setRecalcNote] = useState("");
 
   // ── Goals ──
   const [goal, setGoal] = useState("maintain");
@@ -136,6 +172,13 @@ export default function ProfilePage() {
         setCurrentWeight(currentW);
         setTargetWeight(targetW);
         setWeightUnit("lbs");
+
+        // [v84] Height: stored as cm, displayed as ft/in
+        if (Number(profileData.height_cm) > 0) {
+          const totalInches = Math.round(Number(profileData.height_cm) / 2.54);
+          setHeightFeet(String(Math.floor(totalInches / 12)));
+          setHeightInches(String(totalInches % 12));
+        }
       }
 
       if (goalsData) {
@@ -206,12 +249,54 @@ export default function ProfilePage() {
       parseFloat(targetWeight.toString()) !== parseFloat((userProfile.target_weight ? kgToLbs(userProfile.target_weight) : 0).toString()) ||
       goal !== (userProfile.goal_type || "maintain") ||
       activityLevel !== (userProfile.activity_level || "moderate") ||
+      // [v84] height change also enables Save
+      ((parseInt(heightFeet) > 0)
+        ? Math.round((parseInt(heightFeet) * 12 + (parseInt(heightInches) || 0)) * 2.54) !== Math.round(Number(userProfile.height_cm) || 0)
+        : false) ||
       parseInt(calorieGoal.toString()) !== parseInt((goals?.calories || goals?.daily_calorie_target || 2486).toString()) ||
       parseInt(proteinG.toString()) !== parseInt((goals?.protein || goals?.daily_protein_target || 224).toString()) ||
       parseInt(carbsG.toString()) !== parseInt((goals?.carbs || goals?.carbs_target_g || 224).toString()) ||
       parseInt(fatG.toString()) !== parseInt((goals?.fat || goals?.fat_target_g || 85).toString()));
 
   // ── Save Profile & Goals ──
+  // ── [v84] Recalculate targets — same math as the wizard and chat goal cards.
+  // Populates the fields below; nothing is written until the user taps Save.
+  // The review gate applies to formulas the same as everything else.
+  const handleRecalculate = () => {
+    setRecalcNote("");
+    const w = parseFloat(currentWeight);
+    const a = parseInt(age);
+    const hf = parseInt(heightFeet);
+    const hi = heightInches === "" ? 0 : parseInt(heightInches);
+    if (!(w > 0) || !(a > 0)) {
+      setError("Recalculation needs your current weight and age filled in above.");
+      return;
+    }
+    if (!(hf > 0)) {
+      setError("Recalculation needs your height — fill in the height fields above.");
+      return;
+    }
+    setError("");
+    const weightKg = weightUnit === "lbs" ? lbsToKg(w) : w;
+    const heightCm = (hf * 12 + (hi || 0)) * 2.54;
+    const bmr = calculateBMR(weightKg, heightCm, a, gender);
+    const tdee = calculateTDEE(bmr, activityLevel);
+    const newCalories = Math.max(gender === "female" ? 1200 : 1500, tdee + goalCalorieAdjustment(goal));
+    const r = goalMacroRatios(goal);
+    const newProtein = Math.round(newCalories * r.p / 4);
+    const newCarbs = Math.round(newCalories * r.c / 4);
+    const newFat = Math.round(newCalories * r.f / 9);
+    setCalorieGoal(newCalories);
+    setProteinG(newProtein);
+    setCarbsG(newCarbs);
+    setFatG(newFat);
+    const pcts = convertMacrosToPercentages(newProtein, newCarbs, newFat);
+    setProteinPct(pcts.p);
+    setCarbsPct(pcts.c);
+    setFatPct(pcts.f);
+    setRecalcNote(`↻ Recalculated from your ${weightUnit === "lbs" ? w + " lbs" : w + " kg"}, ${a}y, ${hf}'${hi || 0}", ${activityLevel} activity — review below and tap Save to apply.`);
+  };
+
   const handleSave = async () => {
     if (!userId || !hasChanges) return;
 
@@ -229,6 +314,9 @@ export default function ProfilePage() {
       }
 
       // Update user_profiles
+      const heightCmToSave = (parseInt(heightFeet) > 0)
+        ? Math.round((parseInt(heightFeet) * 12 + (parseInt(heightInches) || 0)) * 2.54 * 10) / 10
+        : null;
       const { error: profileError } = await supabase
         .from("user_profiles")
         .update({
@@ -238,6 +326,7 @@ export default function ProfilePage() {
           current_weight: parseFloat(storageCurrentWeight.toFixed(2)),
           target_weight: parseFloat(storageTargetWeight.toFixed(2)),
           weight_unit: "kg", // Store as kg internally
+          ...(heightCmToSave ? { height_cm: heightCmToSave } : {}),
           activity_level: activityLevel,
           goal_type: goal,
           updated_at: new Date().toISOString(),
@@ -342,6 +431,36 @@ export default function ProfilePage() {
 
         <div style={{ flex:1, overflowY:"auto", padding:"16px 20px 100px",
           background: "#1c1c1e" }}>
+
+        {/* ── [v84] Food Profile entry — the intelligence layer's front door ── */}
+        <button
+          onClick={() => router.push("/profile/food")}
+          style={{
+            width: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            padding: "14px 16px",
+            marginBottom: "20px",
+            background: "#8b5cf615",
+            border: "1px solid #8b5cf655",
+            borderRadius: "14px",
+            cursor: "pointer",
+            fontFamily: "DM Sans, sans-serif",
+            textAlign: "left",
+          }}
+        >
+          <div>
+            <div style={{ color: "#f0f0f0", fontSize: "14px", fontWeight: 700 }}>
+              🧠 Food Profile
+            </div>
+            <div style={{ color: "#888", fontSize: "12px", marginTop: "2px" }}>
+              Allergies, diet style, likes & dislikes — what CURA knows about you
+            </div>
+          </div>
+          <span style={{ color: "#8b5cf6", fontSize: "16px", fontWeight: 700 }}>→</span>
+        </button>
 
         {/* ── Basic Info ── */}
         <div style={{ marginBottom: "20px" }}>
@@ -630,6 +749,56 @@ export default function ProfilePage() {
             <option value="very-active">Very Active</option>
           </select>
         </div>
+
+        {/* ── [v84] Height + Recalculate — dropped 10 lbs? Update weight above, tap
+             Recalculate, review the new targets, Save. Same math as the wizard. ── */}
+        <div style={{ marginBottom: "20px" }}>
+          <label style={{ display: "block", color: "#f0f0f0", fontSize: "14px",
+            fontWeight: 600, marginBottom: "8px", fontFamily: "DM Sans, sans-serif" }}>
+            Height
+          </label>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              type="number"
+              value={heightFeet}
+              onChange={(e) => setHeightFeet(e.target.value)}
+              placeholder="ft"
+              style={{ flex: 1, padding: "12px", background: "#1c1c1e",
+                border: "1px solid #2c2c2c", borderRadius: "12px", color: "#f0f0f0",
+                fontSize: "16px", fontFamily: "DM Sans, sans-serif", boxSizing: "border-box" }}
+            />
+            <input
+              type="number"
+              value={heightInches}
+              onChange={(e) => setHeightInches(e.target.value)}
+              placeholder="in"
+              style={{ flex: 1, padding: "12px", background: "#1c1c1e",
+                border: "1px solid #2c2c2c", borderRadius: "12px", color: "#f0f0f0",
+                fontSize: "16px", fontFamily: "DM Sans, sans-serif", boxSizing: "border-box" }}
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleRecalculate}
+          style={{
+            width: "100%", padding: "14px", marginBottom: recalcNote ? "10px" : "20px",
+            background: "#1c1c1e", color: "#2563eb", border: "1px solid #2563eb66",
+            borderRadius: "14px", fontSize: "15px", fontWeight: 700,
+            cursor: "pointer", fontFamily: "DM Sans, sans-serif",
+          }}
+        >
+          ↻ Recalculate my targets
+        </button>
+        {recalcNote && (
+          <div style={{
+            background: "#2563eb15", border: "1px solid #2563eb44", color: "#3b82f6",
+            padding: "10px 12px", borderRadius: "12px", fontSize: "12px",
+            marginBottom: "20px", lineHeight: 1.5, fontFamily: "DM Sans, sans-serif",
+          }}>
+            {recalcNote}
+          </div>
+        )}
 
         {/* ── Calorie & Macro Targets ── */}
         <h3

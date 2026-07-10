@@ -135,7 +135,8 @@ export default function ProfileSetupPage() {
     setMacros(macroData);
   }, [weight, weightUnit, heightFeet, heightInches, birthDate, gender, goal, activityLevel]);
 
-  const handleSaveProfile = async () => {
+  const handleSaveProfile = async (nextPath) => {
+    const dest = typeof nextPath === "string" ? nextPath : "/";
     if (!userId) {
       setError("User ID not found");
       return;
@@ -157,6 +158,12 @@ export default function ProfileSetupPage() {
       // Convert weight to kg for storage
       const weightKg = weightUnit === "lbs" ? weight / 2.205 : parseFloat(weight);
 
+      // [v83] Height in cm — now PERSISTED. It was previously computed for the
+      // calorie math and then thrown away, which forced goal recomputation elsewhere
+      // to estimate maintenance instead of using true Mifflin-St Jeor.
+      const totalInchesSave = parseInt(heightFeet) * 12 + parseInt(heightInches);
+      const heightCmSave = Math.round(totalInchesSave * 2.54 * 10) / 10;
+
       // 1. Save to user_profiles
       const { error: profileError } = await supabase
         .from("user_profiles")
@@ -168,6 +175,7 @@ export default function ProfileSetupPage() {
             gender,
             current_weight: weightKg,
             weight_unit: "kg",
+            height_cm: heightCmSave,
             goal_type: goal,
             activity_level: activityLevel,
             updated_at: new Date().toISOString(),
@@ -187,6 +195,7 @@ export default function ProfileSetupPage() {
         .upsert(
           {
             user_id: userId,
+            goal_type: goal,
             calories,
             protein: macros.protein,
             carbs: macros.carbs,
@@ -201,8 +210,8 @@ export default function ProfileSetupPage() {
         return;
       }
 
-      // Success! Redirect to home
-      router.push("/");
+      // Success! Redirect (home by default, or the Food Profile if requested)
+      router.push(dest);
     } catch (err) {
       setError(err.message || "An error occurred");
       setSaving(false);
@@ -857,7 +866,7 @@ export default function ProfileSetupPage() {
                 ← Back
               </button>
               <button
-                onClick={handleSaveProfile}
+                onClick={() => handleSaveProfile("/")}
                 disabled={saving}
                 style={{
                   flex: 1,
@@ -875,6 +884,27 @@ export default function ProfileSetupPage() {
                 {saving ? "Saving..." : "Start coaching →"}
               </button>
             </div>
+
+            {/* [v83] Optional deeper profile — never a forced wall */}
+            <button
+              onClick={() => handleSaveProfile("/profile/food")}
+              disabled={saving}
+              style={{
+                width: "100%",
+                marginTop: "10px",
+                padding: "12px",
+                background: "transparent",
+                color: "#8b5cf6",
+                border: "1px solid #8b5cf655",
+                borderRadius: "14px",
+                fontSize: "14px",
+                fontWeight: 600,
+                cursor: saving ? "not-allowed" : "pointer",
+                fontFamily: "DM Sans, sans-serif",
+              }}
+            >
+              🧠 Save & set up my Food Profile (allergies, diet, likes) →
+            </button>
           </div>
         )}
       </div>
