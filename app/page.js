@@ -59,6 +59,11 @@ function isQuestionForm(t) {
     /^\s*(is|are|was|were)\b/i,
     /^\s*should\s+i\b/i,
     /^\s*can\s+i\b/i,
+    // [v88] "can/could/would/will YOU..." is a REQUEST to the coach (make me a plan,
+    // give me ideas) — never a food log. Voice drops the "?" so the stem must catch it.
+    /^\s*(can|could|would|will)\s+(you|we)\b/i,
+    /\bmake\s+(me\s+)?a\s+(meal\s+)?plan\b/i,
+    /\bgive\s+me\s+a\s+(meal\s+)?plan\b/i,
     /^\s*what\s+should\b/i,
     /^\s*what('?s|\s+is)\s+a\s+good\b/i,
     /^\s*(which|why)\b/i,
@@ -83,9 +88,15 @@ function statesFoodPhrase(t) {
 function hasQuantifiedFood(t) {
   // Backup signal: a quantity token near a word, for phrasings the phrase-set doesn't cover
   // ("a cup of rice and 6oz salmon"). Deliberately simple; server-side parser is authoritative.
-  const hasQty = /\b(\d+(\.\d+)?|a|an|some|half|one|two|three|four|couple|\u00bd|\u00bc|\u00be)\s*(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|bottle|can|bowl|plate|serving|servings)?\b/i.test(t);
+  // [v88] Tightened: a bare article ("a plan", "some help") is NOT a quantity —
+  // articles/some only count when followed by a real measure word. Digits and
+  // number-words still count on their own.
+  const hasQty =
+    /\b\d+(\.\d+)?\b/.test(t) ||
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten|half|quarter|couple|\u00bd|\u00bc|\u00be)\b/i.test(t) ||
+    /\b(a|an|some)\s+(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|bottle|bottles|can|cans|bowl|bowls|plate|glass|serving|servings|bar|bars|handful)\b/i.test(t);
   const shortEnough = t.split(/\s+/).length <= 40;
-  const notAdvicey = !/\b(should|healthy|better|worse|recommend|suggest|good\s+(for|option|choice))\b/i.test(t);
+  const notAdvicey = !/\b(should|healthy|better|worse|recommend|suggest|plan|planning|ideas?|good\s+(for|option|choice))\b/i.test(t);
   return hasQty && shortEnough && notAdvicey;
 }
 
