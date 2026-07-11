@@ -1271,17 +1271,24 @@ console.warn("Could not mark message resolved:", e.message);
 }
 
 // Persist a card dismissal to ai_messages.dismissed_cards (jsonb) — gone on EVERY device.
+// [v94] Verified write: reads the column back and retries once. A silently-lost
+// dismissal is how the 40-item zombie card happened; it can't be silent anymore.
 async function persistDismissedCards(msg, dismissed) {
 const id = await getDbIdForMsg(msg);
 if (!id) return;
+for (let attempt = 0; attempt < 2; attempt++) {
 try {
-await supabase
+const { data } = await supabase
 .from("ai_messages")
 .update({ dismissed_cards: dismissed })
-.eq("id", id);
+.eq("id", id)
+.select("dismissed_cards")
+.single();
+if (data && JSON.stringify(data.dismissed_cards) === JSON.stringify(dismissed)) return;
+console.error(`dismissed_cards write verify failed (attempt ${attempt + 1})`, data);
 } catch (e) {
-// Column may not exist pre-migration — dismissal still works this session via state.
-console.warn("Could not persist dismissed_cards (run the migration?):", e.message);
+console.error(`dismissed_cards write error (attempt ${attempt + 1}):`, e.message);
+}
 }
 }
 
@@ -1498,6 +1505,14 @@ isSavingRef.current = true;
 setIsSaving(true);
 try {
 const newDismissed = [...(msg.dismissedCards || []), token];
+// [v94] DISMISS-FIRST: the card dies the instant it's tapped — dismissal is
+// persisted BEFORE the (possibly slow) save runs. The 40-item batch save took
+// seconds, and a tab switch in that window lost the dismissal entirely: saved
+// data, zombie card. If the save fails, code deliberately RESURRECTS the card
+// (un-dismisses it) and says so — never the other way around.
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: newDismissed } : m));
+await persistDismissedCards(msg, newDismissed);
+
 if (action === "save") {
 try {
 const res = await fetch("/api/facts", {
@@ -1508,12 +1523,14 @@ body: JSON.stringify({ userId, ...payload, source: "chat" }),
 const data = await res.json();
 if (!data.success) throw new Error(data.error || "Save failed");
 } catch (err) {
-alert(`Could not save: ${err.message}`);
-return; // card stays visible so the user can retry
+// resurrect the card so the user can retry — dismissal rolled back everywhere
+const reverted = (msg.dismissedCards || []).filter(t => t !== token);
+setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: reverted } : m));
+await persistDismissedCards(msg, reverted);
+alert(`Could not save: ${err.message}. The card is back — tap Save to retry.`);
+return;
 }
 }
-setHistory(prev => prev.map((m, i) => i === msgIdx ? { ...m, dismissedCards: newDismissed } : m));
-await persistDismissedCards(msg, newDismissed);
 if (action === "save" && payload.goal) {
 await loadGoals(userId); // header ring + macro bars pick up the new targets
 setHistory(prev => [...prev, {

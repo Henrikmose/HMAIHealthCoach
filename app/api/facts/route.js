@@ -246,14 +246,47 @@ export async function POST(req) {
     if (fact && fact.kind) {
       const kind = fact.kind.toString().toLowerCase();
       let result;
-      // [v92] batch form: {"kind":"love","values":[...]} — loop the same writer
+      // [v92/v94] batch form: {"kind":"love","values":[...]} — ONE read + ONE merged
+      // write. The original per-value loop was 40 sequential round-trips (seconds of
+      // latency, and the window where the zombie-card race lived).
       if (Array.isArray(fact.values) && kind in ARRAY_COLUMN_FOR_KIND) {
-        const results = [];
-        for (const v of fact.values.slice(0, 40)) {
-          try { results.push(await saveDietaryArrayFact(userId, { kind, value: v, reason: fact.reason || "" }, src)); }
-          catch (e) { results.push({ stored: v, action: "failed" }); }
+        const col = ARRAY_COLUMN_FOR_KIND[kind];
+        const values = fact.values.map(cleanValue).filter(v => v.length >= 2).slice(0, 40);
+        if (values.length === 0) {
+          return Response.json({ success: false, error: "No valid values" }, { status: 400 });
         }
-        return Response.json({ success: true, result: { batch: true, count: results.length, results } });
+        const { data: rows } = await supabase
+          .from("user_dietary_preferences").select("*").eq("user_id", userId).limit(1);
+        const meta = { reason: fact.reason || "", source: src, added_at: new Date().toISOString() };
+        let added = 0;
+        if (!rows || rows.length === 0) {
+          const insert = {
+            user_id: userId,
+            dietary_style: [], allergens: [], intolerances: [],
+            restrictions: [], loves: [], dislikes: [],
+            reasons: {}, is_active: true,
+          };
+          insert[col] = [...new Set(values)];
+          for (const v of insert[col]) insert.reasons[v] = meta;
+          added = insert[col].length;
+          const { error } = await supabase.from("user_dietary_preferences").insert([insert]);
+          if (error) throw new Error(error.message);
+        } else {
+          const row = rows[0];
+          const existing = Array.isArray(row[col]) ? row[col] : [];
+          const existingSet = new Set(existing.map(cleanValue));
+          const toAdd = values.filter(v => !existingSet.has(v));
+          added = toAdd.length;
+          if (toAdd.length > 0) {
+            const reasons = (row.reasons && typeof row.reasons === "object") ? row.reasons : {};
+            for (const v of toAdd) reasons[v] = meta;
+            const { error } = await supabase.from("user_dietary_preferences")
+              .update({ [col]: [...existing, ...toAdd], reasons, is_active: true, updated_at: new Date().toISOString() })
+              .eq("id", row.id);
+            if (error) throw new Error(error.message);
+          }
+        }
+        return Response.json({ success: true, result: { batch: true, requested: values.length, added, column: col } });
       }
       if (kind in ARRAY_COLUMN_FOR_KIND) {
         result = await saveDietaryArrayFact(userId, { ...fact, kind }, src);
