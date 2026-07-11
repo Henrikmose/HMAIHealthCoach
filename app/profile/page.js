@@ -779,6 +779,24 @@ export default function ProfilePage() {
           </div>
         </div>
 
+        {(() => {
+          // [v92] Maintenance always visible — the anchor both surfaces share.
+          const w = parseFloat(currentWeight), a = parseInt(age), hf = parseInt(heightFeet);
+          if (!(w > 0 && a > 0 && hf > 0)) return null;
+          const kg = weightUnit === "lbs" ? lbsToKg(w) : w;
+          const cm = (hf * 12 + (parseInt(heightInches) || 0)) * 2.54;
+          const tdee = calculateTDEE(calculateBMR(kg, cm, a, gender), activityLevel);
+          return (
+            <div style={{
+              background: "#1c1c1e", border: "1px solid #2c2c2c", borderRadius: "12px",
+              padding: "10px 12px", marginBottom: "10px", fontSize: "12px",
+              color: "#888", lineHeight: 1.5, fontFamily: "DM Sans, sans-serif",
+            }}>
+              Your maintenance: <span style={{ color: "#f0f0f0", fontWeight: 700 }}>~{tdee} cal/day</span> — the targets below include your goal adjustment on top of this anchor.
+            </div>
+          );
+        })()}
+
         <button
           onClick={handleRecalculate}
           style={{

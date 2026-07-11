@@ -91,10 +91,15 @@ function hasQuantifiedFood(t) {
   // [v88] Tightened: a bare article ("a plan", "some help") is NOT a quantity —
   // articles/some only count when followed by a real measure word. Digits and
   // number-words still count on their own.
+  // [v92] percentages and "80/20 rule"-style numbers are NOT food quantities
+  const t2 = t
+    .replace(/\d+(\.\d+)?\s*%/g, " ")
+    .replace(/\b\d+(\.\d+)?\s*percent\b/gi, " ")
+    .replace(/\b\d{2,4}\s*[\/-]?\s*\d{0,2}\s*rule\b/gi, " ");
   const hasQty =
-    /\b\d+(\.\d+)?\b/.test(t) ||
-    /\b(one|two|three|four|five|six|seven|eight|nine|ten|half|quarter|couple|\u00bd|\u00bc|\u00be)\b/i.test(t) ||
-    /\b(a|an|some)\s+(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|bottle|bottles|can|cans|bowl|bowls|plate|glass|serving|servings|bar|bars|handful)\b/i.test(t);
+    /\b\d+(\.\d+)?\b/.test(t2) ||
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten|half|quarter|couple|\u00bd|\u00bc|\u00be)\b/i.test(t2) ||
+    /\b(a|an|some)\s+(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|bottle|bottles|can|cans|bowl|bowls|plate|glass|serving|servings|bar|bars|handful)\b/i.test(t2);
   const shortEnough = t.split(/\s+/).length <= 40;
   const notAdvicey = !/\b(should|healthy|better|worse|recommend|suggest|plan|planning|ideas?|good\s+(for|option|choice))\b/i.test(t);
   return hasQty && shortEnough && notAdvicey;
@@ -109,17 +114,20 @@ function isFoodQuestion(text) {
   return false;                            // default: let statesAFood decide via food content
 }
 
-function statesAFood(text) {
+function statesAFood(text, inThread = false) {
   if (!text) return false;
   const t = text.trim();
   if (isQuestionForm(t)) return false;     // 1) a question is never a food log
   if (statesFoodPhrase(t)) return true;    // 2) explicit "I ate / for breakfast / what I ate"
-  if (hasQuantifiedFood(t)) return true;   // 3) backup: quantity + food present
+  // [v92] inside a ↩ Continue thread you're mid-conversation — only EXPLICIT food
+  // phrasing logs. The loose quantity signal is disabled so "make it 80/20" or
+  // "around 2000" can never be mistaken for a meal.
+  if (!inThread && hasQuantifiedFood(t)) return true;
   return false;
 }
 
-function isLogMessage(text) {
-  return statesAFood(text);
+function isLogMessage(text, inThread = false) {
+  return statesAFood(text, inThread);
 }
 
 function isMealPlanningRequest(text) {
@@ -495,7 +503,7 @@ function extractBlocks(text, regex) {
 }
 
 function extractFactCards(text) {
-  return extractBlocks(text, FACT_DATA_REGEX_G).filter(f => f.kind && f.value);
+  return extractBlocks(text, FACT_DATA_REGEX_G).filter(f => f.kind && (f.value || (Array.isArray(f.values) && f.values.length > 0)));
 }
 
 function extractFactRemovals(text) {
@@ -522,6 +530,12 @@ const FACT_KIND_LABELS = {
 
 function factCardLabel(fact) {
   const kind = FACT_KIND_LABELS[fact.kind] || fact.kind;
+  // [v92] batch card: one label for a whole list
+  if (Array.isArray(fact.values)) {
+    const shown = fact.values.slice(0, 8).join(", ");
+    const more = fact.values.length > 8 ? ` +${fact.values.length - 8} more` : "";
+    return `${kind} (${fact.values.length}): ${shown}${more}`;
+  }
   let label = `${kind}: ${fact.value}`;
   if (fact.kind === "nutrient" && fact.frequency_per_week) label += ` (${fact.frequency_per_week}x/week)`;
   if (fact.expires_at) label += ` — until ${fact.expires_at}`;
@@ -985,7 +999,7 @@ if (imagesToSend.length === 0 && recentAiMsgs[0]?.goalCards?.length > 0 && /\b[1
 newActiveMealLog = null;
 setActiveMealLog(null);
 context = { type: "goal_followup" };
-} else if (isLogMessage(trimmed) && imagesToSend.length === 0) {
+} else if (isLogMessage(trimmed, !!activeThreadId) && imagesToSend.length === 0) {
 // [v80] ONE ENGINE: every food log goes to the server pipeline. The old client-side
 // lookup-foods shortcut is gone — it duplicated the resolver AND merged whole-day
 // logs into one meal because it never segmented. The server pipeline is code-owned
@@ -1516,7 +1530,9 @@ isConfirmation: true,
 } else if (action === "save") {
 setHistory(prev => [...prev, {
 role: "assistant",
-content: `✅ Saved to your profile: ${factCardLabel(payload.fact)}`,
+content: Array.isArray(payload.fact?.values)
+? `✅ Saved to your profile: ${payload.fact.values.length} foods added to ${(FACT_KIND_LABELS[payload.fact.kind] || payload.fact.kind)}s`
+: `✅ Saved to your profile: ${factCardLabel(payload.fact)}`,
 isConfirmation: true,
 }]);
 }

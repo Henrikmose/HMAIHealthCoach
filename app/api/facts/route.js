@@ -246,6 +246,15 @@ export async function POST(req) {
     if (fact && fact.kind) {
       const kind = fact.kind.toString().toLowerCase();
       let result;
+      // [v92] batch form: {"kind":"love","values":[...]} — loop the same writer
+      if (Array.isArray(fact.values) && kind in ARRAY_COLUMN_FOR_KIND) {
+        const results = [];
+        for (const v of fact.values.slice(0, 40)) {
+          try { results.push(await saveDietaryArrayFact(userId, { kind, value: v, reason: fact.reason || "" }, src)); }
+          catch (e) { results.push({ stored: v, action: "failed" }); }
+        }
+        return Response.json({ success: true, result: { batch: true, count: results.length, results } });
+      }
       if (kind in ARRAY_COLUMN_FOR_KIND) {
         result = await saveDietaryArrayFact(userId, { ...fact, kind }, src);
       } else if (kind === "health_condition") {
