@@ -427,40 +427,31 @@ export default function ProfilePage() {
                 margin:"2px 0 0", letterSpacing:"-.02em" }}>Profile</h1>
             </div>
           </div>
+
+          {/* ── [v94] Persistent profile tabs — always visible, one tap to switch ── */}
+          <div style={{ display:"flex", gap:8, marginTop:12 }}>
+            <button style={{
+              flex:1, padding:"10px 0", borderRadius:12, border:"none",
+              background:"#2563eb", color:"#fff", fontWeight:700, fontSize:13,
+              cursor:"default", fontFamily:"DM Sans, sans-serif",
+            }}>
+              Profile
+            </button>
+            <button
+              onClick={() => router.push("/profile/food")}
+              style={{
+                flex:1, padding:"10px 0", borderRadius:12,
+                border:"1px solid #8b5cf655", background:"transparent",
+                color:"#8b5cf6", fontWeight:700, fontSize:13,
+                cursor:"pointer", fontFamily:"DM Sans, sans-serif",
+              }}>
+              🧠 Food Profile
+            </button>
+          </div>
         </div>
 
         <div style={{ flex:1, overflowY:"auto", padding:"16px 20px 100px",
           background: "#1c1c1e" }}>
-
-        {/* ── [v84] Food Profile entry — the intelligence layer's front door ── */}
-        <button
-          onClick={() => router.push("/profile/food")}
-          style={{
-            width: "100%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 10,
-            padding: "14px 16px",
-            marginBottom: "20px",
-            background: "#8b5cf615",
-            border: "1px solid #8b5cf655",
-            borderRadius: "14px",
-            cursor: "pointer",
-            fontFamily: "DM Sans, sans-serif",
-            textAlign: "left",
-          }}
-        >
-          <div>
-            <div style={{ color: "#f0f0f0", fontSize: "14px", fontWeight: 700 }}>
-              🧠 Food Profile
-            </div>
-            <div style={{ color: "#888", fontSize: "12px", marginTop: "2px" }}>
-              Allergies, diet style, likes & dislikes — what CURA knows about you
-            </div>
-          </div>
-          <span style={{ color: "#8b5cf6", fontSize: "16px", fontWeight: 700 }}>→</span>
-        </button>
 
         {/* ── Basic Info ── */}
         <div style={{ marginBottom: "20px" }}>

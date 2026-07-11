@@ -215,13 +215,34 @@ export default function FoodProfilePage() {
       <div style={{ minHeight: "100vh", background: T.bg, maxWidth: 430,
         margin: "0 auto", padding: "52px 16px 40px", fontFamily: "'DM Sans', sans-serif" }}>
 
+        {/* ── [v94] Persistent profile tabs — sticky, visible at any scroll depth ── */}
+        <div style={{
+          position: "sticky", top: 0, zIndex: 50, background: T.bg,
+          padding: "10px 0 12px", marginBottom: 6,
+        }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={() => router.push("/profile")}
+              style={{
+                flex: 1, padding: "10px 0", borderRadius: 12,
+                border: `1px solid ${T.border}`, background: "transparent",
+                color: T.sub, fontWeight: 700, fontSize: 13,
+                cursor: "pointer", fontFamily: "'DM Sans', sans-serif",
+              }}>
+              Profile
+            </button>
+            <button style={{
+              flex: 1, padding: "10px 0", borderRadius: 12, border: "none",
+              background: T.intel, color: "#fff", fontWeight: 700, fontSize: 13,
+              cursor: "default", fontFamily: "'DM Sans', sans-serif",
+            }}>
+              🧠 Food Profile
+            </button>
+          </div>
+        </div>
+
         {/* Header */}
         <div style={{ marginBottom: 18 }}>
-          <button onClick={() => router.push("/profile")}
-            style={{ background: "transparent", border: "none", color: T.sub,
-              fontSize: 13, cursor: "pointer", padding: 0, marginBottom: 8 }}>
-            ← Basics & targets
-          </button>
           <p style={{ fontSize: 11, fontWeight: 700, color: T.intel,
             textTransform: "uppercase", letterSpacing: ".1em", margin: 0 }}>
             🧠 FOOD PROFILE
