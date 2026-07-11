@@ -505,6 +505,7 @@ const FACT_KIND_LABELS = {
   health_condition: "Health condition",
   nutrient: "Nutrient goal",
   lifestyle: "Lifestyle",
+  activity: "Activity",
   constraint: "Commitment",
 };
 

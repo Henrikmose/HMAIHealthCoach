@@ -27,6 +27,7 @@ const T = {
 const DIET_STYLE_PRESETS = ["vegetarian", "vegan", "pescatarian", "keto", "paleo", "low-carb", "mediterranean"];
 const ALLERGEN_PRESETS = ["shellfish", "peanuts", "tree nuts", "dairy", "eggs", "gluten", "soy", "fish", "sesame"];
 const LIFESTYLE_PRESETS = ["works nights", "skips breakfast", "eats late", "intermittent fasting", "early riser", "shift worker"];
+const ACTIVITY_PRESETS = ["walking", "running", "weight lifting", "hockey", "cycling", "swimming", "yoga"];
 
 function Chip({ label, active, onClick, disabled, removable }) {
   return (
@@ -334,6 +335,27 @@ export default function FoodProfilePage() {
           </div>
           <TextAdder placeholder="e.g. train at 6am tuesdays..." disabled={busy}
             onAdd={(v) => addFact("lifestyle", v)} />
+        </Section>
+
+        {/* 4b — [v87] Activities & training */}
+        <Section icon="🏒" title="Activities & training"
+          hint="Shapes meal timing and fueling advice — your calorie targets come from activity level, not from this list.">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {ACTIVITY_PRESETS.map(p => {
+              const row = facts.find(f => f.kind === "activity" && f.value.toLowerCase() === p.toLowerCase());
+              return (
+                <Chip key={p} label={p} active={!!row} removable disabled={busy}
+                  onClick={() => row ? removeFact("activity", p, row.id) : addFact("activity", p)} />
+              );
+            })}
+            {facts.filter(f => f.kind === "activity" &&
+              !ACTIVITY_PRESETS.some(p => p.toLowerCase() === f.value.toLowerCase())).map(f => (
+              <Chip key={f.id} label={f.value} active removable disabled={busy}
+                onClick={() => removeFact("activity", f.value, f.id)} />
+            ))}
+          </div>
+          <TextAdder placeholder='e.g. "hockey Tuesday evenings, 2x/week"...' disabled={busy}
+            onAdd={(v) => addFact("activity", v)} />
         </Section>
 
         {/* 5 — Active commitments (time-bounded, usually created in chat) */}

@@ -220,7 +220,7 @@ async function removeFactEntry(userId, fact) {
 
   if (kind === "health_condition") return deactivate("user_health_conditions", "condition");
   if (kind === "nutrient") return deactivate("user_nutrient_preferences", "nutrient");
-  if (kind === "lifestyle" || kind === "constraint") return deactivate("user_facts", "value");
+  if (kind === "lifestyle" || kind === "constraint" || kind === "activity") return deactivate("user_facts", "value");
   throw new Error(`Unknown fact kind: ${kind}`);
 }
 
@@ -252,7 +252,7 @@ export async function POST(req) {
         result = await saveHealthCondition(userId, fact);
       } else if (kind === "nutrient") {
         result = await saveNutrientPreference(userId, fact);
-      } else if (kind === "lifestyle" || kind === "constraint") {
+      } else if (kind === "lifestyle" || kind === "constraint" || kind === "activity") {
         result = await saveUserFact(userId, { ...fact, kind }, src);
       } else {
         return Response.json({ success: false, error: `Unknown fact kind: ${kind}` }, { status: 400 });

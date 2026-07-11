@@ -127,7 +127,7 @@ function pickBest(rows, term) {
       for (const v of specialty) if (name.includes(v)) score -= 40;
     }
     for (const v of oddVariants) if (name.includes(v) && !term_l.includes(v)) score -= 35;
-    // [v86] SOURCE TIER: a user-declared label is truth; an AI estimate is a guess.
+    // [v87] SOURCE TIER: a user-declared label is truth; an AI estimate is a guess.
     // When name relevance is comparable, label wins and ai_estimate loses. USDA/custom
     // sit between — never displaced by a label unless the label's NAME matches better.
     const src = (r.source || '').toLowerCase();
@@ -209,7 +209,7 @@ function gramsForStaple(st, amount, unit) {
 async function lookupFood(foodName) {
   if (!foodName) return null;
   const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
-  // [v86] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
+  // [v87] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
   // (a leading "-" turns the full-text stage into a NOT-query that matches nearly the
   // whole table — the espresso incident), and junk/too-short terms never reach the DB.
   const clean = foodName.trim().toLowerCase()
@@ -285,7 +285,7 @@ function inferMealTypeFromHour(hour) {
 }
 
 function segmentMeals(message, currentHour = 12) {
-  // [v86] Handles BOTH natural orientations:
+  // [v87] Handles BOTH natural orientations:
   //   marker-first: "for breakfast 2 eggs, for lunch a salad"   (food AFTER its marker)
   //   food-first:   "2 eggs for breakfast and a salad for lunch" (food BEFORE its marker)
   // The old version only understood marker-first, so "X for dinner" produced ZERO
@@ -468,7 +468,7 @@ async function lookupFoodMacros(message) {
   return results.length > 0 ? results : null;
 }
 
-// ═══ [v86] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
+// ═══ [v87] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
 // The AI NEVER writes the chat message for a food log. Its only jobs here are:
 //   (a) parse a segment the code parser couldn't (returns structured items, no numbers)
 //   (b) supply macros for ONE unknown food (JSON only → written to `foods` → read back)
@@ -571,7 +571,7 @@ async function writeBackAIFood(macros) {
 
 const WEIGHT_UNIT_GRAMS = { oz: 28.35, ounce: 28.35, g: 1, gram: 1, kg: 1000, lb: 453.6, pound: 453.6, ml: 1 };
 
-// ═══ [v86] CARD-CARRIED DATES ═══════════════════════════════════════════════
+// ═══ [v87] CARD-CARRIED DATES ═══════════════════════════════════════════════
 // The target date is decided ONCE, here, at log time, from the log message itself —
 // then stored inside each card. The client renders the stored date and lets the user
 // correct it with one tap. Render-time date recomputation (which sampled surrounding
@@ -704,7 +704,7 @@ function stripInlineMacroSpecs(text) {
   return out.replace(/\s+/g, " ").trim();
 }
 
-// ═══ [v86] LAYER 2 — LABEL DECLARATION ══════════════════════════════════════
+// ═══ [v87] LAYER 2 — LABEL DECLARATION ══════════════════════════════════════
 // A message that is FOOD NAME + MACRO VALUES is a label being read to us — the
 // best data source we have. Detected by CODE. The user's numbers are used
 // VERBATIM for this log, and written back to `foods` as source='label', which
@@ -818,7 +818,7 @@ async function writeBackLabelDeclaration(decl) {
 
 // Resolve a whole segment: code parser first; AI parse ONLY if code found nothing.
 async function resolveSegment(segText) {
-  // [v86] LABEL DECLARATION check FIRST: if this segment is "food + macro values",
+  // [v87] LABEL DECLARATION check FIRST: if this segment is "food + macro values",
   // the user's numbers are the truth — used verbatim, cached as source='label'.
   const decl = extractLabelDeclaration(segText);
   if (decl) {
@@ -835,7 +835,7 @@ async function resolveSegment(segText) {
       fat: Math.round(decl.perServing.fat * servings * 10) / 10,
       source: "label", usda_food_id: null,
     };
-    console.log(`  [v86] LABEL DECLARATION: "${decl.name}" ${decl.perServing.calories} cal (write-back: ${wb.action})`);
+    console.log(`  [v87] LABEL DECLARATION: "${decl.name}" ${decl.perServing.calories} cal (write-back: ${wb.action})`);
     return { items: [item], unresolved: [], labelSaved: (wb.action === "created" || wb.action === "superseded_ai" || wb.action === "updated") ? (wb.name || decl.name) : null };
   }
   const cleanedText = stripInlineMacroSpecs(segText);
@@ -890,7 +890,7 @@ function renderMealDataBlock(card) {
   return `<<<MEAL_DATA>>>\n${JSON.stringify({ meal_type: card.meal_type, date: card.date || null, items: card.items })}\n<<<END_MEAL_DATA>>>`;
 }
 
-// ═══ [v86] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
+// ═══ [v87] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
 // Same division of labor as everything else in CURA:
 //   AI  = language only. It EXTRACTS facts/goal parameters into blocks. Nothing more.
 //   CODE = assigns tiers, computes every number, stores, and applies stored facts.
@@ -902,7 +902,7 @@ function renderMealDataBlock(card) {
 // 3 = TIME-BOUNDED (auto-retires by date)
 const FACT_KINDS = {
   dietary_style: 1, allergen: 1, intolerance: 1, restriction: 1, health_condition: 1,
-  love: 2, dislike: 2, lifestyle: 2, nutrient: 2,
+  love: 2, dislike: 2, lifestyle: 2, nutrient: 2, activity: 2,
   constraint: 3,
 };
 
@@ -940,7 +940,7 @@ function goalTypeAdjustment(goalType) {
   return 0;
 }
 
-// ═══ [v86] GOAL MATH — STRICT MODE. The delta method is DEAD. ════════════════
+// ═══ [v87] GOAL MATH — STRICT MODE. The delta method is DEAD. ════════════════
 // Maintenance comes from the user's BODY (Mifflin-St Jeor: weight, height, age,
 // gender, activity) or not at all. Deriving it from the current calorie target
 // caused a death spiral: each goal request re-cut from the last cut (1800 → 1500
@@ -1053,7 +1053,7 @@ function computeGoalTargets(profile, currentGoals, params) {
   };
 }
 
-// ═══ [v86] GOAL STATEMENT PARSER — code understands "I want to lose 30 lbs in
+// ═══ [v87] GOAL STATEMENT PARSER — code understands "I want to lose 30 lbs in
 // 8 weeks" without AI. Regular numbers + a tiny vocabulary; the AI-extraction
 // path remains only as fallback for phrasings this can't read.
 function parseGoalStatement(text) {
@@ -1117,6 +1117,11 @@ async function assembleProfileSlot(userId) {
       if (f.expires_at && f.expires_at < today) continue; // time-bounded: active-by-date, not by flag
       if (f.kind === "constraint") {
         lines.push(`Active commitment${f.expires_at ? ` (until ${f.expires_at})` : ""}: ${f.value}`);
+      } else if (f.kind === "activity") {
+        // Shapes COACHING (meal timing, pre/post-workout) — NEVER the calorie math.
+        // activity_level alone drives maintenance; counting workouts here too would
+        // double-count the same exercise.
+        lines.push(`Activity/training: ${f.value} (use for meal timing and fueling advice ONLY — calorie targets already account for activity level)`);
       } else {
         lines.push(`Lifestyle: ${f.value}${f.reason ? ` (${f.reason})` : ""}`);
       }
@@ -1133,7 +1138,7 @@ const INTEL_CAPTURE_PROMPT = `
 FACT & GOAL CAPTURE (silent — never mention these blocks in your prose):
 If the user CLEARLY states a durable fact about themselves, append one FACT_DATA block per fact AFTER your reply:
 <<<FACT_DATA>>>{"kind":"allergen","value":"shellfish","reason":"","expires_at":null}<<<END_FACT_DATA>>>
-Valid kinds: dietary_style (vegan, vegetarian, pescatarian, keto...), allergen, intolerance, restriction (foods they always avoid, e.g. "no pork"), love, dislike, health_condition, nutrient (include "frequency_per_week" if stated, e.g. ginger 5x/week), lifestyle (e.g. "works nights, skips breakfast"), constraint (time-bounded commitment — include "expires_at" as YYYY-MM-DD if a timeframe was given).
+Valid kinds: dietary_style (vegan, vegetarian, pescatarian, keto...), allergen, intolerance, restriction (foods they always avoid, e.g. "no pork"), love, dislike, health_condition, nutrient (include "frequency_per_week" if stated, e.g. ginger 5x/week), lifestyle (e.g. "works nights, skips breakfast"), activity (sports/training patterns — put schedule and frequency INSIDE the value, e.g. "hockey Tuesday evenings, 2x/week", "weight lifting 4x/week", "training for a half marathon"), constraint (time-bounded commitment — include "expires_at" as YYYY-MM-DD if a timeframe was given).
 RULES: Only facts the user explicitly stated about themselves — never inferences, never one-off mentions ("I had shrimp" is NOT a fact; "I'm allergic to shrimp" is). When unsure, emit nothing. Do not re-emit facts already listed in STORED PROFILE FACTS.
 If the user CLEARLY states a stored fact NO LONGER applies ("I'm not vegan anymore", "my blood pressure is fine now", "I actually like beans"), append a removal block instead — ONLY for facts that appear in STORED PROFILE FACTS:
 <<<FACT_REMOVE>>>{"kind":"dietary_style","value":"vegan"}<<<END_FACT_REMOVE>>>
@@ -1460,7 +1465,7 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
-    // ═══ [v86] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
+    // ═══ [v87] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
     // The conversational AI below NEVER runs for a food log. Code segments the
     // message, resolves every food from the database (AI fills gaps in the
     // background via write-back), renders the message, and returns cards.
@@ -1485,7 +1490,7 @@ export async function POST(req) {
       }
 
       const localHourForSeg = (typeof localHour === "number") ? localHour : 12;
-      // [v86] Decide the target date ONCE, from THIS log message ("yesterday" in the
+      // [v87] Decide the target date ONCE, from THIS log message ("yesterday" in the
       // sentence itself — never from surrounding chat), and carry it on every card.
       const todayStr = getLocalDate(clientDate);
       const logDate = detectLogDateWithHour(lookupMsg, todayStr, localHourForSeg);
@@ -1500,7 +1505,7 @@ export async function POST(req) {
         if (items.length > 0) {
           cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, date: logDate, items });
         }
-        console.log(`  [v86] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
+        console.log(`  [v87] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
       }
 
       // Nothing identifiable anywhere → deterministic clarifying message (code, not AI).
@@ -1537,11 +1542,11 @@ export async function POST(req) {
         logMessageId = inserted?.id || null;
       } catch (e) { console.log("Save error:", e); }
 
-      console.log(`=== FOOD LOG [v86] | ${cards.length} card(s) | conversational AI: skipped`);
+      console.log(`=== FOOD LOG [v87] | ${cards.length} card(s) | conversational AI: skipped`);
       return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
-    // ═══ [v86] GOAL STATEMENT — CODE-OWNED, EARLY RETURN ═════════════════════
+    // ═══ [v87] GOAL STATEMENT — CODE-OWNED, EARLY RETURN ═════════════════════
     // "I want to lose 30 lbs" never reaches the AI. Code parses it, code computes
     // from TRUE maintenance, code authors the reply. If mandatory profile data is
     // missing, code says exactly what to fill in — it never guesses.
@@ -1580,7 +1585,7 @@ export async function POST(req) {
         if (missing.length > 0) {
           const missMsg = `To calculate this safely I need your real numbers — guessing produces bad targets. Please fill in: ${missing.join(", ")}. You'll find ${missing.length > 1 ? "them" : "it"} under Profile → basics (height is near the Recalculate button). Then just ask me again.`;
           const mid = await saveCodeReply(missMsg);
-          console.log(`=== GOAL [v86] | blocked, missing: ${missing.join(", ")}`);
+          console.log(`=== GOAL [v87] | blocked, missing: ${missing.join(", ")}`);
           return Response.json({ reply: missMsg, aiMessageId: mid });
         }
 
@@ -1598,7 +1603,7 @@ export async function POST(req) {
           replyText += `\n\nReview the card below — nothing changes until you confirm.`;
           const storedGoal = replyText + `\n\n<<<GOAL_DATA>>>\n${JSON.stringify(computed)}\n<<<END_GOAL_DATA>>>`;
           const mid = await saveCodeReply(storedGoal);
-          console.log(`=== GOAL [v86] | code-owned | maintenance ${computed.maintenance} -> target ${computed.calories}`);
+          console.log(`=== GOAL [v87] | code-owned | maintenance ${computed.maintenance} -> target ${computed.calories}`);
           return Response.json({ reply: storedGoal, aiMessageId: mid });
         }
       }
@@ -2109,7 +2114,7 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
     }
 
     if (context?.type === "meal_planning") {
-      // [v86] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
+      // [v87] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
       // the UI: the parser deduplicates per meal type, so option 2's button silently
       // vanished and the user couldn't pick it. One suggestion, one set of buttons;
       // don't like it -> Cancel/Edit and ask for another. Full-day plans still get
@@ -2312,7 +2317,7 @@ For MULTIPLE LABEL comparison mode: do NOT emit MEAL_DATA on the comparison resp
 THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo response ends with MEAL_DATA.`;
     }
 
-    // ═══ [v86] INTELLIGENCE: inject the code-assembled PROFILE slot + capture rules.
+    // ═══ [v87] INTELLIGENCE: inject the code-assembled PROFILE slot + capture rules.
     // Coaching/planning turns only — never photos (vision prompt stays clean), and
     // food logs never reach here (early return). Zero extra AI calls: the blocks
     // ride on this turn's existing response.
@@ -2349,7 +2354,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI [v86] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v87] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 
@@ -2395,7 +2400,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
     }
     console.log("=== RESPONSE ===\n", reply);
 
-    // [v86] Validate FACT blocks and replace GOAL parameters with code-computed targets
+    // [v87] Validate FACT blocks and replace GOAL parameters with code-computed targets
     // BEFORE the reply is stored or returned — the client only ever sees enriched blocks.
     reply = await enrichIntelligenceBlocks(reply, activeUserId);
 
