@@ -455,6 +455,7 @@ function stripMealData(text) {
   return text
     .replace(MEAL_DATA_REGEX_G, "")
     .replace(FACT_DATA_REGEX_G, "")
+    .replace(FACT_REMOVE_REGEX_G, "")
     .replace(GOAL_DATA_REGEX_G, "")
     .trim(); // g flags: strip ALL blocks, never leak code
 }
@@ -465,6 +466,7 @@ function stripMealData(text) {
 // (string tokens "f0"/"g0" so they never collide with numeric meal-card indices).
 
 const FACT_DATA_REGEX_G = /<<<FACT_DATA>>>\s*([\s\S]*?)\s*<<<END_FACT_DATA>>>/g;
+const FACT_REMOVE_REGEX_G = /<<<FACT_REMOVE>>>\s*([\s\S]*?)\s*<<<END_FACT_REMOVE>>>/g;
 const GOAL_DATA_REGEX_G = /<<<GOAL_DATA>>>\s*([\s\S]*?)\s*<<<END_GOAL_DATA>>>/g;
 
 function extractBlocks(text, regex) {
@@ -483,6 +485,10 @@ function extractBlocks(text, regex) {
 
 function extractFactCards(text) {
   return extractBlocks(text, FACT_DATA_REGEX_G).filter(f => f.kind && f.value);
+}
+
+function extractFactRemovals(text) {
+  return extractBlocks(text, FACT_REMOVE_REGEX_G).filter(f => f.kind && f.value);
 }
 
 function extractGoalCards(text) {
@@ -871,6 +877,7 @@ if (row.response) {
   const rawResponse = row.response;
   const reloadedCards = extractMealCards(rawResponse);
   const reloadedFacts = extractFactCards(rawResponse);
+  const reloadedRemovals = extractFactRemovals(rawResponse);
   const reloadedGoals = extractGoalCards(rawResponse);
   let displayResponse = cleanForDisplay(rawResponse);
   if (reloadedCards.length === 1) {
@@ -881,6 +888,7 @@ if (row.response) {
     content: displayResponse,
     mealCards: reloadedCards.length > 0 ? reloadedCards : null,
     factCards: reloadedFacts.length > 0 ? reloadedFacts : null,
+    factRemovals: reloadedRemovals.length > 0 ? reloadedRemovals : null,
     goalCards: reloadedGoals.length > 0 ? reloadedGoals : null,
     // dismissed_cards column: cross-device dismissal state. Tolerate the column
     // missing (pre-migration) — treat as none dismissed.
@@ -1041,6 +1049,7 @@ const reply = data.reply || "Sorry, could not get a response.";
 //    MEAL_DATA blocks, strip/clean the text, enforce code-owned totals on single cards.
 let mealCards = (Array.isArray(data.mealCards) && data.mealCards.length > 0) ? data.mealCards : null;
 const factCards = extractFactCards(reply);
+const factRemovals = extractFactRemovals(reply);
 const goalCards = extractGoalCards(reply);
 let displayReply;
 if (mealCards) {
@@ -1059,6 +1068,7 @@ role: "assistant",
 content: displayReply,
 mealCards: mealCards || null,
 factCards: factCards.length > 0 ? factCards : null,
+factRemovals: factRemovals.length > 0 ? factRemovals : null,
 goalCards: goalCards.length > 0 ? goalCards : null,
 dismissedCards: [],
 resolved: false,
@@ -1121,7 +1131,11 @@ await supabase.from("planned_meals").delete().eq("id", e.id);
 
 try {
       await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
-     
+
+      // [v85] Saving also dismisses the button box permanently — DB-content matching
+      // alone left zombie buttons after tab switches (the reported bug).
+      setDismissedPlanKeys(prev => new Set([...prev, getMealKey(msgIdx, meal)]));
+
       await loadPlannedMeals(uid);
     } catch (err) {
       alert(`Could not save to plan: ${err.message || "Please try again."}`);
@@ -1152,6 +1166,8 @@ async function handleAddAllToPlan(meals, msgIdx, targetDate) {
       }
       try {
           await saveMealViaAPI("planned_meals", { ...meal, date: targetDate }, uid);
+          // [v85] save = dismiss, same as the single-add path
+          setDismissedPlanKeys(prev => new Set([...prev, getMealKey(msgIdx, meal)]));
         } catch (err) {
           failures.push(`${meal.food}: ${err.message}`);
         }
@@ -1469,6 +1485,12 @@ await loadGoals(userId); // header ring + macro bars pick up the new targets
 setHistory(prev => [...prev, {
 role: "assistant",
 content: `✅ Targets updated: ${payload.goal.calories} cal · ${payload.goal.protein}g P / ${payload.goal.carbs}g C / ${payload.goal.fat}g F`,
+isConfirmation: true,
+}]);
+} else if (action === "save" && payload.remove) {
+setHistory(prev => [...prev, {
+role: "assistant",
+content: `🗑 Removed from your profile: ${factCardLabel(payload.fact)}`,
 isConfirmation: true,
 }]);
 } else if (action === "save") {
@@ -1958,7 +1980,7 @@ style={{ ...buttonBase, background: isSaving ? "#ef444455" : "#ef4444" }}
 )}
 
 {/* [v83] FACT / GOAL confirmation cards — the review gate for the intelligence layer */}
-{!isUser && ((msg.factCards && msg.factCards.length > 0) || (msg.goalCards && msg.goalCards.length > 0)) && (
+{!isUser && ((msg.factCards && msg.factCards.length > 0) || (msg.factRemovals && msg.factRemovals.length > 0) || (msg.goalCards && msg.goalCards.length > 0)) && (
 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
 {(msg.factCards || []).map((fact, fi) => {
 const token = `f${fi}`;
@@ -1997,6 +2019,42 @@ background: isSaving ? "#ef444455" : "#ef4444" }}
 );
 })}
 
+{(msg.factRemovals || []).map((fact, ri) => {
+const token = `r${ri}`;
+if ((msg.dismissedCards || []).includes(token)) return null;
+return (
+<div key={token} style={{ display:"flex", flexDirection:"column", gap:8,
+padding:"12px", borderRadius:12, border:"1px solid #ef444455", background:T.surface }}>
+<div style={{ fontSize:12, fontWeight:800, color:T.text }}>
+🗑 Remove from your profile?
+</div>
+<div style={{ fontSize:13, color:T.text }}>
+{factCardLabel(fact)}
+</div>
+<div style={{ display:"flex", gap:6 }}>
+<button
+onClick={() => handleIntelCard("save", msg, idx, token, { remove: true, fact })}
+disabled={isSaving}
+style={{ color:"#fff", border:"none", borderRadius:10, padding:"8px 12px",
+fontWeight:600, cursor:"pointer", fontSize:13,
+background: isSaving ? "#ef444455" : "#ef4444" }}
+>
+🗑 Remove
+</button>
+<button
+onClick={() => handleIntelCard("dismiss", msg, idx, token, { remove: true, fact })}
+disabled={isSaving}
+style={{ color:"#fff", border:"none", borderRadius:10, padding:"8px 12px",
+fontWeight:600, cursor:"pointer", fontSize:13,
+background: isSaving ? "#37415155" : "#374151" }}
+>
+Keep it
+</button>
+</div>
+</div>
+);
+})}
+
 {(msg.goalCards || []).map((goal, gi) => {
 const token = `g${gi}`;
 if ((msg.dismissedCards || []).includes(token)) return null;
@@ -2008,6 +2066,11 @@ padding:"12px", borderRadius:12, border:"1px solid #2563eb55", background:T.surf
 </div>
 <div style={{ fontSize:13, color:T.text, lineHeight:1.5 }}>
 {goal.calories} cal · {goal.protein}g P / {goal.carbs}g C / {goal.fat}g F
+{Number(goal.maintenance) > 0 ? (
+<div style={{ color:T.sub, fontSize:12 }}>
+Anchored to your maintenance: ~{goal.maintenance} cal/day
+</div>
+) : null}
 {goal.direction && goal.direction !== "maintain" && goal.est_weeks ? (
 <div style={{ color:T.sub, fontSize:12 }}>
 {goal.direction === "lose" ? "Losing" : "Gaining"} ~{goal.weekly_rate_lbs} lb/week · about {goal.est_weeks} weeks
@@ -2017,6 +2080,11 @@ padding:"12px", borderRadius:12, border:"1px solid #2563eb55", background:T.surf
 {goal.clamped ? (
 <div style={{ color:"#f59e0b", fontSize:12, marginTop:2 }}>
 ⚠️ Adjusted to a safe rate — faster isn't sustainable or healthy.
+</div>
+) : null}
+{goal.note ? (
+<div style={{ color:"#f59e0b", fontSize:12, marginTop:2 }}>
+{goal.note}
 </div>
 ) : null}
 </div>
