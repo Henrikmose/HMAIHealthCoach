@@ -127,7 +127,7 @@ function pickBest(rows, term) {
       for (const v of specialty) if (name.includes(v)) score -= 40;
     }
     for (const v of oddVariants) if (name.includes(v) && !term_l.includes(v)) score -= 35;
-    // [v89] SOURCE TIER: a user-declared label is truth; an AI estimate is a guess.
+    // [v91] SOURCE TIER: a user-declared label is truth; an AI estimate is a guess.
     // When name relevance is comparable, label wins and ai_estimate loses. USDA/custom
     // sit between — never displaced by a label unless the label's NAME matches better.
     const src = (r.source || '').toLowerCase();
@@ -209,7 +209,7 @@ function gramsForStaple(st, amount, unit) {
 async function lookupFood(foodName) {
   if (!foodName) return null;
   const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
-  // [v89] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
+  // [v91] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
   // (a leading "-" turns the full-text stage into a NOT-query that matches nearly the
   // whole table — the espresso incident), and junk/too-short terms never reach the DB.
   const clean = foodName.trim().toLowerCase()
@@ -285,7 +285,7 @@ function inferMealTypeFromHour(hour) {
 }
 
 function segmentMeals(message, currentHour = 12) {
-  // [v89] Handles BOTH natural orientations:
+  // [v91] Handles BOTH natural orientations:
   //   marker-first: "for breakfast 2 eggs, for lunch a salad"   (food AFTER its marker)
   //   food-first:   "2 eggs for breakfast and a salad for lunch" (food BEFORE its marker)
   // The old version only understood marker-first, so "X for dinner" produced ZERO
@@ -468,7 +468,7 @@ async function lookupFoodMacros(message) {
   return results.length > 0 ? results : null;
 }
 
-// ═══ [v89] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
+// ═══ [v91] CODE-OWNED FOOD-LOG PIPELINE ═════════════════════════════════════
 // The AI NEVER writes the chat message for a food log. Its only jobs here are:
 //   (a) parse a segment the code parser couldn't (returns structured items, no numbers)
 //   (b) supply macros for ONE unknown food (JSON only → written to `foods` → read back)
@@ -571,7 +571,7 @@ async function writeBackAIFood(macros) {
 
 const WEIGHT_UNIT_GRAMS = { oz: 28.35, ounce: 28.35, g: 1, gram: 1, kg: 1000, lb: 453.6, pound: 453.6, ml: 1 };
 
-// ═══ [v89] CARD-CARRIED DATES ═══════════════════════════════════════════════
+// ═══ [v91] CARD-CARRIED DATES ═══════════════════════════════════════════════
 // The target date is decided ONCE, here, at log time, from the log message itself —
 // then stored inside each card. The client renders the stored date and lets the user
 // correct it with one tap. Render-time date recomputation (which sampled surrounding
@@ -704,7 +704,7 @@ function stripInlineMacroSpecs(text) {
   return out.replace(/\s+/g, " ").trim();
 }
 
-// ═══ [v89] LAYER 2 — LABEL DECLARATION ══════════════════════════════════════
+// ═══ [v91] LAYER 2 — LABEL DECLARATION ══════════════════════════════════════
 // A message that is FOOD NAME + MACRO VALUES is a label being read to us — the
 // best data source we have. Detected by CODE. The user's numbers are used
 // VERBATIM for this log, and written back to `foods` as source='label', which
@@ -820,7 +820,7 @@ const ZERO_CAL_OK = /(water|black coffee|coffee, black|diet (soda|coke|pepsi)|sp
 
 // Resolve a whole segment: code parser first; AI parse ONLY if code found nothing.
 async function resolveSegment(segText) {
-  // [v89] LABEL DECLARATION check FIRST: if this segment is "food + macro values",
+  // [v91] LABEL DECLARATION check FIRST: if this segment is "food + macro values",
   // the user's numbers are the truth — used verbatim, cached as source='label'.
   const decl = extractLabelDeclaration(segText);
   if (decl) {
@@ -837,7 +837,7 @@ async function resolveSegment(segText) {
       fat: Math.round(decl.perServing.fat * servings * 10) / 10,
       source: "label", usda_food_id: null,
     };
-    console.log(`  [v89] LABEL DECLARATION: "${decl.name}" ${decl.perServing.calories} cal (write-back: ${wb.action})`);
+    console.log(`  [v91] LABEL DECLARATION: "${decl.name}" ${decl.perServing.calories} cal (write-back: ${wb.action})`);
     return { items: [item], unresolved: [], labelSaved: (wb.action === "created" || wb.action === "superseded_ai" || wb.action === "updated") ? (wb.name || decl.name) : null };
   }
   const cleanedText = stripInlineMacroSpecs(segText);
@@ -859,7 +859,7 @@ async function resolveSegment(segText) {
   const unresolved = [];
   for (const it of parsed.slice(0, 6)) {
     const r = await resolveOneFood(it);
-    // [v89] All-zero macros = a failed resolution wearing a card ("can you give,
+    // [v91] All-zero macros = a failed resolution wearing a card ("can you give,
     // 0 cal"). Reject unless the food is genuinely zero-calorie (water, black
     // coffee, diet soda...). Failed items go to unresolved, never onto a card.
     if (r && r.calories < 1 && r.protein < 0.5 && r.carbs < 0.5 && r.fat < 0.5
@@ -900,7 +900,7 @@ function renderMealDataBlock(card) {
   return `<<<MEAL_DATA>>>\n${JSON.stringify({ meal_type: card.meal_type, date: card.date || null, items: card.items })}\n<<<END_MEAL_DATA>>>`;
 }
 
-// ═══ [v89] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
+// ═══ [v91] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
 // Same division of labor as everything else in CURA:
 //   AI  = language only. It EXTRACTS facts/goal parameters into blocks. Nothing more.
 //   CODE = assigns tiers, computes every number, stores, and applies stored facts.
@@ -950,7 +950,7 @@ function goalTypeAdjustment(goalType) {
   return 0;
 }
 
-// ═══ [v89] GOAL MATH — STRICT MODE. The delta method is DEAD. ════════════════
+// ═══ [v91] GOAL MATH — STRICT MODE. The delta method is DEAD. ════════════════
 // Maintenance comes from the user's BODY (Mifflin-St Jeor: weight, height, age,
 // gender, activity) or not at all. Deriving it from the current calorie target
 // caused a death spiral: each goal request re-cut from the last cut (1800 → 1500
@@ -1013,6 +1013,28 @@ function computeGoalTargets(profile, currentGoals, params) {
   let dailyDelta = dir * ratePerWeek * 3500 / 7;
   let calories = Math.round(maintenance + dailyDelta);
 
+  // [v91] REQUESTED TARGET: the user's stated calorie number is honored — up to the
+  // safety clamp, never past it. "I want ~2000" against a 2832 maintenance is 1.66
+  // lb/week; the engine answers 2082 and SAYS WHY, instead of ignoring the request.
+  let targetNote = null;
+  const requested = Number(params.target_calories) || null;
+  if (requested && dir <= 0) {
+    const requestedRate = (maintenance - requested) * 7 / 3500;
+    if (requestedRate > MAX_RATE_LBS_WK) {
+      calories = Math.round(maintenance - MAX_RATE_LBS_WK * 3500 / 7);
+      ratePerWeek = MAX_RATE_LBS_WK;
+      clamped = true;
+      targetNote = `You asked for ~${requested} cal/day — that's ${Math.round(requestedRate * 100) / 100} lb/week, past the safe limit. The closest safe target is ${calories} (1.5 lb/week).`;
+    } else if (requestedRate >= 0) {
+      calories = requested;
+      ratePerWeek = Math.round(requestedRate * 100) / 100;
+      targetNote = `Using your requested ~${requested} cal/day (≈${ratePerWeek} lb/week).`;
+    } else {
+      targetNote = `Your requested ${requested} cal/day is above your maintenance (~${maintenance}) — that gains weight, so I kept a deficit instead.`;
+    }
+    dailyDelta = calories - maintenance;
+  }
+
   // TWO floors, both code-enforced: never below the user's own BMR, and never
   // below the absolute minimum. Whichever bites recomputes the honest rate.
   const absFloor = (profile?.gender || "").toString().toLowerCase().startsWith("f") ? 1200 : 1500;
@@ -1027,9 +1049,11 @@ function computeGoalTargets(profile, currentGoals, params) {
   const estWeeks = (dir !== 0 && amountLbs > 0)
     ? Math.ceil(amountLbs / Math.max(ratePerWeek, 0.1)) : null;
 
-  const ratios = dir > 0 ? { p: 0.30, c: 0.45, f: 0.25 }
-              : dir < 0 ? { p: 0.35, c: 0.35, f: 0.30 }
-              :           { p: 0.25, c: 0.45, f: 0.30 };
+  // [v91] high-protein emphasis shifts the split (fat-loss default 35/35/30 -> 40/30/30)
+  const hiP = params.emphasis === "high_protein";
+  const ratios = dir > 0 ? (hiP ? { p: 0.35, c: 0.40, f: 0.25 } : { p: 0.30, c: 0.45, f: 0.25 })
+              : dir < 0 ? (hiP ? { p: 0.40, c: 0.30, f: 0.30 } : { p: 0.35, c: 0.35, f: 0.30 })
+              :           (hiP ? { p: 0.30, c: 0.40, f: 0.30 } : { p: 0.25, c: 0.45, f: 0.30 });
   const protein = Math.round(calories * ratios.p / 4);
   const carbs = Math.round(calories * ratios.c / 4);
   const fat = Math.round(calories * ratios.f / 9);
@@ -1048,10 +1072,10 @@ function computeGoalTargets(profile, currentGoals, params) {
   // never fed into the math. If they were already cutting harder than this goal
   // requires, the card says so instead of stacking a deficit on a deficit.
   const currentCalories = Number(currentGoals?.calories) || null;
-  let note = null;
-  if (dir < 0 && currentCalories && currentCalories < calories) {
+  let note = targetNote;
+  if (dir < 0 && currentCalories && currentCalories < calories && !targetNote) {
     note = `Your current target (${currentCalories} cal) is already BELOW the safe level for this goal — you've been cutting harder than needed. The recommendation raises you to ${calories}.`;
-  } else if (dir < 0 && currentCalories && currentCalories === calories) {
+  } else if (dir < 0 && currentCalories && currentCalories === calories && !targetNote) {
     note = `Your current target already matches this goal.`;
   }
 
@@ -1063,7 +1087,7 @@ function computeGoalTargets(profile, currentGoals, params) {
   };
 }
 
-// ═══ [v89] GOAL STATEMENT PARSER — code understands "I want to lose 30 lbs in
+// ═══ [v91] GOAL STATEMENT PARSER — code understands "I want to lose 30 lbs in
 // 8 weeks" without AI. Regular numbers + a tiny vocabulary; the AI-extraction
 // path remains only as fallback for phrasings this can't read.
 function parseGoalStatement(text) {
@@ -1082,16 +1106,49 @@ function parseGoalStatement(text) {
   const amount_unit = amt ? (amt[2].startsWith("k") ? "kg" : "lb") : "lb";
 
   let timeframe_weeks = null;
-  const wk = t.match(/(?:in|over|within)\s+(\d+(?:\.\d+)?)\s*(weeks?|months?)\b/);
+  const wk = t.match(/(?:in|over|within)\s+(?:the\s+next\s+)?(\d+(?:\.\d+)?)\s*(weeks?|months?)\b/);
   if (wk) {
     const n = Number(wk[1]);
     timeframe_weeks = wk[2].startsWith("month") ? Math.round(n * 4.345) : n;
+  } else {
+    // [v91] word timeframes — "the next couple of months" defaulted to 1 lb/week before
+    const wordSpans = [
+      [/\b(a\s+couple\s+(?:of\s+)?months?|next\s+couple\s+(?:of\s+)?months?|couple\s+(?:of\s+)?months?)\b/, 9],
+      [/\b(a\s+few\s+months?|few\s+months?)\b/, 13],
+      [/\b(a\s+month|one\s+month|next\s+month)\b/, 4],
+      [/\b(a\s+couple\s+(?:of\s+)?weeks?|couple\s+(?:of\s+)?weeks?)\b/, 2],
+      [/\b(a\s+few\s+weeks?|few\s+weeks?)\b/, 3],
+    ];
+    for (const [re, weeks] of wordSpans) {
+      if (re.test(t)) { timeframe_weeks = weeks; break; }
+    }
   }
 
-  if (direction !== "maintain" && !(amount > 0)) {
-    return { direction, amount: null, amount_unit, timeframe_weeks, incomplete: true };
+  // [v91] REQUESTED TARGET CALORIES ("I'd like to be around 2000"). Every candidate
+  // number is scored by its surrounding words: "want/like/be around/target/for" wins,
+  // "currently/set to/right now" loses — so "currently 2400 ... want 2000" picks 2000.
+  let target_calories = null;
+  {
+    const calRe = /\b([12]\d{3})\b(\s*(?:cal(?:orie)?s?|kcal))?/g;
+    let best = null, bestScore = -99, cm;
+    while ((cm = calRe.exec(t)) !== null) {
+      const before = t.slice(Math.max(0, cm.index - 40), cm.index);
+      let score = 0;
+      if (/\b(want|like|prefer|be|being|target|goal|aim|make it|instead|for|to)\s*(around|about|roughly|at)?\s*$/.test(before)) score += 2;
+      if (/\b(around|about|roughly)\s*$/.test(before)) score += 1;
+      if (/\b(currently|current|right now|set to|at the moment|today i'?m|i'?m at)\b/.test(before)) score -= 3;
+      if (cm[2]) score += 1; // followed by "cal/calories" — clearly a calorie figure
+      if (score >= bestScore) { bestScore = score; best = Number(cm[1]); } // ties -> later mention wins
+    }
+    if (best && best >= 1000 && best <= 4500) target_calories = best;
   }
-  return { direction, amount, amount_unit, timeframe_weeks, incomplete: false };
+
+  const emphasis = /high\s*[- ]?protein/.test(t) ? "high_protein" : null;
+
+  if (direction !== "maintain" && !(amount > 0)) {
+    return { direction, amount: null, amount_unit, timeframe_weeks, target_calories, emphasis, incomplete: !target_calories };
+  }
+  return { direction, amount, amount_unit, timeframe_weeks, target_calories, emphasis, incomplete: false };
 }
 
 // The PROFILE slot of the assembled context object (spec §6). Code-built compact summary
@@ -1382,7 +1439,7 @@ function getUnloggedMealPrompt(hour, nothingLogged) {
 export async function POST(req) {
   try {
     const body = await req.json();
-    const { message, context, history = [], userId, localHour, localDate: clientDate, images, thread_id = null } = body;
+    const { message, context, history = [], userId, localHour, localMinutes, localDate: clientDate, images, thread_id = null } = body;
     const image = images?.[0] || null; // backward compat for single image checks
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
@@ -1475,7 +1532,7 @@ export async function POST(req) {
       fat:      Math.max(0, goal.fat      - committed.fat),
     };
 
-    // ═══ [v89] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
+    // ═══ [v91] FOOD LOG — CODE-OWNED, EARLY RETURN ═══════════════════════════
     // The conversational AI below NEVER runs for a food log. Code segments the
     // message, resolves every food from the database (AI fills gaps in the
     // background via write-back), renders the message, and returns cards.
@@ -1500,7 +1557,7 @@ export async function POST(req) {
       }
 
       const localHourForSeg = (typeof localHour === "number") ? localHour : 12;
-      // [v89] Decide the target date ONCE, from THIS log message ("yesterday" in the
+      // [v91] Decide the target date ONCE, from THIS log message ("yesterday" in the
       // sentence itself — never from surrounding chat), and carry it on every card.
       const todayStr = getLocalDate(clientDate);
       const logDate = detectLogDateWithHour(lookupMsg, todayStr, localHourForSeg);
@@ -1515,7 +1572,7 @@ export async function POST(req) {
         if (items.length > 0) {
           cards.push({ meal_type: seg.meal_type, inferred: !!seg.inferred, date: logDate, items });
         }
-        console.log(`  [v89] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
+        console.log(`  [v91] [${seg.meal_type}] "${seg.text}" -> ${items.length} food(s)${unresolved.length ? `, unresolved: ${unresolved.join(", ")}` : ""}`);
       }
 
       // Nothing identifiable anywhere → deterministic clarifying message (code, not AI).
@@ -1552,16 +1609,45 @@ export async function POST(req) {
         logMessageId = inserted?.id || null;
       } catch (e) { console.log("Save error:", e); }
 
-      console.log(`=== FOOD LOG [v89] | ${cards.length} card(s) | conversational AI: skipped`);
+      console.log(`=== FOOD LOG [v91] | ${cards.length} card(s) | conversational AI: skipped`);
       return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
-    // ═══ [v89] GOAL STATEMENT — CODE-OWNED, EARLY RETURN ═════════════════════
+    // ═══ [v91] GOAL STATEMENT — CODE-OWNED, EARLY RETURN ═════════════════════
     // "I want to lose 30 lbs" never reaches the AI. Code parses it, code computes
     // from TRUE maintenance, code authors the reply. If mandatory profile data is
     // missing, code says exactly what to fill in — it never guesses.
     if (!(images?.length > 0) && context?.type !== "photo" && context?.type !== "food_log") {
-      const goalParams = parseGoalStatement(message);
+      let goalParams = parseGoalStatement(message);
+
+      // [v91] GOAL FOLLOW-UP: "No, I wanted it to be around 2000" after a goal card.
+      // The client flags it; code recovers the prior goal's parameters from the last
+      // stored GOAL_DATA block and re-runs the engine with the new requested target.
+      // Still zero AI.
+      if (!goalParams && context?.type === "goal_followup") {
+        const numMatch = (message || "").match(/\b([12]\d{3})\b/);
+        if (numMatch) {
+          try {
+            const { data: lastGoalRows } = await supabase.from("ai_messages")
+              .select("response").eq("user_id", activeUserId)
+              .like("response", "%<<<GOAL_DATA>>>%")
+              .order("created_at", { ascending: false }).limit(1);
+            const lastBlock = lastGoalRows?.[0]?.response?.match(/<<<GOAL_DATA>>>\s*([\s\S]*?)\s*<<<END_GOAL_DATA>>>/);
+            const prior = lastBlock ? parseLooseJSON(lastBlock[1]) : null;
+            goalParams = {
+              direction: prior?.direction || "lose",
+              amount: Number(prior?.amount) > 0 ? Number(prior.amount) : null,
+              amount_unit: prior?.amount_unit || "lb",
+              timeframe_weeks: null,
+              target_calories: Number(numMatch[1]),
+              emphasis: null,
+              incomplete: false,
+            };
+            console.log(`=== GOAL FOLLOW-UP [v91] | requested target ${numMatch[1]}`);
+          } catch (e) {}
+        }
+      }
+
       if (goalParams) {
         const saveCodeReply = async (text) => {
           let id = null;
@@ -1575,7 +1661,7 @@ export async function POST(req) {
           return id;
         };
 
-        if (goalParams.incomplete) {
+        if (goalParams.incomplete && !goalParams.target_calories) {
           const askMsg = `Happy to set that up — how much do you want to ${goalParams.direction}? Tell me like: "I want to ${goalParams.direction} 20 pounds" (add "in 10 weeks" if you have a timeline).`;
           const mid = await saveCodeReply(askMsg);
           return Response.json({ reply: askMsg, aiMessageId: mid });
@@ -1595,7 +1681,7 @@ export async function POST(req) {
         if (missing.length > 0) {
           const missMsg = `To calculate this safely I need your real numbers — guessing produces bad targets. Please fill in: ${missing.join(", ")}. You'll find ${missing.length > 1 ? "them" : "it"} under Profile → basics (height is near the Recalculate button). Then just ask me again.`;
           const mid = await saveCodeReply(missMsg);
-          console.log(`=== GOAL [v89] | blocked, missing: ${missing.join(", ")}`);
+          console.log(`=== GOAL [v91] | blocked, missing: ${missing.join(", ")}`);
           return Response.json({ reply: missMsg, aiMessageId: mid });
         }
 
@@ -1613,7 +1699,7 @@ export async function POST(req) {
           replyText += `\n\nReview the card below — nothing changes until you confirm.`;
           const storedGoal = replyText + `\n\n<<<GOAL_DATA>>>\n${JSON.stringify(computed)}\n<<<END_GOAL_DATA>>>`;
           const mid = await saveCodeReply(storedGoal);
-          console.log(`=== GOAL [v89] | code-owned | maintenance ${computed.maintenance} -> target ${computed.calories}`);
+          console.log(`=== GOAL [v91] | code-owned | maintenance ${computed.maintenance} -> target ${computed.calories}`);
           return Response.json({ reply: storedGoal, aiMessageId: mid });
         }
       }
@@ -1776,7 +1862,7 @@ Very Active: ${veryActive ? "YES" : "NO"}
 ${currentWeight  ? `Current Weight: ${currentWeight} ${weightUnit}` : ""}
 ${targetWeight   ? `Target Weight: ${targetWeight} ${weightUnit}` : ""}
 ${healthConditions ? `Health Notes: ${healthConditions}` : ""}
-Local Time: ${hour}:00 (${timeOfDay})
+Local Time: ${hour}:${String(typeof localMinutes === "number" ? localMinutes : 0).padStart(2, "0")} (${timeOfDay})
 
 DAILY TARGETS — SET BY USER, DO NOT CHANGE:
 Calories: ${goal.calories} | Protein: ${goal.protein}g | Carbs: ${goal.carbs}g | Fat: ${goal.fat}g
@@ -2124,7 +2210,7 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
     }
 
     if (context?.type === "meal_planning") {
-      // [v89] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
+      // [v91] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
       // the UI: the parser deduplicates per meal type, so option 2's button silently
       // vanished and the user couldn't pick it. One suggestion, one set of buttons;
       // don't like it -> Cancel/Edit and ask for another. Full-day plans still get
@@ -2327,7 +2413,7 @@ For MULTIPLE LABEL comparison mode: do NOT emit MEAL_DATA on the comparison resp
 THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo response ends with MEAL_DATA.`;
     }
 
-    // ═══ [v89] INTELLIGENCE: inject the code-assembled PROFILE slot + capture rules.
+    // ═══ [v91] INTELLIGENCE: inject the code-assembled PROFILE slot + capture rules.
     // Coaching/planning turns only — never photos (vision prompt stays clean), and
     // food logs never reach here (early return). Zero extra AI calls: the blocks
     // ride on this turn's existing response.
@@ -2364,7 +2450,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
 
     const provider = process.env.AI_PROVIDER || "openai";
     const hasImages = images?.length > 0;
-    console.log(`=== AI [v89] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
+    console.log(`=== AI [v91] | ${provider} | ${userName} | ${hour}:00 | Goal: ${goal.calories} cal | Photos: ${images?.length || 0} | Events: ${events.length}`);
 
     let reply;
 
@@ -2410,7 +2496,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
     }
     console.log("=== RESPONSE ===\n", reply);
 
-    // [v89] Validate FACT blocks and replace GOAL parameters with code-computed targets
+    // [v91] Validate FACT blocks and replace GOAL parameters with code-computed targets
     // BEFORE the reply is stored or returned — the client only ever sees enriched blocks.
     reply = await enrichIntelligenceBlocks(reply, activeUserId);
 

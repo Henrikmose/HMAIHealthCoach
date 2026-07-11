@@ -294,7 +294,7 @@ export default function ProfilePage() {
     setProteinPct(pcts.p);
     setCarbsPct(pcts.c);
     setFatPct(pcts.f);
-    setRecalcNote(`↻ Recalculated from your ${weightUnit === "lbs" ? w + " lbs" : w + " kg"}, ${a}y, ${hf}'${hi || 0}", ${activityLevel} activity — review below and tap Save to apply.`);
+    setRecalcNote(`↻ Maintenance ~${tdee} cal (from your ${weightUnit === "lbs" ? w + " lbs" : w + " kg"}, ${a}y, ${hf}'${hi || 0}", ${activityLevel} activity) → ${goal.replace(/[-_]/g, " ")} target ${newCalories} cal. Review below and tap Save to apply.`);
   };
 
   const handleSave = async () => {

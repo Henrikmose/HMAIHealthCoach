@@ -978,7 +978,14 @@ const recentAiMsgs = [...history].reverse().filter(m => m.role === "assistant").
 const anyRecentAiHadMeals = recentAiMsgs.some(m => parseAllMeals(m.content).length > 0 || (m.mealCards && m.mealCards.length > 0));
 const lastAiHadMeals = anyRecentAiHadMeals;
 
-if (isLogMessage(trimmed) && imagesToSend.length === 0) {
+if (imagesToSend.length === 0 && recentAiMsgs[0]?.goalCards?.length > 0 && /\b[12]\d{3}\b/.test(trimmed) && !statesFoodPhrase(trimmed)) {
+// [v91] GOAL FOLLOW-UP: the last AI message was a goal card and this reply carries a
+// calorie-sized number ("no, I wanted around 2000") — that's goal negotiation, not a
+// food log. Routed BEFORE the log detector so the number can't trip it.
+newActiveMealLog = null;
+setActiveMealLog(null);
+context = { type: "goal_followup" };
+} else if (isLogMessage(trimmed) && imagesToSend.length === 0) {
 // [v80] ONE ENGINE: every food log goes to the server pipeline. The old client-side
 // lookup-foods shortcut is gone — it duplicated the resolver AND merged whole-day
 // logs into one meal because it never segmented. The server pipeline is code-owned
@@ -1047,6 +1054,7 @@ history: newHistory.slice(-1).map((m) => ({ role: m.role, content: m.content }))
 thread_id: activeThreadId,
 userId: uid,
 localHour: new Date().getHours(),
+localMinutes: new Date().getMinutes(),
 localDate: getLocalDate(),
 images: imagesToSend.length > 0 ? imagesToSend.map(img => ({ base64: img.base64, mimeType: img.mimeType })) : null,
 }),
