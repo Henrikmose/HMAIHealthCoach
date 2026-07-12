@@ -21,17 +21,41 @@ const DIET_TAG_KEYS = ["vegan","vegetarian","pescatarian","dairy_free","gluten_f
 export async function GET() {
   try {
     // 1) Which foods already have diet tags?
-    const { data: taggedRows, error: tagErr } = await supabase
-      .from("food_tags")
-      .select("food_id, tags!inner(category)")
-      .eq("tags.category", "diet_compatibility");
-    if (tagErr) return Response.json({ success: false, step: "read tagged", error: tagErr.message }, { status: 500 });
-    const taggedIds = new Set((taggedRows || []).map(r => r.food_id));
+    // [v105.2] PAGINATED — Supabase caps reads at 1000 rows; food_tags is past
+    // 2000, so a single read undercounted the tagged set and the queue never
+    // drained (remaining stuck at 90). Read in pages until complete.
+    const taggedIds = new Set();
+    {
+      const PAGE = 1000;
+      let from = 0;
+      for (let page = 0; page < 50; page++) {
+        const { data: rows, error: tagErr } = await supabase
+          .from("food_tags")
+          .select("food_id, tags!inner(category)")
+          .eq("tags.category", "diet_compatibility")
+          .range(from, from + PAGE - 1);
+        if (tagErr) return Response.json({ success: false, step: "read tagged", error: tagErr.message }, { status: 500 });
+        for (const r of rows || []) taggedIds.add(r.food_id);
+        if (!rows || rows.length < PAGE) break;
+        from += PAGE;
+      }
+    }
 
-    // 2) All foods; the untagged remainder is our work queue
-    const { data: allFoods, error: foodErr } = await supabase.from("foods").select("id, name");
-    if (foodErr) return Response.json({ success: false, step: "read foods", error: foodErr.message }, { status: 500 });
-    const untagged = (allFoods || []).filter(f => !taggedIds.has(f.id));
+    // 2) All foods (paginated for the same reason); the untagged remainder is the queue
+    const allFoods = [];
+    {
+      const PAGE = 1000;
+      let from = 0;
+      for (let page = 0; page < 50; page++) {
+        const { data: rows, error: foodErr } = await supabase.from("foods")
+          .select("id, name").range(from, from + PAGE - 1);
+        if (foodErr) return Response.json({ success: false, step: "read foods", error: foodErr.message }, { status: 500 });
+        allFoods.push(...(rows || []));
+        if (!rows || rows.length < PAGE) break;
+        from += PAGE;
+      }
+    }
+    const untagged = allFoods.filter(f => !taggedIds.has(f.id));
 
     if (untagged.length === 0) {
       return Response.json({ success: true, classified: 0, remaining: 0, message: "All foods have diet tags. Backfill complete." });
