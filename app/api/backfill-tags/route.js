@@ -92,14 +92,20 @@ Respond with ONLY a JSON array, no prose:
 
     const inserts = [];
     let classifiedCount = 0;
-    const batchIds = new Set(batch.map(f => f.id));
+    // [v105.3] format-agnostic ID matching — the model sometimes echoes ids as
+    // strings ("id": "1234"), which silently failed numeric Set matching and
+    // recycled the same batch forever (classified: 0). Match on String(id) and
+    // insert with the ORIGINAL typed id from our own batch, never the echo.
+    const batchById = new Map(batch.map(f => [String(f.id).trim(), f]));
     for (const entry of parsed) {
-      if (entry?.id == null || !batchIds.has(entry.id)) continue;
+      if (entry?.id == null) continue;
+      const match = batchById.get(String(entry.id).trim());
+      if (!match) continue;
       classifiedCount++;
       for (const k of (entry.tags || [])) {
         const tid = tagIdMap.get(k);
         if (tid && DIET_TAG_KEYS.includes(k)) {
-          inserts.push({ food_id: entry.id, tag_id: tid, confidence: 0.8, source: "ai_backfill", reason: "AI diet classification (backfill)" });
+          inserts.push({ food_id: match.id, tag_id: tid, confidence: 0.8, source: "ai_backfill", reason: "AI diet classification (backfill)" });
         }
       }
     }
@@ -122,8 +128,11 @@ Respond with ONLY a JSON array, no prose:
       success: true,
       classified: classifiedCount,
       tagsWritten: inserts.length,
-      remaining: untagged.length - batch.length,
-      message: untagged.length - batch.length > 0 ? "Refresh to process the next batch." : "Backfill complete.",
+      remaining: untagged.length - classifiedCount,
+      message: untagged.length - classifiedCount > 0 ? "Refresh to process the next batch." : "Backfill complete.",
+      // [v105.3] if a batch classifies nothing, show what the model said so the
+      // next diagnosis takes one screenshot instead of three guesses
+      ...(classifiedCount === 0 ? { debug_model_sample: text.slice(0, 400), debug_batch_sample: batch.slice(0, 5).map(f => `${f.id}: ${f.name}`) } : {}),
     });
   } catch (e) {
     return Response.json({ success: false, error: e?.message || "backfill failed" }, { status: 500 });
