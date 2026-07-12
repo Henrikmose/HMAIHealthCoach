@@ -1581,7 +1581,7 @@ export async function POST(req) {
     let todayPlanned = [];
     try {
       const { data: planned } = await supabase
-        .from("planned_meals").select("*").eq("user_id", activeUserId).eq("date", today);
+        .from("planned_meals").select("*").eq("user_id", activeUserId).eq("date", today).eq("status", "planned"); // [v97-B] proposed drafts must NEVER enter coach math
       todayPlanned = planned || [];
     } catch (e) { console.log("Planned meals error:", e.message); }
 
@@ -2352,6 +2352,7 @@ BLOCK RULES:
 - meal_type: breakfast | lunch | dinner | snack (lowercase). One Breakfast, one Lunch, one Dinner max; snacks can repeat (each its own block).
 - timing: short RELATIVE phrase ("2 hours before your run", "midday", "right after your game") — never a clock time.
 - items: 2-4 real, simple foods per meal, each with a numeric amount and a common unit (oz, g, cup, tbsp, tsp, scoop, slice, piece, egg, serving). Prefer common whole foods — they resolve best against the database.
+- Every item must be a SUBSTANTIAL component of the meal — something a person would plate on purpose. NEVER add garnish-sized items (a tablespoon of anchovies, a few nuts, a splash of anything) to tune totals. If a meal needs more, make a real portion bigger.
 - NO calories/protein/carbs/fat fields — the app ignores them and computes its own.
 - Do NOT restate the foods or amounts in prose — the card renders them.
 

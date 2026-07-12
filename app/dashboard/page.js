@@ -312,7 +312,7 @@ export default function DashboardPage() {
         { data: plannedData },
       ] = await Promise.all([
         supabase.from("actual_meals").select("*").eq("user_id", uid).eq("date", date),
-        supabase.from("planned_meals").select("*").eq("user_id", uid).eq("date", date),
+        supabase.from("planned_meals").select("*").eq("user_id", uid).eq("date", date).eq("status", "planned"), // [v97-B] drafts never pollute dashboard totals
       ]);
 
       setActual(actualData || []);
@@ -432,6 +432,9 @@ export default function DashboardPage() {
       servings: meal.servings || 1,
       meal_type: meal.meal_type,
       date: newDate,
+      // [v97-B] planned rows MUST carry status — a NULL-status row would silently
+      // vanish behind the status='planned' filters while still existing in the table
+      ...(table === "planned_meals" ? { status: "planned" } : {}),
     });
 
     if (newDate === selectedDate) {
