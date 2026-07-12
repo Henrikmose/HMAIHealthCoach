@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+import { randomUUID } from "crypto";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -947,6 +948,137 @@ async function resolveSuggestionBlock(data, planDate) {
   return { meal_type: mealType, date: planDate, items, timing: data.timing || null, unresolved };
 }
 
+// ═══ [v98] PLAN TAB GENERATION — gap-filling, never destructive ══════════════
+// Called by the Plan tab (body.generate === true). Reads what already exists on
+// the day (the user's own planned meals AND kept drafts are FIXED POINTS), asks
+// the AI to propose ONLY the missing meals within the remaining calorie budget,
+// prices everything through the same resolveOneFood pipeline chat uses, and
+// inserts rows server-side as status='proposed'. It NEVER deletes anything —
+// "redo the day" = reject the drafts you don't want, then generate again.
+async function handlePlanGeneration(activeUserId, planDate) {
+  try {
+    // 1) Goal
+    let goal = { calories: 2200, protein: 180, carbs: 220, fat: 70 };
+    try {
+      const { data: g } = await supabase.from("goals").select("*").eq("user_id", activeUserId).single();
+      if (g) goal = { calories: g.calories || 2200, protein: g.protein || 180, carbs: g.carbs || 220, fat: g.fat || 70 };
+    } catch {}
+
+    // 2) What already exists on this day — planned AND proposed both count as fixed
+    const { data: dayRows } = await supabase.from("planned_meals").select("*")
+      .eq("user_id", activeUserId).eq("date", planDate).in("status", ["planned", "proposed"]);
+    const existing = dayRows || [];
+    const existingCal = existing.reduce((s, m) => s + (Number(m.calories) || 0) * (Number(m.servings) || 1), 0);
+    const existingTypes = new Set(existing.map(m => m.meal_type));
+    const missingMains = ["breakfast", "lunch", "dinner"].filter(t => !existingTypes.has(t));
+    const remainingBudget = Math.max(0, goal.calories - existingCal);
+
+    if (missingMains.length === 0 && remainingBudget < 250) {
+      return Response.json({ success: true, generated: 0, rows: 0, date: planDate, message: "Day already fully planned." });
+    }
+
+    // 3) Variety: what the surrounding week already serves (±6 days, mains only)
+    let varietyNote = "";
+    try {
+      const { data: weekRows } = await supabase.from("planned_meals")
+        .select("date, meal_type, food")
+        .eq("user_id", activeUserId)
+        .gte("date", shiftDate(planDate, -6)).lte("date", shiftDate(planDate, 6))
+        .neq("date", planDate)
+        .in("status", ["planned", "proposed"]);
+      const mains = (weekRows || [])
+        .filter(m => m.meal_type === "dinner" || m.meal_type === "lunch")
+        .map(m => String(m.food).replace(/,\s*[\d.]+\s*[a-z ]+$/i, ""));
+      const uniq = [...new Set(mains)].slice(0, 25);
+      if (uniq.length > 0) varietyNote = `\nALREADY SERVED THIS WEEK (do NOT repeat these as main components):\n${uniq.join("; ")}`;
+    } catch {}
+
+    // 4) The user's stored profile — dietary rules ride on generation too
+    let profileSlot = "";
+    try { profileSlot = (await assembleProfileSlot(activeUserId)) || ""; } catch {}
+
+    const wantSnacks = remainingBudget >= 250;
+    const toGenerate = [
+      ...missingMains,
+      ...(wantSnacks ? ["snack (0-2 as needed to reach the budget)"] : []),
+    ];
+    const existingSummary = existing.length > 0
+      ? existing.map(m => `${m.meal_type}: ${m.food} (${Math.round((Number(m.calories)||0) * (Number(m.servings)||1))} cal)`).join("\n")
+      : "None";
+
+    const genPrompt = `You are CURA's meal plan generator. Build meal suggestions for ${planDate}.
+
+DAY BUDGET: ${goal.calories} cal total | targets: ${goal.protein}g protein, ${goal.carbs}g carbs, ${goal.fat}g fat.
+ALREADY FIXED ON THIS DAY (planned by the user or accepted earlier — plan AROUND these, never replace them):
+${existingSummary}
+REMAINING BUDGET for what you generate: ~${remainingBudget} cal.
+
+GENERATE ONLY THESE MEALS: ${toGenerate.join(", ")}. Never generate a meal type that already exists on this day.
+${varietyNote}
+${profileSlot}
+
+YOU CHOOSE THE FOODS; THE APP COMPUTES ALL NUMBERS. You do not know food macros on this turn. Never write calorie or macro numbers anywhere.
+
+Respond with ONLY SUGGESTION_DATA blocks — no prose, no explanations, nothing else. One block per meal:
+<<<SUGGESTION_DATA>>>
+{"meal_type":"dinner","timing":"evening","items":[{"food":"salmon fillet","amount":6,"unit":"oz"},{"food":"quinoa (cooked)","amount":1,"unit":"cup"},{"food":"asparagus","amount":1,"unit":"cup"}]}
+<<<END_SUGGESTION_DATA>>>
+
+BLOCK RULES:
+- meal_type: breakfast | lunch | dinner | snack (lowercase).
+- items: 2-4 real, simple foods per meal, numeric amount + common unit (oz, g, cup, tbsp, tsp, scoop, slice, piece, egg, serving). Prefer common whole foods — they resolve best against the database.
+- Every item must be a SUBSTANTIAL component of the meal — something a person would plate on purpose. NEVER add garnish-sized items to tune totals; make a real portion bigger instead.
+- Size portions sensibly toward the remaining budget. Simple beats clever. Don't chase exactness.
+- NO calories/protein/carbs/fat fields — the app ignores them and computes its own.`;
+
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1500,
+      messages: [{ role: "user", content: genPrompt }],
+    });
+    const text = (response.content || []).map(c => (c.type === "text" ? c.text : "")).join("");
+
+    // 5) Parse + price through the SAME pipeline chat suggestions use
+    const blocks = parseSuggestionBlocks(text);
+    let insertedRows = 0;
+    let generatedMeals = 0;
+    for (const b of blocks) {
+      if (!b.data) continue;
+      const mt = String(b.data.meal_type || "").toLowerCase();
+      if (existingTypes.has(mt) && mt !== "snack") continue; // belt & suspenders: never duplicate an existing main
+      const card = await resolveSuggestionBlock(b.data, planDate);
+      if (!card) continue;
+      const groupId = randomUUID();
+      const rows = card.items.map(item => {
+        const namePart = item.canonical_name || item.food || "Unknown food";
+        const qtyPart = item.amount && item.unit ? `${item.amount} ${item.unit}` : "";
+        return {
+          user_id: activeUserId,
+          date: planDate,
+          meal_type: card.meal_type,
+          food: qtyPart ? `${namePart}, ${qtyPart}` : namePart,
+          calories: Math.round(Number(item.calories) || 0),
+          protein: Math.round(Number(item.protein) || 0),
+          carbs: Math.round(Number(item.carbs) || 0),
+          fat: Math.round(Number(item.fat) || 0),
+          servings: 1,
+          status: "proposed",
+          meal_group_id: groupId,
+        };
+      });
+      const { error } = await supabase.from("planned_meals").insert(rows);
+      if (!error) { insertedRows += rows.length; generatedMeals += 1; }
+      else console.log("[v98] proposed insert error:", error.message);
+    }
+
+    console.log(`=== PLAN GEN [v98] | ${planDate} | missing: ${missingMains.join(",") || "none"} | budget ${remainingBudget} | ${generatedMeals} meal(s), ${insertedRows} row(s)`);
+    return Response.json({ success: true, generated: generatedMeals, rows: insertedRows, date: planDate });
+  } catch (e) {
+    console.log("[v98] generation error:", e);
+    return Response.json({ success: false, error: e?.message || "generation failed" }, { status: 500 });
+  }
+}
+
 // ═══ [v93] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
 // Same division of labor as everything else in CURA:
 //   AI  = language only. It EXTRACTS facts/goal parameters into blocks. Nothing more.
@@ -1519,6 +1651,13 @@ export async function POST(req) {
     const image = images?.[0] || null; // backward compat for single image checks
 
     const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
+
+    // ═══ [v98] PLAN TAB GENERATION MODE ═══
+    // Not a chat turn: no message, no history, nothing saved to ai_messages.
+    // Fills the day's gaps with status='proposed' rows and returns a summary.
+    if (body.generate === true && body.date) {
+      return await handlePlanGeneration(activeUserId, String(body.date));
+    }
 
     // ── CONTINUE-THREAD: when a thread_id is present, load the whole chain from ai_messages
     // and feed it to the AI as context. Default (no thread) keeps the slice(-1) behavior.
