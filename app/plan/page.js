@@ -206,7 +206,7 @@ export default function PlanPage() {
               padding: "28px 16px", textAlign: "center" }}>
               <p style={{ fontSize: 13, color: t.sub, margin: 0 }}>Nothing planned for this day yet.</p>
               <p style={{ fontSize: 11, color: t.sub, marginTop: 4 }}>
-                Ask your coach to plan it — or generate it here once generation ships.
+                Plan it in chat — tell your coach "plan my day" or "plan tomorrow" and it shows up here. One-tap generation is coming to this tab soon.
               </p>
             </div>
           ) : groupByType(dayMeals).map(([type, meals]) => (
