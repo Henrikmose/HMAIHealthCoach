@@ -900,6 +900,53 @@ function renderMealDataBlock(card) {
   return `<<<MEAL_DATA>>>\n${JSON.stringify({ meal_type: card.meal_type, date: card.date || null, items: card.items })}\n<<<END_MEAL_DATA>>>`;
 }
 
+// ═══ [v94] STRUCTURED SUGGESTIONS — the planning path's v80 ══════════════════
+// The AI proposes WHAT to eat (food names + amounts ONLY). Code prices every item
+// from the database through resolveOneFood — the exact same pipeline food logs use.
+// The AI structurally CANNOT author macro numbers on this path: SUGGESTION_DATA has
+// no macro fields, and any the AI sneaks in are stripped before resolution.
+
+const SUGGESTION_MEAL_TYPES = new Set(["breakfast", "lunch", "dinner", "snack"]);
+
+function parseSuggestionBlocks(text) {
+  const blocks = [];
+  const re = /<<<SUGGESTION_DATA>>>([\s\S]*?)<<<END_SUGGESTION_DATA>>>/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const parsed = parseLooseJSON(m[1]);
+    // Malformed JSON → data:null → the block is stripped from display, never guessed at.
+    blocks.push({ raw: m[0], data: (parsed && Array.isArray(parsed.items)) ? parsed : null });
+  }
+  return blocks;
+}
+
+async function resolveSuggestionBlock(data, planDate) {
+  const mealType = SUGGESTION_MEAL_TYPES.has(String(data.meal_type || "").toLowerCase())
+    ? String(data.meal_type).toLowerCase() : "snack";
+  const items = [];
+  const unresolved = [];
+  for (const it of (data.items || []).slice(0, 8)) {
+    if (!it || !it.food) continue;
+    // STRUCTURAL FIREWALL: only name/amount/unit survive into resolution.
+    // Any calories/protein/carbs/fat the AI attached die right here.
+    const clean = {
+      food: String(it.food).slice(0, 80),
+      amount: Number(it.amount) > 0 ? Number(it.amount) : 1,
+      unit: (it.unit ? String(it.unit) : "serving").slice(0, 20),
+    };
+    try {
+      const resolved = await resolveOneFood(clean);
+      if (resolved) items.push(resolved);
+      else unresolved.push(clean.food);
+    } catch (e) {
+      console.log(`[v94] suggestion resolve failed for "${clean.food}":`, e?.message || e);
+      unresolved.push(clean.food);
+    }
+  }
+  if (items.length === 0) return null;
+  return { meal_type: mealType, date: planDate, items, timing: data.timing || null, unresolved };
+}
+
 // ═══ [v93] INTELLIGENCE LAYER — FACT_DATA / GOAL_DATA ═══════════════════════
 // Same division of labor as everything else in CURA:
 //   AI  = language only. It EXTRACTS facts/goal parameters into blocks. Nothing more.
@@ -1734,25 +1781,10 @@ export async function POST(req) {
       }
     }
 
-    // Planning lookup: only when the user NAMED specific foods (e.g. "I'm planning 8oz chicken and 1/4 cup rice").
-    // NOT when they asked for an open plan (e.g. "plan my day") — there are no stated foods to look up.
-    let plannedFoodResults = null;
-    if (context?.type === "meal_planning") {
-      const planMsg = context.request || message || "";
-      // Heuristic: a stated meal contains a quantity token (number + unit/food). An open plan request does not.
-      const hasStatedFoods = /\b\d+\.?\d*\s*(oz|ounce|ounces|cup|cups|g|gram|grams|tbsp|tsp|slice|slices|piece|pieces|scoop|scoops|egg|eggs)\b/i.test(planMsg);
-      if (hasStatedFoods) {
-        plannedFoodResults = await lookupFoodMacros(planMsg);
-        if (plannedFoodResults) {
-          console.log(`=== DB FOOD LOOKUP (planning): found ${plannedFoodResults.length} food(s) ===`);
-          plannedFoodResults.forEach(r => console.log(`  ${r.food}: ${r.calories} cal, ${r.protein}g P, ${r.carbs}g C, ${r.fat}g F`));
-        } else {
-          console.log("=== DB FOOD LOOKUP (planning): no match — AI will estimate ===");
-        }
-      } else {
-        console.log("=== PLANNING: open plan request, no stated foods — AI will build the day ===");
-      }
-    }
+    // [v94] Planning pre-lookup REMOVED. It existed to feed the AI exact numbers so it
+    // could author meal blocks. On the structured-suggestion path the AI never authors
+    // numbers at all — user-named foods go into SUGGESTION_DATA like any other item and
+    // code prices them AFTER the AI turn, through the same resolveOneFood pipeline.
 
     const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 21 ? "evening" : "night";
     const nothingEatenYet = todayMeals.length === 0;
@@ -2246,7 +2278,7 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
       // one block PER MEAL (that's per-meal, not multi-option).
       systemMessage += `
 SINGLE-SUGGESTION RULE (single-meal requests like "suggest a lunch" / "what should I have for dinner"):
-- Give EXACTLY ONE meal suggestion — one meal block, never two alternatives, never "Option A / Option B", never two blocks of the same meal type.
+- Give EXACTLY ONE meal suggestion — one SUGGESTION_DATA block, never two alternatives, never "Option A / Option B", never two blocks of the same meal type.
 - End by inviting iteration instead: "Want a different option? Just say so."
 - Full-day plan requests are different: one block per meal (breakfast/lunch/dinner/snacks), still no alternatives per meal.
 `;
@@ -2288,62 +2320,50 @@ SOCIAL EVENT at ${event.hour}:00 (${event.label}):
       systemMessage += `
 
 ══════════════════════════════════════════
-MEAL PLANNING MODE
+MEAL PLANNING MODE — STRUCTURED SUGGESTIONS [v94]
 ══════════════════════════════════════════
 Request: "${context.request || message}"
 Local time: ${hour}:00
-${plannedFoodResults ? `
-DATABASE LOOKUP — USE THESE EXACT NUMBERS (from USDA) for the foods the user named:
-${plannedFoodResults.map(r => `${r.food} (${r.amount} ${r.unit} = ${r.grams}g):
-  Calories: ${r.calories} | Protein: ${r.protein}g | Carbs: ${r.carbs}g | Fat: ${r.fat}g`).join('\n')}
-
-CRITICAL: For the foods listed above, use these EXACT macro numbers. Do NOT recalculate or estimate them. Only estimate macros for foods the user did NOT name.
-` : ""}
 Planning for: ${events.some(e => e.isTomorrow) ? "TOMORROW" : "TODAY"}
 ${events.length > 0 ? `Events detected: ${events.map(e => `${e.type} at ${e.hour}:00`).join(", ")}` : "No events detected"}
 ${missingEventTimes && !hasAnyEvent ? "MISSING TIMES: Ask user what time each event is before planning." : ""}
-${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO NOT create a Dinner block. Plain text guidance only." : ""}
+${hasRestaurantMeal && !hasPhysicalEvents ? "Restaurant/social event only — DO NOT create a suggestion block. Plain text guidance only." : ""}
 
 ${timingGuide}
 
+OVERRIDE FOR THIS MODE — READ FIRST:
+The MEAL BLOCK FORMAT and MEAL_DATA instructions elsewhere in this prompt DO NOT APPLY on this turn. Do NOT write prose meal blocks. Do NOT emit MEAL_DATA. On this turn, SUGGESTION_DATA (format below) is the ONLY way to propose a meal.
+
+YOUR JOB ON THIS TURN — you choose the FOODS; the app computes ALL the numbers:
+You do not know food macros on this turn. NEVER write a calorie, protein, carb, or fat number ANYWHERE in this response — not in prose, not per meal, not as a total. The app resolves every food you propose against its verified database and renders each meal as a card with real numbers exactly where your SUGGESTION_DATA block sits.
+
 HOW TO BUILD THE PLAN:
 
-1. Open with 2-4 lines of strategy specific to THEIR day — name the real challenge (a workout, a social lunch, an energy dip). Not generic.
+1. Open with 2-4 lines of strategy specific to THEIR day — name the real challenge (a workout, a social lunch, an energy dip). Not generic. No numbers.
 
-2. Then the meals in TRUE CHRONOLOGICAL ORDER — earliest first, back to back. A restaurant/social meal that is guidance-only (no block) STILL takes its place in the sequence at the right time: put its guidance where that meal falls in the day, never floating at the end or buried in another meal's note. Sanity-check the order before sending — a midday lunch must come before an afternoon snack. Each block:
+2. Then the meals in TRUE CHRONOLOGICAL ORDER — earliest first. For each meal: ONE short line of context (why this meal fits, relative timing — NEVER a clock time), then its SUGGESTION_DATA block. A restaurant/social meal that is guidance-only (no block) STILL takes its place in the sequence at the right time — never floating at the end.
 
-[MealType] — [relative timing] ([short context])   (e.g. "Lunch — midday", "Snack — 2 hours before your run" — NEVER a clock time like 3:30pm; see TIMES rule)
-- Foods: [food1, amount]; [food2, amount]
-- Calories: [single total number]
-- Protein: [X]g
-- Carbs: [X]g
-- Fat: [X]g
-Breakdown: [food1] — [cal] cal, [P]g P, [C]g C, [F]g F | [food2] — ...
+SUGGESTION_DATA FORMAT — the ONLY way to propose a meal:
+<<<SUGGESTION_DATA>>>
+{"meal_type":"breakfast","timing":"post-walk, this morning","items":[{"food":"oatmeal","amount":1,"unit":"cup"},{"food":"whey protein powder","amount":1,"unit":"scoop"},{"food":"blueberries","amount":0.5,"unit":"cup"}]}
+<<<END_SUGGESTION_DATA>>>
 
-Calories is a number only; protein/carbs/fat always include "g". Single totals, never "X + Y = Z" math. Breakdown line required when a meal has 2+ foods.
+BLOCK RULES:
+- meal_type: breakfast | lunch | dinner | snack (lowercase). One Breakfast, one Lunch, one Dinner max; snacks can repeat (each its own block).
+- timing: short RELATIVE phrase ("2 hours before your run", "midday", "right after your game") — never a clock time.
+- items: 2-4 real, simple foods per meal, each with a numeric amount and a common unit (oz, g, cup, tbsp, tsp, scoop, slice, piece, egg, serving). Prefer common whole foods — they resolve best against the database.
+- NO calories/protein/carbs/fat fields — the app ignores them and computes its own.
+- Do NOT restate the foods or amounts in prose — the card renders them.
 
-3. After the blocks, write one summary line:
-📊 Total planned: [sum of the blocks you wrote]/${goal.calories} cal | [P]g protein | [C]g carbs | [F]g fat
-This is the sum of the meal blocks in THIS plan only. Do not fold in already-eaten meals or earlier messages.
+3. Size portions sensibly toward the REMAINING budget in the day-state numbers above. The app verifies the math — real, simple portions beat clever ones. Don't chase exactness.
 
-4. End with 2-3 short rules specific to the day. Be decisive — present ONE plan, never "Option A/Option B." Do NOT ask the user to reply "yes" or confirm in chat; the buttons handle saving.
-
-CRITICAL — SAVING THE PLAN (do not skip):
-- If this plan is a SINGLE meal (the user asked to plan ONE meal, e.g. "plan my dinner", "what should I have for lunch") → you MUST end your response with a MEAL_DATA block for that meal, using the exact format below. Without it, the user has no button to save the meal and your plan is useless to them.
-- If this plan is MULTIPLE meals (a whole day / several meals) → do NOT emit MEAL_DATA; the prose meal blocks above render their own per-meal save buttons.
-- This applies inside continued/threaded conversations too: even mid-conversation, a single-meal plan MUST end with MEAL_DATA. Never let the discussion replace the structured block.
-
-SINGLE-MEAL MEAL_DATA FORMAT (only for a one-meal plan):
-<<<MEAL_DATA>>>
-{"meal_type":"dinner","items":[{"food":"<name>","amount":<n>,"unit":"<unit>","calories":<n>,"protein":<n>,"carbs":<n>,"fat":<n>,"source":"usda_db"|"ai_estimate"|"label"}]}
-<<<END_MEAL_DATA>>>
+4. End with 2-3 short rules specific to the day. Be decisive — present ONE plan, never "Option A/Option B." Do NOT ask the user to reply "yes" or confirm in chat; the buttons on each card handle saving (eaten vs planned).
 
 RULES THAT MATTER:
-- Plan only the remaining part of the day. Don't re-plan meals already eaten or planned (shown in the numbers above). Use the REMAINING budget, not the full goal.
-- One Breakfast, one Lunch, one Dinner max; snacks can repeat. Each meal its own block.
-- Respect what the user told you: stated times, named meals, their schedule. Use common sense for how long activities take and when meals fit around them.
-- Fuel before physical activity; support recovery after it.
-- A restaurant or social meal inside the plan is the ONE exception to "build a block for every meal": give it cuisine-navigation guidance (how to eat well at THAT kind of place — see the RESTAURANT rule) + a calorie budget from REMAINING, NOT a fabricated block and NOT specific dish recommendations off a menu you haven't seen. The other meals still get real blocks; only the restaurant meal is guidance — unless the user already named specific dishes or shared the menu, then get specific. Place this guidance in its correct time slot in the day's sequence. Be honest about photos: a photo identifies the food, not the portion; results are estimates; the buttons save (never say "I'll log it", "exact macros", "text it over", or that you can read portion size from a photo).`;
+- Plan only the remaining part of the day. Don't re-plan meals already eaten or planned (shown in the numbers above).
+- Respect what the user told you: stated times, named meals, their schedule. Fuel before physical activity; support recovery after it.
+- If the user NAMED specific foods ("plan dinner around 8oz salmon"), those exact foods with their stated amounts go straight into the block.
+- A restaurant or social meal inside the plan is the ONE exception to "a block for every meal": give cuisine-navigation guidance (how to eat well at THAT kind of place — see the RESTAURANT rule) and describe the budget as a SHARE of the day in words ("save roughly a third of your day for it") — no invented dishes, no numbers, NO block. Unless the user already named specific dishes or shared the menu — then build a normal SUGGESTION_DATA block for it. Be honest about photos: a photo identifies the food, not the portion; results are estimates.`;
     }
 
     if (context?.type === "photo" && images?.length > 0) {
@@ -2528,6 +2548,75 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
     // [v93] Validate FACT blocks and replace GOAL parameters with code-computed targets
     // BEFORE the reply is stored or returned — the client only ever sees enriched blocks.
     reply = await enrichIntelligenceBlocks(reply, activeUserId);
+
+    // ═══ [v94] STRUCTURED SUGGESTIONS — CODE-PRICED PLAN CARDS ═══════════════
+    // The AI proposed foods (names + amounts only). Code now prices every item from
+    // the database, renders each card's text in place of its SUGGESTION_DATA block,
+    // computes the plan total, and returns mealCards — same contract as food logs.
+    // The client's card UI (eat/plan/edit/cancel + meal-type dropdown) handles saving.
+    if (context?.type === "meal_planning") {
+      const sugBlocks = parseSuggestionBlocks(reply);
+      if (sugBlocks.length > 0) {
+        const todayStr = getLocalDate(clientDate);
+        const planMsgForDate = context.request || message || "";
+        const planDate = (events.some(e => e.isTomorrow) || /\btomorrow\b/i.test(planMsgForDate))
+          ? shiftDate(todayStr, 1) : todayStr;
+
+        const cards = [];
+        const allUnresolved = [];
+        let displayText = reply;
+        for (const b of sugBlocks) {
+          let replacement = "";
+          if (b.data) {
+            const card = await resolveSuggestionBlock(b.data, planDate);
+            if (card) {
+              allUnresolved.push(...card.unresolved);
+              delete card.unresolved;
+              cards.push(card);
+              replacement = renderCardText(card);
+            }
+          }
+          displayText = displayText.replace(b.raw, replacement);
+        }
+        displayText = displayText.replace(/\n{3,}/g, "\n\n").trim();
+
+        // Plan total — code-computed from the resolved cards, never AI-authored.
+        if (cards.length > 1) {
+          const t = cards.reduce((a, c) => {
+            for (const i of c.items) {
+              a.calories += Number(i.calories) || 0;
+              a.protein  += Number(i.protein)  || 0;
+              a.carbs    += Number(i.carbs)    || 0;
+              a.fat      += Number(i.fat)      || 0;
+            }
+            return a;
+          }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
+          displayText += `\n\n📊 Total planned: ${Math.round(t.calories)}/${goal.calories} cal | ${Math.round(t.protein)}g protein | ${Math.round(t.carbs)}g carbs | ${Math.round(t.fat)}g fat`;
+        }
+        if (allUnresolved.length > 0) {
+          displayText += `\n\n(I couldn't price: ${allUnresolved.join(", ")} — the numbers above don't include ${allUnresolved.length > 1 ? "them" : "it"}.)`;
+        }
+
+        if (cards.length > 0) {
+          // Option A persistence: stored response = display text + one MEAL_DATA block
+          // per card, so reload re-extracts the exact same cards (same as food logs).
+          const storedResponse = displayText + "\n\n" + cards.map(renderMealDataBlock).join("\n");
+          let planMessageId = null;
+          try {
+            const { data: inserted } = await supabase.from("ai_messages").insert([{
+              user_id: activeUserId, message: message || "", response: storedResponse,
+              thread_id: thread_id || null, created_at: new Date().toISOString(),
+            }]).select("id").single();
+            planMessageId = inserted?.id || null;
+          } catch (e) { console.log("Save error:", e); }
+          console.log(`=== PLAN [v94] | ${cards.length} suggestion card(s) | every number code-priced from DB | date ${planDate}`);
+          return Response.json({ reply: displayText, aiMessageId: planMessageId, mealCards: cards });
+        }
+        // Every block was malformed or fully unresolvable — fall through with the
+        // blocks stripped so the user never sees raw SUGGESTION_DATA markup.
+        reply = displayText;
+      }
+    }
 
     let aiMessageId = null;
     try {
