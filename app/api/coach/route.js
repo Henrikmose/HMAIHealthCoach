@@ -1071,7 +1071,12 @@ async function classifyFoodDietTags(foods, sourceLabel) {
     const prompt = `Classify each food for dietary compatibility. For each, list which of these tags TRULY apply (positive compatibility — only include a tag if the food definitely complies):
 ${DIET_TAG_KEYS.join(", ")}
 
-Rules: vegan = no animal products at all. vegetarian = no meat/fish (dairy/egg ok). pescatarian = no meat except fish/seafood. X_free tags = definitely contains no X. Do NOT include halal/kosher for meat unless certified. When unsure about a tag, OMIT it.
+Rules:
+- Plain whole foods get MANY tags. A plain fruit, vegetable, grain, or legume (banana, apple, oats, rice, lentils, beans, spinach) is: vegan, vegetarian, pescatarian, dairy_free, egg_free, fish_free, shellfish_free, pork_free, soy_free, and nut_free (unless it IS a nut) and gluten_free (unless it IS wheat/barley/rye/regular pasta/bread).
+- vegan = no animal products. vegetarian = no meat/fish (dairy/egg ok). pescatarian = no meat except fish/seafood. X_free = contains no X.
+- Meat/fish/dairy/eggs still get all the _free tags for things they DON'T contain (chicken is dairy_free, gluten_free, fish_free...).
+- Do NOT include halal/kosher for meat unless certified.
+- Omit a tag ONLY for genuinely ambiguous processed/branded foods where ingredients are unknown.
 
 Foods:
 ${foods.map(f => `id ${f.id}: ${f.name}`).join("\n")}
@@ -1088,14 +1093,18 @@ Respond with ONLY a JSON array, no prose:
     const parsed = JSON.parse(jsonMatch[0]);
     const tagIdMap = await getDietTagIdMap();
     const inserts = [];
+    // [v105.3 parity] format-agnostic id matching — the model sometimes echoes ids
+    // as strings; match on String(id) and use OUR typed id, never the echo
+    const inputById = new Map(foods.map(f => [String(f.id).trim(), f]));
     for (const entry of parsed) {
-      const fid = entry?.id;
+      if (entry?.id == null) continue;
+      const match = inputById.get(String(entry.id).trim());
+      if (!match) continue;
       const keys = (entry?.tags || []).filter(k => DIET_TAG_KEYS.includes(k));
-      if (fid == null) continue;
-      result.set(fid, new Set(keys));
+      result.set(match.id, new Set(keys));
       for (const k of keys) {
         const tid = tagIdMap.get(k);
-        if (tid) inserts.push({ food_id: fid, tag_id: tid, confidence: 0.8, source: sourceLabel, reason: "AI diet classification" });
+        if (tid) inserts.push({ food_id: match.id, tag_id: tid, confidence: 0.8, source: sourceLabel, reason: "AI diet classification" });
       }
       // even zero-tag results are an answer; nothing to insert, gate treats as non-compliant
     }

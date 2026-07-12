@@ -67,7 +67,12 @@ export async function GET() {
     const prompt = `Classify each food for dietary compatibility. For each, list which of these tags TRULY apply (positive compatibility — only include a tag if the food definitely complies):
 ${DIET_TAG_KEYS.join(", ")}
 
-Rules: vegan = no animal products at all. vegetarian = no meat/fish (dairy/egg ok). pescatarian = no meat except fish/seafood. X_free tags = definitely contains no X. Do NOT include halal/kosher for meat unless certified. When unsure about a tag, OMIT it.
+Rules:
+- Plain whole foods get MANY tags. A plain fruit, vegetable, grain, or legume (banana, apple, oats, rice, lentils, beans, spinach) is: vegan, vegetarian, pescatarian, dairy_free, egg_free, fish_free, shellfish_free, pork_free, soy_free, and nut_free (unless it IS a nut) and gluten_free (unless it IS wheat/barley/rye/regular pasta/bread).
+- vegan = no animal products. vegetarian = no meat/fish (dairy/egg ok). pescatarian = no meat except fish/seafood. X_free = contains no X.
+- Meat/fish/dairy/eggs still get all the _free tags for things they DON'T contain (chicken is dairy_free, gluten_free, fish_free...).
+- Do NOT include halal/kosher for meat unless certified.
+- Omit a tag ONLY for genuinely ambiguous processed/branded foods where ingredients are unknown.
 
 Foods:
 ${batch.map(f => `id ${f.id}: ${f.name}`).join("\n")}
