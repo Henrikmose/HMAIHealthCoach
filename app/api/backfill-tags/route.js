@@ -80,7 +80,17 @@ Respond with ONLY a JSON array, no prose:
       }
     }
     if (inserts.length) {
-      const { error: insErr } = await supabase.from("food_tags").insert(inserts);
+      // [v105.1] idempotent write: dedupe the batch, and ignore any (food_id, tag_id)
+      // pair that already exists — overlapping refreshes or duplicate model output
+      // can never error again, reruns are always safe
+      const seen = new Set();
+      const unique = inserts.filter(i => {
+        const k = `${i.food_id}:${i.tag_id}`;
+        if (seen.has(k)) return false;
+        seen.add(k); return true;
+      });
+      const { error: insErr } = await supabase.from("food_tags")
+        .upsert(unique, { onConflict: "food_id,tag_id", ignoreDuplicates: true });
       if (insErr) return Response.json({ success: false, step: "insert", error: insErr.message }, { status: 500 });
     }
 

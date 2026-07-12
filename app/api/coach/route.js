@@ -1100,8 +1100,16 @@ Respond with ONLY a JSON array, no prose:
       // even zero-tag results are an answer; nothing to insert, gate treats as non-compliant
     }
     if (inserts.length) {
-      const { error } = await supabase.from("food_tags").insert(inserts);
-      if (error) console.log("[v105] food_tags insert error (non-fatal):", error.message);
+      // [v105.1] idempotent write — same protection as the backfill route
+      const seenPairs = new Set();
+      const unique = inserts.filter(i => {
+        const k = `${i.food_id}:${i.tag_id}`;
+        if (seenPairs.has(k)) return false;
+        seenPairs.add(k); return true;
+      });
+      const { error } = await supabase.from("food_tags")
+        .upsert(unique, { onConflict: "food_id,tag_id", ignoreDuplicates: true });
+      if (error) console.log("[v105] food_tags upsert error (non-fatal):", error.message);
     }
     console.log(`[v105] classified ${result.size} food(s) [${sourceLabel}]`);
   } catch (e) {
