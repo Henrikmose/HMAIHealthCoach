@@ -955,7 +955,7 @@ async function resolveSuggestionBlock(data, planDate) {
 // prices everything through the same resolveOneFood pipeline chat uses, and
 // inserts rows server-side as status='proposed'. It NEVER deletes anything —
 // "redo the day" = reject the drafts you don't want, then generate again.
-async function handlePlanGeneration(activeUserId, planDate) {
+async function handlePlanGeneration(activeUserId, planDate, mode = "variety") {
   try {
     // 1) Goal
     let goal = { calories: 2200, protein: 180, carbs: 220, fat: 70 };
@@ -964,10 +964,22 @@ async function handlePlanGeneration(activeUserId, planDate) {
       if (g) goal = { calories: g.calories || 2200, protein: g.protein || 180, carbs: g.carbs || 220, fat: g.fat || 70 };
     } catch {}
 
-    // 2) What already exists on this day — planned AND proposed both count as fixed
-    const { data: dayRows } = await supabase.from("planned_meals").select("*")
-      .eq("user_id", activeUserId).eq("date", planDate).in("status", ["planned", "proposed"]);
-    const existing = dayRows || [];
+    // 2) What already exists on this day — planned, proposed, AND EATEN all count
+    //    as fixed. [v99] Eaten meals matter when generating TODAY mid-day: a big
+    //    lunch you already ate must shrink the budget and fill its meal slot.
+    //    Future dates have no eaten rows, so this costs nothing there.
+    const [{ data: dayRows }, { data: eatenRows }] = await Promise.all([
+      supabase.from("planned_meals").select("*")
+        .eq("user_id", activeUserId).eq("date", planDate).in("status", ["planned", "proposed"]),
+      supabase.from("actual_meals").select("*")
+        .eq("user_id", activeUserId).eq("date", planDate),
+    ]);
+    const plannedExisting = dayRows || [];
+    const eatenExisting = eatenRows || [];
+    const existing = [
+      ...eatenExisting.map(m => ({ ...m, _fixedKind: "already eaten" })),
+      ...plannedExisting.map(m => ({ ...m, _fixedKind: m.status === "proposed" ? "draft" : "planned" })),
+    ];
     const existingCal = existing.reduce((s, m) => s + (Number(m.calories) || 0) * (Number(m.servings) || 1), 0);
     const existingTypes = new Set(existing.map(m => m.meal_type));
     const missingMains = ["breakfast", "lunch", "dinner"].filter(t => !existingTypes.has(t));
@@ -990,7 +1002,17 @@ async function handlePlanGeneration(activeUserId, planDate) {
         .filter(m => m.meal_type === "dinner" || m.meal_type === "lunch")
         .map(m => String(m.food).replace(/,\s*[\d.]+\s*[a-z ]+$/i, ""));
       const uniq = [...new Set(mains)].slice(0, 25);
-      if (uniq.length > 0) varietyNote = `\nALREADY SERVED THIS WEEK (do NOT repeat these as main components):\n${uniq.join("; ")}`;
+      // [v99] Two generation philosophies, user's choice per batch:
+      //   variety — never repeat this week's mains (default)
+      //   prep    — DELIBERATE repetition: same batch proteins, different sides,
+      //             matching the cook-Sunday-eat-all-week workflow
+      if (mode === "prep") {
+        varietyNote = uniq.length > 0
+          ? `\nMEAL PREP MODE: the week reuses batch-cooked proteins. REUSE the main proteins from these meals (same protein is GOOD), but pair them with a DIFFERENT carb/side than already used:\n${uniq.join("; ")}`
+          : `\nMEAL PREP MODE: choose 2-3 batch-friendly proteins (e.g. chicken breast, ground beef, ground turkey) — the rest of the week will REUSE them with different carbs and sides, so pick proteins that reheat well.`;
+      } else if (uniq.length > 0) {
+        varietyNote = `\nALREADY SERVED THIS WEEK (do NOT repeat these as main components):\n${uniq.join("; ")}`;
+      }
     } catch {}
 
     // 4) The user's stored profile — dietary rules ride on generation too
@@ -1003,7 +1025,7 @@ async function handlePlanGeneration(activeUserId, planDate) {
       ...(wantSnacks ? ["snack (0-2 as needed to reach the budget)"] : []),
     ];
     const existingSummary = existing.length > 0
-      ? existing.map(m => `${m.meal_type}: ${m.food} (${Math.round((Number(m.calories)||0) * (Number(m.servings)||1))} cal)`).join("\n")
+      ? existing.map(m => `${m.meal_type} (${m._fixedKind}): ${m.food} (${Math.round((Number(m.calories)||0) * (Number(m.servings)||1))} cal)`).join("\n")
       : "None";
 
     const genPrompt = `You are CURA's meal plan generator. Build meal suggestions for ${planDate}.
@@ -1656,7 +1678,7 @@ export async function POST(req) {
     // Not a chat turn: no message, no history, nothing saved to ai_messages.
     // Fills the day's gaps with status='proposed' rows and returns a summary.
     if (body.generate === true && body.date) {
-      return await handlePlanGeneration(activeUserId, String(body.date));
+      return await handlePlanGeneration(activeUserId, String(body.date), body.mode === "prep" ? "prep" : "variety");
     }
 
     // ── CONTINUE-THREAD: when a thread_id is present, load the whole chain from ai_messages
