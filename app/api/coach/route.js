@@ -977,6 +977,48 @@ async function resolveSuggestionBlock(data, planDate) {
   return { meal_type: mealType, date: planDate, items, timing: data.timing || null, unresolved };
 }
 
+// ═══ [v102] CALORIE BAND — code-enforced ±10% ════════════════════════════════
+// The AI can't do math, so generated days sometimes land far off budget (the
+// 1708-vs-2332 Saturday). Code fixes it deterministically: if the generated
+// total is outside ±10% of the remaining budget, every item scales
+// proportionally, rounded to clean kitchen increments, macros recomputed from
+// the ACTUAL rounded ratio so the numbers stay honest. No second AI call.
+const SCALE_ROUND = { oz: 0.5, g: 5, gram: 5, cup: 0.25, tbsp: 0.5, tsp: 0.5, serving: 0.25, scoop: 0.5, slice: 1, piece: 1, egg: 1, ml: 10 };
+function roundToStep(v, step) { return Math.max(step, Math.round(v / step) * step); }
+
+function scaleCardsToBudget(cards, budget) {
+  if (!cards.length || !(budget > 0)) return;
+  const total = cards.reduce((s, c) => s + c.items.reduce((x, i) => x + (Number(i.calories) || 0), 0), 0);
+  if (!(total > 0)) return;
+  const drift = total / budget;
+  if (drift >= 0.9 && drift <= 1.1) return;          // inside the band — leave it alone
+  const factor = Math.min(1.6, Math.max(0.6, budget / total));  // portions never balloon or vanish
+  for (const card of cards) {
+    for (const item of card.items) {
+      const oldAmount = Number(item.amount) || 1;
+      // base unit decides the rounding step; annotated units ("serving (170 g)") round as servings
+      const baseUnit = String(item.unit || "serving").toLowerCase().replace(/\(.*\)/, "").trim().replace(/s$/, "");
+      const step = SCALE_ROUND[baseUnit] || 0.25;
+      const newAmount = roundToStep(oldAmount * factor, step);
+      const ratio = newAmount / oldAmount;
+      if (!(ratio > 0) || ratio === 1) continue;
+      item.amount = Math.round(newAmount * 100) / 100;
+      item.calories = Math.round((Number(item.calories) || 0) * ratio);
+      item.protein  = Math.round((Number(item.protein)  || 0) * ratio);
+      item.carbs    = Math.round((Number(item.carbs)    || 0) * ratio);
+      item.fat      = Math.round((Number(item.fat)      || 0) * ratio);
+      if (Number(item.grams) > 0) item.grams = Math.round(Number(item.grams) * ratio);
+      // keep the gram annotation truthful after scaling
+      const m = String(item.unit || "").match(/^serving \((\d+(?:\.\d+)?)\s*g\)$/i);
+      if (m) {
+        const gramsPerUnit = Number(m[1]) / oldAmount;
+        item.unit = `serving (${Math.round(gramsPerUnit * item.amount)} g)`;
+      }
+    }
+  }
+  console.log(`[v102] calorie band: generated ${Math.round(total)} vs budget ${Math.round(budget)} (${Math.round(drift * 100)}%) -> scaled x${factor.toFixed(2)}`);
+}
+
 // ═══ [v98] PLAN TAB GENERATION — gap-filling, never destructive ══════════════
 // Called by the Plan tab (body.generate === true). Reads what already exists on
 // the day (the user's own planned meals AND kept drafts are FIXED POINTS), asks
@@ -1057,7 +1099,34 @@ async function handlePlanGeneration(activeUserId, planDate, mode = "variety") {
       ? existing.map(m => `${m.meal_type} (${m._fixedKind}): ${m.food} (${Math.round((Number(m.calories)||0) * (Number(m.servings)||1))} cal)`).join("\n")
       : "None";
 
-    const genPrompt = `You are CURA's meal plan generator. Build meal suggestions for ${planDate}.
+    // [v104] Tier-1 rules extracted and hoisted to the TOP of the prompt.
+    // Position matters to small models — mid-prompt rules provably leaked
+    // (vegan user got turkey). This raises compliance; CODE enforcement via
+    // food_tags is the real fix and comes next.
+    let hardRules = "";
+    try {
+      const { data: dpRow } = await supabase.from("user_dietary_preferences")
+        .select("dietary_style, allergens, intolerances, restrictions")
+        .eq("user_id", activeUserId).eq("is_active", true).limit(1);
+      const d = dpRow?.[0];
+      const arr = (a) => (Array.isArray(a) && a.length ? a.join(", ") : null);
+      if (d) {
+        const parts = [];
+        if (arr(d.allergens)) parts.push(`ALLERGIES (safety-critical): ${arr(d.allergens)}`);
+        if (arr(d.dietary_style)) parts.push(`Dietary style: ${arr(d.dietary_style)}`);
+        if (arr(d.intolerances)) parts.push(`Intolerances: ${arr(d.intolerances)}`);
+        if (arr(d.restrictions)) parts.push(`Excluded foods: ${arr(d.restrictions)}`);
+        if (parts.length > 0) {
+          hardRules = `ABSOLUTE CONSTRAINT #1 — READ BEFORE ANYTHING ELSE:
+${parts.join("\n")}
+EVERY item in EVERY meal must comply. A single violating item makes the entire response wrong. If unsure whether a food complies, choose a different food.
+
+`;
+        }
+      }
+    } catch {}
+
+    const genPrompt = `${hardRules}You are CURA's meal plan generator. Build meal suggestions for ${planDate}.
 
 DAY BUDGET: ${goal.calories} cal total | targets: ${goal.protein}g protein, ${goal.carbs}g carbs, ${goal.fat}g fat.
 ALREADY FIXED ON THIS DAY (planned by the user or accepted earlier — plan AROUND these, never replace them):
@@ -1072,7 +1141,7 @@ YOU CHOOSE THE FOODS; THE APP COMPUTES ALL NUMBERS. You do not know food macros 
 
 Respond with ONLY SUGGESTION_DATA blocks — no prose, no explanations, nothing else. One block per meal:
 <<<SUGGESTION_DATA>>>
-{"meal_type":"dinner","timing":"evening","items":[{"food":"salmon fillet","amount":6,"unit":"oz"},{"food":"quinoa (cooked)","amount":1,"unit":"cup"},{"food":"asparagus","amount":1,"unit":"cup"}]}
+{"meal_type":"dinner","timing":"evening","items":[{"food":"lentils (cooked)","amount":1,"unit":"cup"},{"food":"brown rice (cooked)","amount":0.75,"unit":"cup"},{"food":"avocado","amount":0.5,"unit":"piece"}]}
 <<<END_SUGGESTION_DATA>>>
 
 BLOCK RULES:
@@ -1080,7 +1149,8 @@ BLOCK RULES:
 - items: 2-4 real, simple foods per meal, numeric amount + common unit (oz, g, cup, tbsp, tsp, scoop, slice, piece, egg, serving). Prefer common whole foods — they resolve best against the database.
 - Every item must be a SUBSTANTIAL component of the meal — something a person would plate on purpose. NEVER add garnish-sized items to tune totals; make a real portion bigger instead.
 - Size portions sensibly toward the remaining budget. Simple beats clever. Don't chase exactness.
-- NO calories/protein/carbs/fat fields — the app ignores them and computes its own.`;
+- NO calories/protein/carbs/fat fields — the app ignores them and computes its own.
+${hardRules ? "\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the top. Verify EVERY single item complies. Replace any item that does not." : ""}`;
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -1091,8 +1161,7 @@ BLOCK RULES:
 
     // 5) Parse + price through the SAME pipeline chat suggestions use
     const blocks = parseSuggestionBlocks(text);
-    let insertedRows = 0;
-    let generatedMeals = 0;
+    const cards = [];
     for (const b of blocks) {
       if (!b.data) continue;
       const mt = String(b.data.meal_type || "").toLowerCase();
@@ -1107,6 +1176,15 @@ BLOCK RULES:
       card.items = card.items.filter(i => (Number(i.calories) || 0) >= 50);
       if (dropped.length > 0) console.log(`[v100] garnish floor dropped: ${dropped.map(i => i.food).join(", ")}`);
       if (card.items.length === 0) continue;
+      cards.push(card);
+    }
+
+    // [v102] enforce the ±10% calorie band on the whole generated set
+    scaleCardsToBudget(cards, remainingBudget);
+
+    let insertedRows = 0;
+    let generatedMeals = 0;
+    for (const card of cards) {
       const groupId = randomUUID();
       const rows = card.items.map(item => {
         const namePart = item.canonical_name || item.food || "Unknown food";

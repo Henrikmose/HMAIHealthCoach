@@ -326,18 +326,19 @@ export default function PlanPage() {
                 style={{
                   flex: "0 0 auto", minWidth: 52, padding: "8px 4px 6px",
                   borderRadius: 14, cursor: isPast && selectMode ? "not-allowed" : "pointer",
-                  border: `1px solid ${isSelected || isPicked ? "#2563eb" : t.border}`,
-                  background: isSelected || isPicked ? "#2563eb" : t.surface,
+                  // [v103] color = meaning: blue is "viewing", green is "picked for generation"
+                  border: `1px solid ${isPicked ? "#10b981" : isSelected ? "#2563eb" : t.border}`,
+                  background: isPicked ? "#10b981" : isSelected ? "#2563eb" : t.surface,
                   opacity: selectMode && isPast ? 0.35 : 1,
                   display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
                 }}>
                 <span style={{ fontSize: 10, fontWeight: 700,
-                  color: isSelected || isPicked ? "#dbeafe" : t.sub }}>
+                  color: isPicked ? "#d1fae5" : isSelected ? "#dbeafe" : t.sub }}>
                   {selectMode ? (isPicked ? "✓" : isPast ? "—" : "○") : dayLabel(d)}
                 </span>
                 <span style={{ fontSize: 15, fontWeight: 800,
                   color: isSelected || isPicked ? "#fff" : t.text }}>{dayNumber(d)}</span>
-                <div style={{ display:"flex", gap: 3 }}>
+                <div style={{ display:"flex", gap: 3, opacity: selectMode ? 0.35 : 1 }}>
                   <div style={{ width: 5, height: 5, borderRadius: 9999,
                     background: hasPlanned ? (isSelected || isPicked ? "#fff" : "#10b981") : "transparent" }} />
                   <div style={{ width: 5, height: 5, borderRadius: 9999,
@@ -361,7 +362,7 @@ export default function PlanPage() {
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={generatePicked} disabled={pickedDays.size === 0}
                 style={{ flex: 1, fontSize: 13, fontWeight: 800, color: "#fff",
-                  background: pickedDays.size === 0 ? "#2563eb55" : "#2563eb",
+                  background: pickedDays.size === 0 ? "#10b98155" : "#10b981",
                   border: "none", borderRadius: 12, padding: "12px 0",
                   cursor: pickedDays.size === 0 ? "default" : "pointer" }}>
                 ⚡ Generate {pickedDays.size} day{pickedDays.size === 1 ? "" : "s"} ({prepMode ? "🍱 prep" : "🎨 variety"})
