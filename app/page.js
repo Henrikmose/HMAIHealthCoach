@@ -1881,19 +1881,35 @@ border: isUser ? "none" : `1px solid ${T.aiBorder}`,
 {visibleCardIdxs.length > 0 && (
 <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
 
-{visibleCardIdxs.length > 1 && (
+{/* [v95] DATE-AWARE BULK BUTTON — planning tomorrow must NEVER write eaten rows.
+    All visible cards future-dated → bulk action is PLAN. All today/past → EAT.
+    Mixed dates (per-card overrides) → no bulk button; per-card buttons decide. */}
+{visibleCardIdxs.length > 1 && (() => {
+const todayStrBulk = getLocalDate();
+const effDate = (ci) => {
+const c = msg.mealCards[ci];
+return selectedCardDates[`${idx}:${ci}`] || c.date || targetDate;
+};
+const allFuture = visibleCardIdxs.every(ci => effDate(ci) > todayStrBulk);
+const anyFuture = visibleCardIdxs.some(ci => effDate(ci) > todayStrBulk);
+if (anyFuture && !allFuture) return null;
+const bulkColor = allFuture ? "#2563eb" : "#10b981";
+return (
 <button
-onClick={() => handleAddAllCards("eat", msg, idx, visibleCardIdxs, targetDate)}
+onClick={() => handleAddAllCards(allFuture ? "plan" : "eat", msg, idx, visibleCardIdxs, targetDate)}
 disabled={isSaving}
 style={{
 fontSize:12, padding:"10px 16px", borderRadius:12, fontWeight:700,
-background: isSaving ? "#10b98155" : "#10b981", color:"#fff",
+background: isSaving ? `${bulkColor}55` : bulkColor, color:"#fff",
 border:"none", cursor:"pointer",
 }}
 >
-✅ Add all {visibleCardIdxs.length} meals to eaten
+{allFuture
+? `📅 Add all ${visibleCardIdxs.length} meals to planned`
+: `✅ Add all ${visibleCardIdxs.length} meals to eaten`}
 </button>
-)}
+);
+})()}
 
 {visibleCardIdxs.map(ci => {
 const card = msg.mealCards[ci];
@@ -1934,6 +1950,18 @@ border:`1px solid ${T.border}`, background:T.surface,
 </div>
 
 <div style={{ display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
+{/* [v95] DATE-AWARE PRIMARY BUTTON — a future-dated meal can only be PLANNED,
+    never eaten (you can't have already eaten tomorrow's lunch). The buttons
+    react to the date dropdown: correct the date to today and Eaten returns. */}
+{cardDate > todayStr ? (
+<button
+onClick={() => handleCardAction("plan", msg, idx, ci, currentMealType, cardDate)}
+disabled={isSaving}
+style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
+>
+📅 Add to Planned
+</button>
+) : (
 <button
 onClick={() => handleCardAction("eat", msg, idx, ci, currentMealType, cardDate)}
 disabled={isSaving}
@@ -1941,6 +1969,7 @@ style={{ ...buttonBase, background: isSaving ? "#10b98155" : "#10b981" }}
 >
 ✅ Add to Eaten
 </button>
+)}
 
 <div style={{ position:"relative", display:"inline-block" }}>
 <select
@@ -2002,6 +2031,8 @@ fontSize:10,
 }}>▾</span>
 </div>
 
+{/* [v95] hidden on future-dated cards — Planned is already the primary button above */}
+{cardDate <= todayStr && (
 <button
 onClick={() => handleCardAction("plan", msg, idx, ci, currentMealType, cardDate)}
 disabled={isSaving}
@@ -2009,6 +2040,7 @@ style={{ ...buttonBase, background: isSaving ? "#2563eb55" : "#2563eb" }}
 >
 📅 Add to Planned
 </button>
+)}
 
 <button
 onClick={() => handleCardAction("edit", msg, idx, ci, currentMealType, cardDate)}
