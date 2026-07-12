@@ -209,7 +209,7 @@ function gramsForStaple(st, amount, unit) {
 
 async function lookupFood(foodName) {
   if (!foodName) return null;
-  const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g';
+  const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, grams_per_serving';
   // [v93] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
   // (a leading "-" turns the full-text stage into a NOT-query that matches nearly the
   // whole table — the espresso incident), and junk/too-short terms never reach the DB.
@@ -551,7 +551,7 @@ Values are for ONE standard serving of: ${food}.${isWeightUnit ? "" : ` One serv
 // per-100g columns — the established write-back convention) and return the STORED row.
 // If a row with this name already exists (another user logged it meanwhile), use that one.
 async function writeBackAIFood(macros) {
-  const cols = "id, name, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g";
+  const cols = "id, name, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, grams_per_serving";
   try {
     const { data: existing } = await supabase.from("foods")
       .select(cols).ilike("name", macros.canonical_name).limit(1);
@@ -564,6 +564,9 @@ async function writeBackAIFood(macros) {
       protein_per_100g: macros.protein,
       carbs_per_100g: macros.carbs,
       fat_per_100g: macros.fat,
+      // [v100] the conversion key: without this, a later "8 oz" of this cached
+      // per-serving food reads as 8 SERVINGS (the 1360-cal ground turkey bug)
+      grams_per_serving: Number(macros.grams_per_serving) > 0 ? Math.round(Number(macros.grams_per_serving)) : null,
     }]).select(cols).single();
     if (error) { console.log("write-back failed:", error.message); return null; }
     return inserted; // this IS the read-back: the stored row, straight from the database
@@ -640,15 +643,41 @@ async function resolveOneFood(item) {
   }
   const ftype = (row.source || "usda").toLowerCase();
   if (ftype === "ai_estimate" || ftype === "label") {
-    // Serving-based math. Weight units convert via grams-per-serving when the AI supplied it.
+    // Serving-based math. Weight units convert via grams-per-serving.
+    // [v100] Cached rows now carry grams_per_serving too — fixes the 1360-cal
+    // ground turkey bug where "8 oz" of a CACHED per-serving food (no conversion
+    // key available) was silently read as 8 servings.
+    if (!(aiGramsPerServing > 0)) aiGramsPerServing = Number(row.grams_per_serving) || 0;
     let servings = Number(item.amount) || 1;
     const gpu = WEIGHT_UNIT_GRAMS[(item.unit || "").toLowerCase().replace(/s$/, "")];
-    if (gpu && aiGramsPerServing > 0) servings = (servings * gpu) / aiGramsPerServing;
+    if (gpu && aiGramsPerServing > 0) {
+      servings = (servings * gpu) / aiGramsPerServing;
+    } else if (gpu && servings > 1) {
+      // Weight requested but no conversion key (pre-v100 cached food): assume ONE
+      // serving rather than silently multiplying. Self-heals: the food gets its
+      // grams_per_serving the next time a fresh AI lookup touches it.
+      console.log(`[v100] no grams_per_serving for cached "${row.name}" — "${item.amount} ${item.unit}" treated as 1 serving`);
+      servings = 1;
+    }
     servings = Math.round(servings * 100) / 100;
+    // [v101] DISPLAY RULE — the user portions in real units, not abstract servings:
+    //   - weight asked + conversion available → show the weight ("6 oz"), servings
+    //     stay internal math
+    //   - genuinely serving-based → show the count WITH its gram meaning
+    //     ("1 serving (170 g)"); a bare unexplained "serving" only remains for
+    //     pre-v100 cached foods, which self-heal on their next fresh lookup
+    let dispAmount = servings;
+    let dispUnit = "serving";
+    if (gpu && aiGramsPerServing > 0) {
+      dispAmount = Number(item.amount) || 1;
+      dispUnit = item.unit;
+    } else if (aiGramsPerServing > 0) {
+      dispUnit = `serving (${Math.round(servings * aiGramsPerServing)} g)`;
+    }
     return {
       user_text: `${item.amount} ${item.unit} ${item.food}`,
       canonical_name: row.name, food: row.name,
-      amount: servings, unit: "serving",
+      amount: dispAmount, unit: dispUnit,
       grams: aiGramsPerServing > 0 ? Math.round(servings * aiGramsPerServing) : 0,
       calories: Math.round((Number(row.calories_per_100g) || 0) * servings),
       protein: Math.round((Number(row.protein_per_100g) || 0) * servings * 10) / 10,
@@ -1070,6 +1099,14 @@ BLOCK RULES:
       if (existingTypes.has(mt) && mt !== "snack") continue; // belt & suspenders: never duplicate an existing main
       const card = await resolveSuggestionBlock(b.data, planDate);
       if (!card) continue;
+      // [v100] GARNISH FLOOR — code-enforced. The prompt already forbids
+      // garnish-sized items; Haiku ignores it sometimes (the recurring anchovy
+      // tablespoons). A generated plan has no business containing sub-50-cal
+      // components, so they're dropped here, deterministically.
+      const dropped = card.items.filter(i => (Number(i.calories) || 0) < 50);
+      card.items = card.items.filter(i => (Number(i.calories) || 0) >= 50);
+      if (dropped.length > 0) console.log(`[v100] garnish floor dropped: ${dropped.map(i => i.food).join(", ")}`);
+      if (card.items.length === 0) continue;
       const groupId = randomUUID();
       const rows = card.items.map(item => {
         const namePart = item.canonical_name || item.food || "Unknown food";

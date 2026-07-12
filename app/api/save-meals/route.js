@@ -19,7 +19,8 @@ async function writeBackAiFood(supabase, meal) {
     if (wbSource !== 'ai_estimate' && wbSource !== 'label') return;
     // Derive a clean food name (strip the trailing ", <qty> <unit>" the save row appends)
     let name = String(meal.canonicalName || meal.food || '').trim();
-    name = name.replace(/,\s*[\d.]+\s*[a-z ]+$/i, '').trim();    // "Egg McMuffin, 1 sandwich" -> "Egg McMuffin"
+    // [v101] also strips the new gram-annotated suffix: "Greek Yogurt, 1 serving (170 g)" -> "Greek Yogurt"
+    name = name.replace(/,\s*[\d.]+\s*[a-z ]+(\([\d.]+\s*g\))?\s*$/i, '').trim();
     if (name.length < 2) return;
 
     // SERVING-BASED storage: these are restaurant/branded foods eaten as whole items, not weighed.
@@ -39,6 +40,9 @@ async function writeBackAiFood(supabase, meal) {
       .from('foods').select('id').ilike('name', name).limit(1);
     if (existing && existing.length > 0) return;
 
+    // [v100] grams-per-serving is the weight→serving conversion key. Without it,
+    // a later "8 oz" of this cached food is read as 8 servings.
+    const gramsPerServing = Number(meal.grams) > 0 ? Math.round(Number(meal.grams) / servings) : null;
     await supabase.from('foods').insert([{
       name,
       category: wbSource === 'label' ? 'branded' : 'restaurant',
@@ -48,6 +52,7 @@ async function writeBackAiFood(supabase, meal) {
       protein_per_100g:  Math.round(perServing.protein  * 10) / 10,
       carbs_per_100g:    Math.round(perServing.carbs    * 10) / 10,
       fat_per_100g:      Math.round(perServing.fat      * 10) / 10,
+      grams_per_serving: gramsPerServing,
     }]);
     console.log(`🧠 write-back cached ${wbSource} food (per-serving):`, name, perServing);
   } catch (e) {
