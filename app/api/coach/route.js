@@ -569,6 +569,9 @@ async function writeBackAIFood(macros) {
       grams_per_serving: Number(macros.grams_per_serving) > 0 ? Math.round(Number(macros.grams_per_serving)) : null,
     }]).select(cols).single();
     if (error) { console.log("write-back failed:", error.message); return null; }
+    // [v105] tag the new food's diet compatibility in the same breath — the
+    // untagged gap never grows again. Await is fine: first-contact foods only.
+    try { await classifyFoodDietTags([{ id: inserted.id, name: inserted.name }], "ai_writeback"); } catch {}
     return inserted; // this IS the read-back: the stored row, straight from the database
   } catch (e) { console.log("write-back error:", e.message); return null; }
 }
@@ -616,6 +619,7 @@ async function resolveOneFood(item) {
     const f = grams / 100;
     return {
       user_text: `${item.amount} ${item.unit} ${item.food}`,
+      staple_key: staple.key, food_id: null,   // [v105] staples are code-owned; the gate classifies them in code
       canonical_name: staple.label, food: staple.label,
       amount: item.amount, unit: item.unit, grams: Math.round(grams),
       calories: Math.round(staple.per100.calories * f),
@@ -684,6 +688,7 @@ async function resolveOneFood(item) {
       carbs: Math.round((Number(row.carbs_per_100g) || 0) * servings * 10) / 10,
       fat: Math.round((Number(row.fat_per_100g) || 0) * servings * 10) / 10,
       source: ftype, usda_food_id: null,
+      food_id: row.id || null,   // [v105] identity for the dietary gate
     };
   }
   // USDA gram-based math
@@ -695,6 +700,7 @@ async function resolveOneFood(item) {
     amount: item.amount, unit: item.unit, grams: Math.round(grams),
     calories: m.calories, protein: m.protein, carbs: m.carbs, fat: m.fat,
     source: "usda_db", usda_food_id: row.id || null,
+    food_id: row.id || null,   // [v105] identity for the dietary gate
   };
 }
 
@@ -977,6 +983,169 @@ async function resolveSuggestionBlock(data, planDate) {
   return { meal_type: mealType, date: planDate, items, timing: data.timing || null, unresolved };
 }
 
+// ═══ [v105] DIETARY GATE — code-enforced tag verification ════════════════════
+// Prompt rules provably leak (a vegan user got turkey twice). This gate is the
+// real enforcement: every generated item must CARRY the positive compatibility
+// tag(s) the user's rules require. Untagged = fails = classified on demand,
+// once, cached forever in food_tags. Unknown is treated as unsafe for ALL
+// rules — strictest reading, and the only acceptable one for allergies.
+
+const STYLE_TAG_MAP = { vegan: "vegan", vegetarian: "vegetarian", pescatarian: "pescatarian",
+  keto: "keto_friendly", paleo: "paleo", mediterranean: "mediterranean", halal: "halal", kosher: "kosher" };
+const SENSITIVITY_TAG_MAP = { lactose: "dairy_free", dairy: "dairy_free", milk: "dairy_free",
+  gluten: "gluten_free", wheat: "gluten_free", fodmap: "low_fodmap",
+  "tree nut": "nut_free", peanut: "nut_free", nut: "nut_free",
+  shellfish: "shellfish_free", fish: "fish_free", egg: "egg_free", soy: "soy_free", pork: "pork_free" };
+const DIET_TAG_KEYS = ["vegan","vegetarian","pescatarian","dairy_free","gluten_free","nut_free","halal","kosher",
+  "keto_friendly","paleo","mediterranean","low_fodmap","low_carb","pork_free","shellfish_free","egg_free","soy_free","fish_free"];
+
+// Cooked staples live in code, so their diet classification lives in code too.
+const STAPLE_PLANT_KEYS = new Set(["white rice","brown rice","pasta","oats","quinoa","potato","sweet potato","lentils","black beans","chickpeas"]);
+function stapleDietTags(stapleKey) {
+  const base = ["dairy_free","nut_free","pork_free","shellfish_free","egg_free","soy_free"];
+  if (STAPLE_PLANT_KEYS.has(stapleKey)) {
+    const t = [...base, "vegan","vegetarian","pescatarian","fish_free","halal","kosher"];
+    if (stapleKey !== "pasta") t.push("gluten_free");   // pasta is the one glutenous staple
+    return t;
+  }
+  if (stapleKey === "salmon") return [...base, "gluten_free", "pescatarian"];      // NOT fish_free
+  return [...base, "gluten_free", "fish_free"];   // chicken breast, ground beef — no halal/kosher claim for generic meat
+}
+
+async function getDietRules(userId) {
+  try {
+    const { data } = await supabase.from("user_dietary_preferences")
+      .select("dietary_style, allergens, intolerances, restrictions")
+      .eq("user_id", userId).eq("is_active", true).limit(1);
+    const d = data?.[0];
+    if (!d) return { requiredTags: [], nameBlocklist: [] };
+    const requiredTags = [];
+    const nameBlocklist = [];
+    const addFrom = (values, maps, blocklistUnmatched) => {
+      for (const v of values || []) {
+        const lv = String(v).toLowerCase().trim();
+        if (!lv) continue;
+        let matched = false;
+        for (const [k, tag] of Object.entries(maps)) {
+          if (lv.includes(k)) { requiredTags.push(tag); matched = true; break; }
+        }
+        if (!matched && blocklistUnmatched && lv.length >= 3) nameBlocklist.push(lv);
+      }
+    };
+    addFrom(d.dietary_style, STYLE_TAG_MAP, false);          // unmatched styles ("whole foods 80/20") are coaching, not exclusion
+    addFrom(d.allergens, SENSITIVITY_TAG_MAP, true);         // unmatched allergens exclude by name — unknown is unsafe
+    addFrom(d.intolerances, SENSITIVITY_TAG_MAP, true);
+    addFrom(d.restrictions, SENSITIVITY_TAG_MAP, true);      // "no cilantro" -> name blocklist
+    return { requiredTags: [...new Set(requiredTags)], nameBlocklist: [...new Set(nameBlocklist)] };
+  } catch { return { requiredTags: [], nameBlocklist: [] }; }
+}
+
+let DIET_TAG_ID_CACHE = null;
+async function getDietTagIdMap() {
+  if (DIET_TAG_ID_CACHE) return DIET_TAG_ID_CACHE;
+  const { data } = await supabase.from("tags").select("id, tag_key").eq("category", "diet_compatibility").eq("is_active", true);
+  DIET_TAG_ID_CACHE = new Map((data || []).map(t => [t.tag_key, t.id]));
+  return DIET_TAG_ID_CACHE;
+}
+
+async function fetchDietTagsForFoods(foodIds) {
+  const map = new Map();
+  if (!foodIds.length) return map;
+  const { data } = await supabase.from("food_tags")
+    .select("food_id, tags!inner(tag_key, category)")
+    .in("food_id", foodIds);
+  for (const row of data || []) {
+    if (row.tags?.category !== "diet_compatibility") continue;
+    if (!map.has(row.food_id)) map.set(row.food_id, new Set());
+    map.get(row.food_id).add(row.tags.tag_key);
+  }
+  return map;
+}
+
+// One Haiku call classifies a batch of foods against the diet taxonomy; results
+// are written to food_tags with provenance + confidence, so each food pays once.
+async function classifyFoodDietTags(foods, sourceLabel) {
+  const result = new Map();
+  if (!foods.length) return result;
+  try {
+    const prompt = `Classify each food for dietary compatibility. For each, list which of these tags TRULY apply (positive compatibility — only include a tag if the food definitely complies):
+${DIET_TAG_KEYS.join(", ")}
+
+Rules: vegan = no animal products at all. vegetarian = no meat/fish (dairy/egg ok). pescatarian = no meat except fish/seafood. X_free tags = definitely contains no X. Do NOT include halal/kosher for meat unless certified. When unsure about a tag, OMIT it.
+
+Foods:
+${foods.map(f => `id ${f.id}: ${f.name}`).join("\n")}
+
+Respond with ONLY a JSON array, no prose:
+[{"id": <id>, "tags": ["vegan","dairy_free"]}]`;
+    const response = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001", max_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = (response.content || []).map(c => (c.type === "text" ? c.text : "")).join("");
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return result;
+    const parsed = JSON.parse(jsonMatch[0]);
+    const tagIdMap = await getDietTagIdMap();
+    const inserts = [];
+    for (const entry of parsed) {
+      const fid = entry?.id;
+      const keys = (entry?.tags || []).filter(k => DIET_TAG_KEYS.includes(k));
+      if (fid == null) continue;
+      result.set(fid, new Set(keys));
+      for (const k of keys) {
+        const tid = tagIdMap.get(k);
+        if (tid) inserts.push({ food_id: fid, tag_id: tid, confidence: 0.8, source: sourceLabel, reason: "AI diet classification" });
+      }
+      // even zero-tag results are an answer; nothing to insert, gate treats as non-compliant
+    }
+    if (inserts.length) {
+      const { error } = await supabase.from("food_tags").insert(inserts);
+      if (error) console.log("[v105] food_tags insert error (non-fatal):", error.message);
+    }
+    console.log(`[v105] classified ${result.size} food(s) [${sourceLabel}]`);
+  } catch (e) {
+    console.log("[v105] classification failed (foods stay untagged = unsafe):", e?.message || e);
+  }
+  return result;
+}
+
+// The gate itself. Returns { passed, rejected: [{card, reason}] }.
+async function enforceDietGate(cards, rules, sourceLabel) {
+  if ((!rules.requiredTags.length && !rules.nameBlocklist.length) || !cards.length) {
+    return { passed: cards, rejected: [] };
+  }
+  const ids = [...new Set(cards.flatMap(c => c.items.map(i => i.food_id).filter(Boolean)))];
+  const tagMap = await fetchDietTagsForFoods(ids);
+  // On-demand classification for foods with no diet tags yet
+  const nameById = new Map();
+  cards.forEach(c => c.items.forEach(i => { if (i.food_id) nameById.set(i.food_id, i.canonical_name || i.food); }));
+  const unknownIds = ids.filter(id => !(tagMap.get(id)?.size > 0));
+  if (unknownIds.length && rules.requiredTags.length) {
+    const classified = await classifyFoodDietTags(unknownIds.map(id => ({ id, name: nameById.get(id) })), sourceLabel);
+    for (const [id, set] of classified) tagMap.set(id, set);
+  }
+  const passed = [], rejected = [];
+  for (const card of cards) {
+    let violation = null;
+    for (const item of card.items) {
+      const nm = String(item.canonical_name || item.food || "").toLowerCase();
+      const blocked = rules.nameBlocklist.find(b => nm.includes(b));
+      if (blocked) { violation = `${item.food} conflicts with "${blocked}"`; break; }
+      let tags;
+      if (item.staple_key) tags = new Set(stapleDietTags(item.staple_key));
+      else if (item.food_id) tags = tagMap.get(item.food_id) || new Set();
+      else tags = new Set();   // no identity at all -> cannot verify -> unsafe
+      const missing = rules.requiredTags.find(t => !tags.has(t));
+      if (missing) { violation = `${item.food} is not verified ${missing.replace(/_/g, " ")}`; break; }
+    }
+    if (violation) rejected.push({ card, reason: violation });
+    else passed.push(card);
+  }
+  if (rejected.length) console.log(`[v105] diet gate rejected ${rejected.length} meal(s): ${rejected.map(x => x.reason).join(" | ")}`);
+  return { passed, rejected };
+}
+
 // ═══ [v102] CALORIE BAND — code-enforced ±10% ════════════════════════════════
 // The AI can't do math, so generated days sometimes land far off budget (the
 // 1708-vs-2332 Saturday). Code fixes it deterministically: if the generated
@@ -1179,12 +1348,60 @@ ${hardRules ? "\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 a
       cards.push(card);
     }
 
+    // [v105] DIETARY GATE — verify every meal in code, retry violations ONCE
+    const dietRules = await getDietRules(activeUserId);
+    let finalCards = cards;
+    if (dietRules.requiredTags.length || dietRules.nameBlocklist.length) {
+      const gate1 = await enforceDietGate(cards, dietRules, "ai_ondemand");
+      finalCards = gate1.passed;
+      if (gate1.rejected.length > 0) {
+        // One retry with explicit feedback about what violated and why
+        const retryTypes = [...new Set(gate1.rejected.map(x => x.card.meal_type))];
+        const feedback = gate1.rejected.map(x => `${x.card.meal_type}: ${x.reason}`).join("; ");
+        try {
+          const retryPrompt = `${hardRules}Your previous meal proposal was REJECTED by the app's dietary verification — ${feedback}.
+
+Propose REPLACEMENT meals for ONLY these meal types: ${retryTypes.join(", ")}. Choose clearly compliant, common whole foods. Remaining budget for these meals: ~${Math.max(0, remainingBudget - finalCards.reduce((s, c) => s + c.items.reduce((x, i) => x + (Number(i.calories) || 0), 0), 0))} cal.
+
+Respond with ONLY SUGGESTION_DATA blocks, one per meal, nothing else:
+<<<SUGGESTION_DATA>>>
+{"meal_type":"dinner","timing":"evening","items":[{"food":"lentils (cooked)","amount":1,"unit":"cup"},{"food":"brown rice (cooked)","amount":0.75,"unit":"cup"},{"food":"avocado","amount":0.5,"unit":"piece"}]}
+<<<END_SUGGESTION_DATA>>>
+Rules: 2-4 substantial items per meal, numeric amount + common unit (oz, g, cup, tbsp, piece, serving). NO macro numbers.`;
+          const retryResp = await anthropic.messages.create({
+            model: "claude-haiku-4-5-20251001", max_tokens: 1500,
+            messages: [{ role: "user", content: retryPrompt }],
+          });
+          const retryText = (retryResp.content || []).map(c => (c.type === "text" ? c.text : "")).join("");
+          const retryCards = [];
+          for (const b of parseSuggestionBlocks(retryText)) {
+            if (!b.data) continue;
+            const mt = String(b.data.meal_type || "").toLowerCase();
+            if (!retryTypes.includes(mt)) continue;
+            const card = await resolveSuggestionBlock(b.data, planDate);
+            if (!card) continue;
+            card.items = card.items.filter(i => (Number(i.calories) || 0) >= 50);
+            if (card.items.length) retryCards.push(card);
+          }
+          // Second gate pass — NO further retry; still-failing meals are skipped, never shown
+          const gate2 = await enforceDietGate(retryCards, dietRules, "ai_ondemand");
+          finalCards = [...finalCards, ...gate2.passed];
+          if (gate2.rejected.length > 0) {
+            console.log(`[v105] retry still violated — skipping: ${gate2.rejected.map(x => x.reason).join(" | ")}`);
+          }
+        } catch (e) {
+          console.log("[v105] retry generation failed:", e?.message || e);
+        }
+      }
+    }
+    const acceptedCards = finalCards;
+
     // [v102] enforce the ±10% calorie band on the whole generated set
-    scaleCardsToBudget(cards, remainingBudget);
+    scaleCardsToBudget(acceptedCards, remainingBudget);
 
     let insertedRows = 0;
     let generatedMeals = 0;
-    for (const card of cards) {
+    for (const card of acceptedCards) {
       const groupId = randomUUID();
       const rows = card.items.map(item => {
         const namePart = item.canonical_name || item.food || "Unknown food";
@@ -2842,18 +3059,31 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
         const cards = [];
         const allUnresolved = [];
         let displayText = reply;
+        // [v105] resolve first, GATE second, render third — chat suggestions get
+        // the same code-enforced dietary verification as tab generation. Violating
+        // meals are dropped with an honest inline note (no silent removal, no retry
+        // loop mid-conversation — the user can just ask for another option).
+        const resolvedBlocks = [];
         for (const b of sugBlocks) {
-          let replacement = "";
+          let card = null;
           if (b.data) {
-            const card = await resolveSuggestionBlock(b.data, planDate);
-            if (card) {
-              allUnresolved.push(...card.unresolved);
-              delete card.unresolved;
-              cards.push(card);
-              replacement = renderCardText(card);
-            }
+            card = await resolveSuggestionBlock(b.data, planDate);
+            if (card) { allUnresolved.push(...card.unresolved); delete card.unresolved; }
           }
-          displayText = displayText.replace(b.raw, replacement);
+          resolvedBlocks.push({ raw: b.raw, card });
+        }
+        const chatDietRules = await getDietRules(activeUserId);
+        const chatGate = await enforceDietGate(resolvedBlocks.map(x => x.card).filter(Boolean), chatDietRules, "ai_ondemand");
+        const chatRejected = new Map(chatGate.rejected.map(x => [x.card, x.reason]));
+        for (const rb of resolvedBlocks) {
+          let replacement = "";
+          if (rb.card && !chatRejected.has(rb.card)) {
+            cards.push(rb.card);
+            replacement = renderCardText(rb.card);
+          } else if (rb.card) {
+            replacement = `(I removed a suggested ${rb.card.meal_type} — ${chatRejected.get(rb.card)}. Ask me for a different option.)`;
+          }
+          displayText = displayText.replace(rb.raw, replacement);
         }
         displayText = displayText.replace(/\n{3,}/g, "\n\n").trim();
 
