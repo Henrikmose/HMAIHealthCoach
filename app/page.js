@@ -1359,12 +1359,18 @@ alert("No meal data found to save. Try logging again.");
 return;
 }
 const table = action === "eat" ? "actual_meals" : "planned_meals";
+// [v96] MEAL GROUPING — every row saved from this card shares ONE group id, so the
+// dashboard can treat the whole meal as a unit (one-tap promote to eaten). Plan saves
+// only; actual_meals rows stay individual. Falls back to ungrouped if randomUUID is
+// unavailable — the column is uuid-typed, so never send a non-uuid string.
+const mealGroupId = (action === "plan" && typeof crypto !== "undefined" && crypto.randomUUID)
+? crypto.randomUUID() : null;
 
-console.log("💾 Saving card:", { cardIdx, count: rows.length, table, date: targetDate, mealType });
+console.log("💾 Saving card:", { cardIdx, count: rows.length, table, date: targetDate, mealType, mealGroupId });
 
 try {
 for (const row of rows) {
-await saveMealViaAPI(table, { ...row, date: targetDate }, userId);
+await saveMealViaAPI(table, { ...row, date: targetDate, ...(mealGroupId ? { mealGroupId } : {}) }, userId);
 }
 
 // [v84] On success the card is ALSO dismissed (cross-device, DB-backed). Saved-detection
@@ -1436,10 +1442,13 @@ const mealType = selectedMealTypes[typeKey] || card.meal_type;
 // [v84] each card saves to ITS OWN date (override > card-carried > message default)
 const cardDate = selectedCardDates[typeKey] || card.date || targetDate;
 const rows = cardToSaveRows(card, mealType);
+// [v96] one group id per CARD — this card's items form one meal on the dashboard
+const mealGroupId = (action === "plan" && typeof crypto !== "undefined" && crypto.randomUUID)
+? crypto.randomUUID() : null;
 let cardFailed = false;
 for (const row of rows) {
 try {
-await saveMealViaAPI(table, { ...row, date: cardDate }, userId);
+await saveMealViaAPI(table, { ...row, date: cardDate, ...(mealGroupId ? { mealGroupId } : {}) }, userId);
 } catch (err) {
 failures.push(`${row.food}: ${err.message}`);
 cardFailed = true;

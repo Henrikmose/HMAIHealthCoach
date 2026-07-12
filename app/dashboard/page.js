@@ -407,6 +407,31 @@ export default function DashboardPage() {
     setActual(a => [...a, { ...meal, id: Math.random(), date: selectedDate }]);
   }
 
+  // ── [v96] Mark a whole meal GROUP as Eaten — one tap, batched DB calls ──
+  // Rows saved from one coach card share meal_group_id. Promoting the group
+  // moves ALL its rows to actual_meals (where they live as individual items,
+  // same as today) and removes them from planned in one delete + one insert.
+  async function markEatenGroup(groupRowIds) {
+    const meals = planned.filter(m => groupRowIds.includes(m.id));
+    if (meals.length === 0) return;
+
+    await supabase.from("planned_meals").delete().in("id", groupRowIds);
+    await supabase.from("actual_meals").insert(meals.map(meal => ({
+      user_id: userId,
+      food: meal.food,
+      calories: meal.calories,
+      protein: meal.protein,
+      carbs: meal.carbs,
+      fat: meal.fat,
+      servings: meal.servings || 1,
+      meal_type: meal.meal_type,
+      date: selectedDate,
+    })));
+
+    setPlanned(p => p.filter(m => !groupRowIds.includes(m.id)));
+    setActual(a => [...a, ...meals.map(meal => ({ ...meal, id: Math.random(), date: selectedDate }))]);
+  }
+
   // ── Update Servings ──
   async function updateServings(mealId, newServings, isActualMeal) {
     const table = isActualMeal ? "actual_meals" : "planned_meals";
@@ -566,11 +591,55 @@ export default function DashboardPage() {
                         {Math.round(sumMeals(meals).calories)} cal
                       </span>
                     </div>
-                    {meals.map(m => (
-                      <MealCard key={m.id} meal={m} onDelete={deletePlanned}
-                        onMarkEaten={markEaten} onUpdateServings={updateServings}
-                        onCopy={copyMeal} isActual={false} t={t} />
-                    ))}
+                    {/* [v96] MEAL GROUPS — rows sharing a meal_group_id render as ONE
+                        meal with a single "Eat all" button. Ungrouped (legacy) rows
+                        render exactly as before. Individual item controls stay available
+                        inside a group — remove-after beats select-before. */}
+                    {(() => {
+                      const groups = [];
+                      const byGid = new Map();
+                      for (const m of meals) {
+                        const gid = m.meal_group_id || null;
+                        if (!gid) { groups.push({ gid: `solo-${m.id}`, rows: [m], grouped: false }); continue; }
+                        if (!byGid.has(gid)) { const g = { gid, rows: [], grouped: true }; byGid.set(gid, g); groups.push(g); }
+                        byGid.get(gid).rows.push(m);
+                      }
+                      return groups.map(g => {
+                        if (!g.grouped || g.rows.length < 2) {
+                          const m = g.rows[0];
+                          return (
+                            <MealCard key={m.id} meal={m} onDelete={deletePlanned}
+                              onMarkEaten={markEaten} onUpdateServings={updateServings}
+                              onCopy={copyMeal} isActual={false} t={t} />
+                          );
+                        }
+                        const gt = sumMeals(g.rows);
+                        return (
+                          <div key={g.gid} style={{ border:`1px dashed ${t.border}`, borderRadius: 14,
+                            padding: 8, marginBottom: 8 }}>
+                            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+                              gap: 8, marginBottom: 6, paddingLeft: 4 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: t.sub }}>
+                                {g.rows.length} items · {Math.round(gt.calories)} cal · {Math.round(gt.protein)}g P
+                              </span>
+                              <button
+                                onClick={() => markEatenGroup(g.rows.map(r => r.id))}
+                                style={{ fontSize: 11, fontWeight: 700, color:"#fff",
+                                  background:"#10b981", border:"none", borderRadius: 10,
+                                  padding:"6px 12px", cursor:"pointer" }}
+                              >
+                                ✅ Eat all {g.rows.length}
+                              </button>
+                            </div>
+                            {g.rows.map(m => (
+                              <MealCard key={m.id} meal={m} onDelete={deletePlanned}
+                                onMarkEaten={markEaten} onUpdateServings={updateServings}
+                                onCopy={copyMeal} isActual={false} t={t} />
+                            ))}
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 ))}
               </div>

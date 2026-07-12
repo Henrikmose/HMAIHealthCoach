@@ -115,6 +115,10 @@ export async function POST(req) {
     } else {
       row.suggested_time = null;
       row.status = "planned";
+      // [v96] MEAL GROUPING — rows saved from one coach card share a group id so the
+      // dashboard can promote the whole meal to eaten in one tap. uuid column: only
+      // attach when the client sent one; legacy saves stay null (ungrouped).
+      if (meal.mealGroupId) row.meal_group_id = String(meal.mealGroupId);
     }
 
     const { data, error } = await supabase.from(table).insert([row]).select();
