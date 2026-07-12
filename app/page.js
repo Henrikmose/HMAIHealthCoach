@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import HamburgerMenu from "./components/HamburgerMenu";
+import BottomNav from "./components/BottomNav";
 
 // ========================================
 // DATE UTILITIES
@@ -2478,29 +2479,8 @@ Send
 </div>
 </div>
 
-{/* ── Bottom Nav ── */}
-<div style={{ background: T.surface, borderTop:`1px solid ${T.border}`,
-display:"flex", paddingBottom:"env(safe-area-inset-bottom, 8px)", zIndex:100 }}>
-{[
-{ id:"coach", icon:"💬", label:"Coach", path:"/" },
-{ id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
-{ id:"profile", icon:"⚙️", label:"Profile", path:"/profile" },
-].map(tab => (
-<button key={tab.id}
-onClick={() => window.location.href = tab.path}
-style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center",
-gap:3, padding:"10px 0 4px", border:"none", background:"transparent", cursor:"pointer" }}>
-<span style={{ fontSize:20 }}>{tab.icon}</span>
-<span style={{ fontSize:10, fontWeight: tab.id === "coach" ? 700 : 500,
-color: tab.id === "coach" ? "#2563eb" : T.sub, letterSpacing:".03em" }}>
-{tab.label}
-</span>
-{tab.id === "coach" && (
-<div style={{ width:18, height:2, background:"#2563eb", borderRadius:9999 }} />
-)}
-</button>
-))}
-</div>
+{/* ── Bottom Nav — [v97] shared component, inline variant (chat input sits above) ── */}
+<BottomNav active="coach" t={T} fixed={false} />
 </div>
 
 <style>{`

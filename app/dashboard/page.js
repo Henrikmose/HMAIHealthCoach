@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
+import BottomNav from "../components/BottomNav";
 
 // ── Date helpers ────────────────────────────────────────────────────
 function getLocalDate() {
@@ -265,34 +266,7 @@ function MealCard({ meal, onDelete, onMarkEaten, onUpdateServings, onCopy, isAct
 }
 
 // ── Bottom Nav ──────────────────────────────────────────────────────
-function BottomNav({ t }) {
-  const router = useRouter();
-  const tabs = [
-    { id:"coach", icon:"💬", label:"Coach", path:"/" },
-    { id:"dashboard", icon:"📊", label:"Dashboard", path:"/dashboard" },
-    { id:"profile", icon:"⚙️", label:"Profile", path:"/profile" },
-  ];
-  return (
-    <div style={{ position:"fixed", bottom: 0, left:"50%", transform:"translateX(-50%)",
-      width:"100%", maxWidth: 430, background: t.surface, borderTop:`1px solid ${t.border}`,
-      display:"flex", zIndex: 100, paddingBottom:"env(safe-area-inset-bottom, 8px)" }}>
-      {tabs.map(tab => (
-        <button key={tab.id} onClick={() => router.push(tab.path)}
-          style={{ flex: 1, display:"flex", flexDirection:"column", alignItems:"center", gap: 3, padding:"10px 0 4px",
-          border:"none", background:"transparent", cursor:"pointer" }}>
-          <span style={{ fontSize: 20 }}>{tab.icon}</span>
-          <span style={{ fontSize: 10, fontWeight: tab.id === "dashboard" ? 700 : 500,
-            color: tab.id === "dashboard" ? "#2563eb" : t.sub, letterSpacing:".03em", fontFamily:"'DM Sans', sans-serif" }}>
-            {tab.label}
-          </span>
-          {tab.id === "dashboard" && (
-            <div style={{ width: 18, height: 2, background:"#2563eb", borderRadius: 9999 }} />
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
+// [v97] BottomNav extracted to app/components/BottomNav.js — shared by all pages
 
 // ── Main Dashboard Component ────────────────────────────────────────
 export default function DashboardPage() {
@@ -681,7 +655,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <BottomNav t={t} />
+        <BottomNav active="dashboard" t={t} />
       </div>
 
       <style>{`
