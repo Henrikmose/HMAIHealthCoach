@@ -983,6 +983,25 @@ async function resolveSuggestionBlock(data, planDate) {
   return { meal_type: mealType, date: planDate, items, timing: data.timing || null, unresolved };
 }
 
+// ═══ [v106] QUESTION TURNS NEVER PRODUCE MEAL CARDS ══════════════════════════
+// "Why are the hand rolls so high in calories?" got answered with a savable meal
+// card. The client classified it correctly as conversation; the AI emitted a
+// MEAL_DATA block anyway (prompt-taught format + a food noun = block reflex).
+// Server-side port of the client's isQuestionForm + a deterministic strip.
+function isQuestionTurn(t) {
+  if (!t) return false;
+  if (/\?\s*$/.test(t)) return true;
+  return [
+    /^\s*(how\s+(many|much|come|do|does|is|are))\b/i,
+    /^\s*(is|are|was|were|does|do|did)\b/i,
+    /^\s*should\s+i\b/i,
+    /^\s*can\s+i\b/i,
+    /^\s*(which|why|when|where|who)\b/i,
+    /^\s*what('?s|\s+is|\s+are|\s+makes)\b/i,
+    /\bexplain\b/i,
+  ].some((re) => re.test(String(t).trim()));
+}
+
 // ═══ [v105] DIETARY GATE — code-enforced tag verification ════════════════════
 // Prompt rules provably leak (a vegan user got turkey twice). This gate is the
 // real enforcement: every generated item must CARRY the positive compatibility
@@ -2495,6 +2514,8 @@ RESTAURANT / EATING OUT (one rule — applies whether standalone or inside a day
 If the user has NOT said what they'll order: do NOT fabricate dishes, name specific menu items, or build a saveable block — you have NOT seen the menu and cannot know what they'll choose. Instead, TEACH them how to navigate that cuisine — the general principles for eating well there (e.g. for Chinese: steamed or stir-fried over deep-fried; lean protein like chicken, shrimp, tofu or beef with vegetables; sauce on the side; watch words that mean fried such as crispy/battered/sweet-and-sour/General Tso's; go easy on fried rice and noodles). Give a calorie budget from REMAINING, then invite them to share the menu or their order when they're there so you can point them to specific picks. Do NOT recommend specific dishes as an order until you've seen the menu or they've told you what they're having.
 If the user HAS named specific dishes ("2 akami nigiri, miso soup") OR shared the menu: THEN get specific — recommend real items and/or build the meal block and emit MEAL_DATA. Never ask "out or planned?" — the buttons handle that.
 ══════════════════════════════════════════
+QUESTIONS GET ANSWERS, NOT BLOCKS: when the user asks a QUESTION about food ("why are hand rolls high in calories", "how much protein is in salmon", "is X healthy"), answer it conversationally in plain text — explain the reason. NEVER emit a meal block or MEAL_DATA in response to a question. Blocks exist ONLY for food the user states they ate/plan to eat, or meals you were asked to build.
+
 MEAL BLOCK FORMAT — CRITICAL
 ══════════════════════════════════════════
 Every meal MUST use EXACTLY this format.
@@ -3140,6 +3161,18 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
         // blocks stripped so the user never sees raw SUGGESTION_DATA markup.
         reply = displayText;
       }
+    }
+
+    // [v106] A question turn can NEVER return a meal card — strip any MEAL_DATA
+    // the model emitted. (food_log and meal_planning paths returned earlier, so
+    // reaching here means this is a conversational turn.)
+    if (isQuestionTurn(message)) {
+      const beforeStrip = reply;
+      reply = reply
+        .replace(/<<<MEAL_DATA>>>[\s\S]*?<<<END_MEAL_DATA>>>/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      if (beforeStrip !== reply) console.log("[v106] stripped MEAL_DATA from a question turn");
     }
 
     let aiMessageId = null;
