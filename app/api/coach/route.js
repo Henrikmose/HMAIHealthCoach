@@ -53,6 +53,18 @@ function isVeryActive(activityLevel) {
 function parseFoodItems(text) {
   if (!text) return [];
   let s = " " + text.toLowerCase() + " ";
+  // [v110.1] QUALIFIER PRESERVATION: fat-percent modifiers must survive parsing.
+  // The food-name cleanup below strips all digits and symbols, so "2% cottage
+  // cheese" arrived at lookup as plain "cottage cheese" — and the dictated form
+  // "2 percent" was worse: the bare "2" read as a QUANTITY. Rewriting to a single
+  // letters-only token before any tokenization keeps the qualifier attached to
+  // the food name; extractQualifiers understands these tokens on the other end.
+  // NOTE the split alternatives: "%" is a non-word char, so a trailing \b after
+  // it NEVER matches before a space — the percent-sign branch must end at the %.
+  s = s
+    .replace(/\b(?:2|two)\s*%|\b(?:2|two)\s+percent\b/g, " twopercent ")
+    .replace(/\b(?:1|one)\s*%|\b(?:1|one)\s+percent\b/g, " onepercent ")
+    .replace(/\b0\s*%/g, " nonfat ");
   s = s.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g, (m,w,n,d)=>{const dd=+d;return dd?String(+w+(+n)/dd):m;});
   s = s.replace(/(\d+)\s*\/\s*(\d+)/g, (m,n,d)=>{const dd=+d;return dd?String((+n)/dd):m;});
   s = s.replace(/¼/g,"0.25").replace(/½/g,"0.5").replace(/¾/g,"0.75").replace(/⅓/g,"0.333").replace(/⅔/g,"0.667");
@@ -115,8 +127,8 @@ function parseFoodItems(text) {
 const QUALIFIER_FAMILIES = [
   { // dairy fat content
     members: [
-      { key: "2%",      user: /\b2\s*%|\b2\s*percent\b/i,                        row: /\b2\s*%|\b2\s*percent\b|\breduced[- ]fat\b/i },
-      { key: "1%",      user: /\b1\s*%|\b1\s*percent\b/i,                        row: /\b1\s*%|\b1\s*percent\b/i },
+      { key: "2%",      user: /\b2\s*%|\b2\s*percent\b|\btwopercent\b/i,                        row: /\b2\s*%|\b2\s*percent\b|\breduced[- ]fat\b/i },
+      { key: "1%",      user: /\b1\s*%|\b1\s*percent\b|\bonepercent\b/i,                        row: /\b1\s*%|\b1\s*percent\b/i },
       { key: "nonfat",  user: /\b(non[- ]?fat|fat[- ]?free|skim)\b|\b0\s*%/i,  row: /\b(non[- ]?fat|fat[- ]?free|skim)\b/i },
       { key: "lowfat",  user: /\b(low[- ]?fat|lite|light)\b/i,               row: /\b(low[- ]?fat|lite|light)\b/i },
       { key: "fullfat", user: /\b(full[- ]?fat|whole\s+milk)\b/i,            row: /\b(full[- ]?fat|whole\s+milk)\b/i },
@@ -304,7 +316,7 @@ async function lookupFood(foodName) {
   // then numeric-percent tokens are stripped from the QUERY term so "2% cottage
   // cheese" searches as "cottage cheese" while the 2% requirement guides ranking.
   const quals = extractQualifiers(foodName);
-  const preClean = foodName.replace(/\b\d{1,2}\s*%|\b\d{1,2}\s+percent\b/gi, " ");
+  const preClean = foodName.replace(/\b\d{1,2}\s*%|\b\d{1,2}\s+percent\b|\b(one|two)percent\b/gi, " ");
   // [v93] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
   // (a leading "-" turns the full-text stage into a NOT-query that matches nearly the
   // whole table — the espresso incident), and junk/too-short terms never reach the DB.
