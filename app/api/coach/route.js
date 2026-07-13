@@ -101,12 +101,67 @@ function parseFoodItems(text) {
   return items;
 }
 
-function pickBest(rows, term) {
+// ═══ [v110] QUALIFIER FAMILIES — user-stated modifiers are match REQUIREMENTS ═
+// "2% cottage cheese" must never resolve to full fat; "two eggs" must never
+// resolve to egg white. Each family: if the user's term names a member, rows
+// naming a DIFFERENT member of the same family get a hard -200 (same pattern as
+// namedSpecialty); rows naming the SAME member get +30. If the top-scoring row
+// still conflicts with a stated qualifier, pickBest returns null — no acceptable
+// candidate — and lookup falls through to the AI-estimate path, which caches the
+// RIGHT food (an honest estimate of the right food beats exact numbers for the
+// wrong one). `appliesWhen` scopes a family so e.g. the egg family never touches
+// "white bread". `def` is the assumed member when the user states none
+// (plain "eggs" = whole eggs).
+const QUALIFIER_FAMILIES = [
+  { // dairy fat content
+    members: [
+      { key: "2%",      user: /\b2\s*%|\b2\s*percent\b/i,                        row: /\b2\s*%|\b2\s*percent\b|\breduced[- ]fat\b/i },
+      { key: "1%",      user: /\b1\s*%|\b1\s*percent\b/i,                        row: /\b1\s*%|\b1\s*percent\b/i },
+      { key: "nonfat",  user: /\b(non[- ]?fat|fat[- ]?free|skim)\b|\b0\s*%/i,  row: /\b(non[- ]?fat|fat[- ]?free|skim)\b/i },
+      { key: "lowfat",  user: /\b(low[- ]?fat|lite|light)\b/i,               row: /\b(low[- ]?fat|lite|light)\b/i },
+      { key: "fullfat", user: /\b(full[- ]?fat|whole\s+milk)\b/i,            row: /\b(full[- ]?fat|whole\s+milk)\b/i },
+    ],
+  },
+  { // egg part — plain "eggs" means whole eggs
+    appliesWhen: /\begg/i,
+    def: "whole",
+    members: [
+      { key: "white", user: /\bwhites?\b/i, row: /\bwhites?\b/i },
+      { key: "yolk",  user: /\byolks?\b/i,  row: /\byolks?\b/i },
+      { key: "whole", user: /\bwhole\b/i,   row: /\bwhole\b/i },
+    ],
+  },
+];
+
+function extractQualifiers(rawTerm) {
+  const t = (rawTerm || "").toLowerCase();
+  const quals = [];
+  for (const fam of QUALIFIER_FAMILIES) {
+    if (fam.appliesWhen && !fam.appliesWhen.test(t)) continue;
+    const stated = fam.members.find(m => m.user.test(t)) || null;
+    quals.push({ fam, stated: stated ? stated.key : null });
+  }
+  return quals;
+}
+
+// ═══ [v110] COMPOUND-DISH GUARD — an ingredient never resolves to a dish ══════
+// The write-back cache grows with every user's logged dishes ("Avocado handroll
+// (avocado, rice, nori)"). A single-food term must never match a cached compound
+// dish: dish word in the row's name that the user didn't say = hard -200. A
+// parenthetical ingredient list in the name is the same signal.
+const DISH_WORDS = ["handroll","roll","sushi","wrap","sandwich","burger","bowl","smoothie",
+  "shake","burrito","taco","quesadilla","pizza","soup","stew","casserole","salad","curry",
+  "parfait","platter","combo","plate","omelet","omelette","set"];
+
+function pickBest(rows, term, quals = []) {
   const oddVariants = ['wing','skin','rind','bone','neck','giblet','liver','gizzard','heart','feet','tail',
     'overripe','underripe','unripe','dried','dehydrated','candied','sweetened','juice','powder','flour','baby food','restaurant','glutinous'];
   const specialty = ['black','red','wild','brown','green','jasmine','basmati'];
   const cuts = ['wing','thigh','drumstick','breast','ground','skin'];
-  const commonPrefer = ['breast','white','boneless','skinless','long grain'];
+  // [v110] 'white' removed: it existed for chicken breast / white rice, both now
+  // code-owned staples that never reach this ranking — its only remaining effect
+  // was promoting EGG WHITE over whole eggs (the two-eggs bug).
+  const commonPrefer = ['breast','boneless','skinless','long grain'];
   const term_l = (term || '').toLowerCase();
   const termWords = term_l.split(/[\s,]+/).filter(Boolean);
   const userWantsRaw = /\b(raw|dry|uncooked)\b/.test(term_l);
@@ -115,6 +170,7 @@ function pickBest(rows, term) {
   const scored = rows.map(r => {
     const name = (r.name || '').toLowerCase();
     let score = 0;
+    let qualConflict = false;
     if (name === term_l) score += 100;
     if (name.startsWith(term_l+',')||name.startsWith(term_l+' ')||name.startsWith(term_l+'s,')||name.startsWith(term_l+'s ')) score += 40;
     else if (name.startsWith(term_l)) score += 20;
@@ -128,6 +184,37 @@ function pickBest(rows, term) {
       for (const v of specialty) if (name.includes(v)) score -= 40;
     }
     for (const v of oddVariants) if (name.includes(v) && !term_l.includes(v)) score -= 35;
+    // [v110] QUALIFIER FIDELITY: user-stated modifier is a requirement, not a hint.
+    // A row matching the STATED member is satisfied — USDA names often carry two
+    // markers of the same family ("low fat, 2% milkfat"), and the stated match
+    // must not be undone by its sibling ("low fat") firing a false conflict.
+    for (const q of quals) {
+      if (q.stated) {
+        const statedMember = q.fam.members.find(m => m.key === q.stated);
+        if (statedMember && statedMember.row.test(name)) {
+          score += 30;
+        } else {
+          for (const m of q.fam.members) {
+            if (m.key !== q.stated && m.row.test(name)) { score -= 200; qualConflict = true; break; }
+          }
+        }
+      } else if (q.fam.def) {
+        // No member stated → gently prefer the family default (plain "eggs" = whole).
+        for (const m of q.fam.members) {
+          if (!m.row.test(name)) continue;
+          score += (m.key === q.fam.def) ? 25 : -25;
+        }
+      }
+    }
+    // [v110] COMPOUND-DISH GUARD: dish words / ingredient-list parentheses the
+    // user never said sink the row hard — "avocado" can't become "Avocado handroll".
+    for (const d of DISH_WORDS) {
+      if (new RegExp(`\\b${d}\\b`, "i").test(name) && !new RegExp(`\\b${d}\\b`, "i").test(term_l)) { score -= 200; }
+    }
+    if (/\([^)]*,[^)]*\)/.test(name) && termWords.length <= 3 && !term_l.includes("(")) {
+      const baseWords = name.replace(/\([^)]*\)/g, " ").split(/[\s,]+/).filter(w => w.length >= 3);
+      if (baseWords.some(w => !term_l.includes(w))) score -= 200;
+    }
     // [v93] SOURCE TIER: a user-declared label is truth; an AI estimate is a guess.
     // When name relevance is comparable, label wins and ai_estimate loses. USDA/custom
     // sit between — never displaced by a label unless the label's NAME matches better.
@@ -135,9 +222,12 @@ function pickBest(rows, term) {
     if (src === 'label') score += 12;
     else if (src === 'ai_estimate') score -= 12;
     score -= name.length * 0.15;
-    return { r, score };
+    return { r, score, qualConflict };
   });
   scored.sort((a, b) => b.score - a.score);
+  // [v110] If the winner conflicts with a STATED qualifier, there is no acceptable
+  // candidate — return null so the caller falls through (next stage, then AI path).
+  if (scored[0].qualConflict) return null;
   return scored[0].r;
 }
 
@@ -209,11 +299,16 @@ function gramsForStaple(st, amount, unit) {
 
 async function lookupFood(foodName) {
   if (!foodName) return null;
-  const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, grams_per_serving';
+  const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, grams_per_serving, use_count';
+  // [v110] Qualifiers are read from the RAW term (the sanitizer would eat "2%"),
+  // then numeric-percent tokens are stripped from the QUERY term so "2% cottage
+  // cheese" searches as "cottage cheese" while the 2% requirement guides ranking.
+  const quals = extractQualifiers(foodName);
+  const preClean = foodName.replace(/\b\d{1,2}\s*%|\b\d{1,2}\s+percent\b/gi, " ");
   // [v93] ENTRY GUARD: sanitize BEFORE any query stage. Leading punctuation is stripped
   // (a leading "-" turns the full-text stage into a NOT-query that matches nearly the
   // whole table — the espresso incident), and junk/too-short terms never reach the DB.
-  const clean = foodName.trim().toLowerCase()
+  const clean = preClean.trim().toLowerCase()
     .replace(/[^a-z0-9\s-]/g, " ")
     .replace(/(^|\s)-+/g, "$1")
     .replace(/\s+/g, " ")
@@ -227,22 +322,39 @@ async function lookupFood(foodName) {
   if (/\bwith\b/.test(clean) || wordCount >= 4) {
     return null; // -> falls through to AI estimate (composed dish)
   }
-  try {
-    const { data: starts } = await supabase.from('foods').select(cols).ilike('name', `${clean}%`).limit(8);
-    if (starts && starts.length > 0) return pickBest(starts, clean);
-    const { data: startsPlural } = await supabase.from('foods').select(cols).ilike('name', `${clean}s%`).limit(8);
-    if (startsPlural && startsPlural.length > 0) return pickBest(startsPlural, clean);
-    const { data: fts } = await supabase.from('foods').select(cols).textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' }).limit(8);
-    if (fts && fts.length > 0) return pickBest(fts, clean);
-    // SUBSTRING GUARD: the %contains% stage is a shotgun — short terms match inside
-    // unrelated words ("cal" -> "Squid (CALamari)", "fat" -> "Buttermilk, low FAT").
-    // Only allow it for terms long enough to be a real food name.
-    if (clean.length >= 5) {
-      const { data: contains } = await supabase.from('foods').select(cols).ilike('name', `%${clean}%`).limit(10);
-      if (contains && contains.length > 0) return pickBest(contains, clean);
-    }
-    return null;
-  } catch (e) { console.log('Food lookup error:', e.message); return null; }
+  // [v110] TIERED LOOKUP + DETERMINISTIC CANDIDATES.
+  // Tier 1: curated rows only (usda/custom/label). Tier 2: ai_estimate rows, and
+  // ONLY when the curated tier had no acceptable hit. A cached guess can therefore
+  // NEVER shadow a curated food, no matter how large the write-back table grows —
+  // the -12 score nudge stops being the only thing protecting "avocado" from
+  // "Avocado handroll". Every stage is ordered (name) with a wider window (20, was
+  // 8/10): Postgres returns ARBITRARY rows on an unordered LIMIT, which is why the
+  // same log resolved differently week to week as the table grew.
+  const runStages = async (aiTier) => {
+    const base = () => {
+      let q = supabase.from('foods').select(cols);
+      // NULL-source rows (old imports) count as curated — a plain .neq() would
+      // exclude them from BOTH tiers (SQL null semantics) and make them invisible.
+      return aiTier ? q.eq('source', 'ai_estimate') : q.or('source.neq.ai_estimate,source.is.null');
+    };
+    try {
+      const { data: starts } = await base().ilike('name', `${clean}%`).order('name').limit(20);
+      if (starts && starts.length > 0) { const p = pickBest(starts, clean, quals); if (p) return p; }
+      const { data: startsPlural } = await base().ilike('name', `${clean}s%`).order('name').limit(20);
+      if (startsPlural && startsPlural.length > 0) { const p = pickBest(startsPlural, clean, quals); if (p) return p; }
+      const { data: fts } = await base().textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' }).limit(20);
+      if (fts && fts.length > 0) { const p = pickBest(fts, clean, quals); if (p) return p; }
+      // SUBSTRING GUARD: the %contains% stage is a shotgun — short terms match inside
+      // unrelated words ("cal" -> "Squid (CALamari)", "fat" -> "Buttermilk, low FAT").
+      // Only allow it for terms long enough to be a real food name.
+      if (clean.length >= 5) {
+        const { data: contains } = await base().ilike('name', `%${clean}%`).order('name').limit(20);
+        if (contains && contains.length > 0) { const p = pickBest(contains, clean, quals); if (p) return p; }
+      }
+      return null;
+    } catch (e) { console.log('Food lookup error:', e.message); return null; }
+  };
+  return (await runStages(false)) || (await runStages(true));
 }
 
 async function convertToGrams(amount, unit, foodId) {
@@ -567,6 +679,10 @@ async function writeBackAIFood(macros) {
       // [v100] the conversion key: without this, a later "8 oz" of this cached
       // per-serving food reads as 8 SERVINGS (the 1360-cal ground turkey bug)
       grams_per_serving: Number(macros.grams_per_serving) > 0 ? Math.round(Number(macros.grams_per_serving)) : null,
+      // [v110] lifecycle fields: born alive, so the 90-day sweep can't touch a
+      // fresh row before it's ever been used
+      last_used_at: new Date().toISOString(),
+      use_count: 1,
     }]).select(cols).single();
     if (error) { console.log("write-back failed:", error.message); return null; }
     // [v105] tag the new food's diet compatibility in the same breath — the
@@ -577,6 +693,27 @@ async function writeBackAIFood(macros) {
 }
 
 const WEIGHT_UNIT_GRAMS = { oz: 28.35, ounce: 28.35, g: 1, gram: 1, kg: 1000, lb: 453.6, pound: 453.6, ml: 1 };
+
+// ═══ [v110] LIFECYCLE SWEEP — stale guesses age out; used foods live forever ══
+// Deletes ONLY source='ai_estimate' rows whose last_used_at is older than 90 days.
+// USDA, custom, and label rows are never touched (label = user-declared truth).
+// Safe by design: meal rows snapshot their own macros at save time, so deleting a
+// foods row never changes history. food_tags rows are removed first so the FK
+// can't block the delete. Capped at 50 rows per sweep to stay cheap. Pre-migration
+// rows have last_used_at backfilled to now() by the migration, so nothing is
+// swept before it's had a full 90-day window under the new lifecycle.
+async function sweepStaleAIFoods() {
+  try {
+    const cutoff = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString();
+    const { data: stale } = await supabase.from("foods").select("id, name")
+      .eq("source", "ai_estimate").lt("last_used_at", cutoff).limit(50);
+    if (!stale || stale.length === 0) return;
+    const ids = stale.map(r => r.id);
+    await supabase.from("food_tags").delete().in("food_id", ids);
+    const { error } = await supabase.from("foods").delete().in("id", ids);
+    if (!error) console.log(`[v110] lifecycle sweep: removed ${ids.length} ai_estimate food(s) unused for 90+ days`);
+  } catch (e) { console.log("[v110] lifecycle sweep error:", e?.message || e); }
+}
 
 // ═══ [v93] CARD-CARRIED DATES ═══════════════════════════════════════════════
 // The target date is decided ONCE, here, at log time, from the log message itself —
@@ -611,7 +748,16 @@ function detectLogDateWithHour(text, todayStr, hour) {
 
 // Resolve ONE parsed item to numbers. Order: cooked staple → foods DB → AI + write-back.
 // Every displayed number comes from the code tables or a database row — never AI prose.
-async function resolveOneFood(item) {
+// [v110] opts.writeBack (default true): callers on ADVISORY paths — turns that don't
+// produce a savable card — must pass { writeBack: false } so guesses made for advice
+// never enter the shared foods cache. All current callers (food logs, plan generation,
+// chat suggestions) are savable-card paths; this parameter makes the boundary
+// structural instead of coincidental. Label declarations are exempt by design —
+// they're user-declared truth (Layer 2), not guesses.
+const VOLUME_UNITS = new Set(["cup", "tbsp", "tablespoon", "tsp", "teaspoon", "ml", "milliliter", "millilitre", "liter", "litre"]);
+
+async function resolveOneFood(item, opts = {}) {
+  const allowWriteBack = opts.writeBack !== false;
   // 1) cooked-staple path (code-owned table)
   const staple = matchCookedStaple(item.food);
   if (staple) {
@@ -637,13 +783,23 @@ async function resolveOneFood(item) {
     const macros = await fetchMacrosViaAI(item.food, item.amount, item.unit);
     if (!macros) return null;
     aiGramsPerServing = macros.grams_per_serving || 0;
-    row = await writeBackAIFood(macros);
+    // [v110] Advisory turns get the numbers for THIS reply only — nothing cached.
+    row = allowWriteBack ? await writeBackAIFood(macros) : null;
     if (!row) {
-      // DB write failed — serve the user this once from the same values; nothing cached
+      // DB write failed (or write-back disallowed) — serve the user this once; nothing cached
       row = { name: macros.canonical_name, source: "ai_estimate",
         calories_per_100g: macros.calories, protein_per_100g: macros.protein,
         carbs_per_100g: macros.carbs, fat_per_100g: macros.fat };
     }
+  } else if (row.id) {
+    // [v110] LIFECYCLE STAMP: every resolve marks the row as alive. The 90-day
+    // sweep only ever touches ai_estimate rows this stamp hasn't refreshed —
+    // your daily cottage cheese lives forever; the one-off menu curiosity ages out.
+    try {
+      await supabase.from("foods")
+        .update({ last_used_at: new Date().toISOString(), use_count: (Number(row.use_count) || 0) + 1 })
+        .eq("id", row.id);
+    } catch (e) {}
   }
   const ftype = (row.source || "usda").toLowerCase();
   if (ftype === "ai_estimate" || ftype === "label") {
@@ -653,9 +809,19 @@ async function resolveOneFood(item) {
     // key available) was silently read as 8 servings.
     if (!(aiGramsPerServing > 0)) aiGramsPerServing = Number(row.grams_per_serving) || 0;
     let servings = Number(item.amount) || 1;
-    const gpu = WEIGHT_UNIT_GRAMS[(item.unit || "").toLowerCase().replace(/s$/, "")];
+    const un = (item.unit || "").toLowerCase().replace(/s$/, "");
+    const gpu = WEIGHT_UNIT_GRAMS[un];
+    // [v110] VOLUME UNITS: "a quarter cup" of a serving-based food was silently
+    // read as 0.25 SERVINGS. Convert volume → grams (food-specific conversions,
+    // then unit table, then generic) → servings, same shape as the weight path.
+    let volGrams = 0;
+    if (!gpu && VOLUME_UNITS.has(un) && aiGramsPerServing > 0) {
+      volGrams = await convertToGrams(item.amount, item.unit, row.id || null);
+    }
     if (gpu && aiGramsPerServing > 0) {
       servings = (servings * gpu) / aiGramsPerServing;
+    } else if (volGrams > 0) {
+      servings = volGrams / aiGramsPerServing;
     } else if (gpu && servings > 1) {
       // Weight requested but no conversion key (pre-v100 cached food): assume ONE
       // serving rather than silently multiplying. Self-heals: the food gets its
@@ -667,6 +833,8 @@ async function resolveOneFood(item) {
     // [v101] DISPLAY RULE — the user portions in real units, not abstract servings:
     //   - weight asked + conversion available → show the weight ("6 oz"), servings
     //     stay internal math
+    //   - [v110] volume asked + conversion available → show the volume with its
+    //     gram meaning ("0.25 cup (38 g)") — same principle as the weight rule
     //   - genuinely serving-based → show the count WITH its gram meaning
     //     ("1 serving (170 g)"); a bare unexplained "serving" only remains for
     //     pre-v100 cached foods, which self-heal on their next fresh lookup
@@ -675,6 +843,9 @@ async function resolveOneFood(item) {
     if (gpu && aiGramsPerServing > 0) {
       dispAmount = Number(item.amount) || 1;
       dispUnit = item.unit;
+    } else if (volGrams > 0) {
+      dispAmount = Number(item.amount) || 1;
+      dispUnit = `${item.unit} (${Math.round(volGrams)} g)`;
     } else if (aiGramsPerServing > 0) {
       dispUnit = `serving (${Math.round(servings * aiGramsPerServing)} g)`;
     }
@@ -682,7 +853,7 @@ async function resolveOneFood(item) {
       user_text: `${item.amount} ${item.unit} ${item.food}`,
       canonical_name: row.name, food: row.name,
       amount: dispAmount, unit: dispUnit,
-      grams: aiGramsPerServing > 0 ? Math.round(servings * aiGramsPerServing) : 0,
+      grams: volGrams > 0 ? Math.round(volGrams) : (aiGramsPerServing > 0 ? Math.round(servings * aiGramsPerServing) : 0),
       calories: Math.round((Number(row.calories_per_100g) || 0) * servings),
       protein: Math.round((Number(row.protein_per_100g) || 0) * servings * 10) / 10,
       carbs: Math.round((Number(row.carbs_per_100g) || 0) * servings * 10) / 10,
@@ -2238,6 +2409,9 @@ export async function POST(req) {
       } catch (e) { console.log("Save error:", e); }
 
       console.log(`=== FOOD LOG [v93] | ${cards.length} card(s) | conversational AI: skipped`);
+      // [v110] GC pattern: the lifecycle sweep piggybacks on ~1 in 20 food logs —
+      // no cron, no new infrastructure. Usually a no-op (one cheap indexed SELECT).
+      if (Math.random() < 0.05) { await sweepStaleAIFoods(); }
       return Response.json({ reply: displayText, aiMessageId: logMessageId, mealCards: cards });
     }
 
