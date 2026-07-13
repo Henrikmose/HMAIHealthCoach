@@ -923,6 +923,11 @@ if (row.response) {
     aiMessageId: row.id,
     resolved: row.resolved === true,
     thread_id: row.thread_id || null,
+    // [v108] On reload we can't recover the original intent, but a stored response
+    // WITHOUT structured MEAL_DATA cards was conversational — deny prose parsing so
+    // an old question-with-prose-block doesn't resurrect as a card on refresh.
+    // Responses WITH cards already render via mealCards and skip prose parsing anyway.
+    isPlanningTurn: reloadedCards.length > 0 ? undefined : false,
   });
 }
 }
@@ -1101,6 +1106,13 @@ displayReply = applyCodeOwnedTotals(displayReply, mealCards[0]);
 const assistantMessage = {
 role: "assistant",
 content: displayReply,
+// [v108] Intent travels WITH the turn. The prose meal-block parser
+// (parseAllMeals) may ONLY run on genuine planning turns. A conversational
+// reply — a question, a reaction like "wow that's high", anything not routed
+// to meal_planning — must NEVER be scraped into a savable card regardless of
+// what words the reply contains. Trusts the classification already made instead
+// of re-pattern-matching the reply text.
+isPlanningTurn: context?.type === "meal_planning",
 mealCards: mealCards || null,
 factCards: factCards.length > 0 ? factCards : null,
 factRemovals: factRemovals.length > 0 ? factRemovals : null,
@@ -1784,7 +1796,12 @@ const { meals: confirmMeals, sourceIdx } = (thisIsPostConfirmAI || isPhotoSelect
 
 // PLANNING PATH ONLY: prose meal blocks in AI day plans. A message that carries
 // structured mealCards NEVER uses this path — cards own the save UI.
-const thisMeals = (!isUser && !msg.mealCards) ? parseAllMeals(msg.content) : [];
+// [v108] Prose meal blocks parse ONLY on genuine planning turns. Legacy messages
+// saved before v108 lack the flag (undefined) — those keep old behavior so history
+// still renders; new conversational turns (questions, reactions) are gated out and
+// can never become a savable card from scraped prose.
+const proseParseAllowed = msg.isPlanningTurn === true || (msg.isPlanningTurn === undefined && !msg.mealCards);
+const thisMeals = (!isUser && !msg.mealCards && proseParseAllowed) ? parseAllMeals(msg.content) : [];
 
 const triggerText = !isUser && history[idx - 1]?.role === "user"
 ? history[idx - 1].content : "";
