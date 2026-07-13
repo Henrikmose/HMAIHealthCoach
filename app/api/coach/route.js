@@ -2150,6 +2150,23 @@ export async function POST(req) {
     let dbFoodResults = null;   // kept for the planning path below
     let mealSegments = null;    // legacy var; food_log no longer reaches the AI section
     let lookupMsg = null;
+
+    // ═══ [v109] CODE GATE: A QUESTION NEVER ENTERS THE FOOD-LOG PIPELINE ═════
+    // Defense in depth behind the client fix. If a stale/incorrect client context
+    // routes a question here as a food-log "followup", the resolver below would
+    // happily card the question's food words ("what makes HANDROLLS so high in
+    // CALORIES?" → handroll card). Reroute it to the conversational path, where
+    // threadHistory gives the answer its context and the v106 guards apply.
+    // Initial-stage logs are untouched — only followups can carry a question,
+    // because the client already refuses question-form as a NEW log.
+    if (context?.type === "food_log" && context.conversationStage === "followup"
+        && isQuestionTurn(context.followUpMessage || message)) {
+      console.log("[v109] question turn arrived with food_log context — rerouted to conversational");
+      // context is const-destructured above — mutate the property, don't reassign the binding.
+      context.type = "conversational";
+      delete context.followUpMessage;
+    }
+
     if (context?.type === "food_log") {
       lookupMsg = context.followUpMessage || context.originalMessage || message;
 
@@ -3169,33 +3186,38 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
       }
     }
 
-    // [v106] A question turn can NEVER return a meal card — strip any MEAL_DATA
-    // the model emitted. (food_log and meal_planning paths returned earlier, so
-    // reaching here means this is a conversational turn.)
-    if (isQuestionTurn(message)) {
+    // [v106→v109] A conversational turn can NEVER return a meal card — strip any
+    // MEAL_DATA the model emitted. (food_log and meal_planning paths returned
+    // earlier, so reaching here means photo or pure conversation.)
+    // [v109] Broadened from question-turns-only to all PURE-conversation turns:
+    // comments ("wow handrolls are high in calories") aren't question-form, but the
+    // client's extractMealCards is ungated — one leaked block = a savable card.
+    // Photo replies legitimately carry MEAL_DATA; meal_planning fall-through
+    // (no/malformed SUGGESTION_DATA) keeps its current MEAL_DATA fallback untouched.
+    if (context?.type !== "photo" && context?.type !== "meal_planning") {
       const beforeStrip = reply;
       reply = reply
         .replace(/<<<MEAL_DATA>>>[\s\S]*?<<<END_MEAL_DATA>>>/g, "")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
-      if (beforeStrip !== reply) console.log("[v106] stripped MEAL_DATA from a question turn");
+      if (beforeStrip !== reply) console.log("[v109] stripped MEAL_DATA from a conversational turn");
 
-      // [v106.1] The card the user saw came from the PROSE meal block, not
+      // [v106.1→v109] The card the user saw came from the PROSE meal block, not
       // MEAL_DATA — the client's legacy parseAllMeals card-ifies "- Foods: /
-      // - Calories:" text. If the model answered a question with a meal block,
-      // the reply is useless as an answer anyway: regenerate a real one. One
-      // small Haiku call, only on question turns the model botched.
+      // - Calories:" text. If the model answered a question OR a comment with a
+      // meal block, the reply is useless as an answer anyway: regenerate a real
+      // one. One small Haiku call, only on conversational turns the model botched.
       const looksLikeMealBlock = /-\s*Foods\s*:/i.test(reply) && /-\s*Calories\s*:/i.test(reply);
       if (looksLikeMealBlock) {
-        console.log("[v106.1] question answered with a prose meal block — regenerating a plain answer");
+        console.log("[v106.1] conversational turn answered with a prose meal block — regenerating a plain answer");
         try {
           const lastAi = [...(effectiveHistory || [])].reverse().find(h => h.role === "assistant");
           const ctxSnippet = lastAi?.content ? String(lastAi.content).slice(0, 800) : "";
           const fixResp = await anthropic.messages.create({
             model: "claude-haiku-4-5-20251001", max_tokens: 500,
-            messages: [{ role: "user", content: `The user asked this question: "${message}"
+            messages: [{ role: "user", content: `The user said this to their nutrition coach: "${message}"
 
-${ctxSnippet ? `For context, the previous coach message was:\n${ctxSnippet}\n\n` : ""}Answer the question directly and conversationally in 2-6 sentences of plain text. Do NOT use any meal block format — no "- Foods:", no "- Calories:" lines, no MEAL_DATA, no headers, no offer to log or save anything. Just explain the answer like a knowledgeable coach talking.` }],
+${ctxSnippet ? `For context, the previous coach message was:\n${ctxSnippet}\n\n` : ""}Respond directly and conversationally in 2-6 sentences of plain text — answer the question or engage with the comment. Do NOT use any meal block format — no "- Foods:", no "- Calories:" lines, no MEAL_DATA, no headers, no offer to log or save anything. Just talk like a knowledgeable coach.` }],
           });
           const fixed = (fixResp.content || []).map(c => (c.type === "text" ? c.text : "")).join("").trim();
           if (fixed && !/-\s*Foods\s*:/i.test(fixed)) reply = fixed;

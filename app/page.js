@@ -57,7 +57,14 @@ function isQuestionForm(t) {
   if (/\?\s*$/.test(t)) return true;
   return [
     /^\s*(how\s+(many|much))\b/i,
-    /^\s*(is|are|was|were)\b/i,
+    // [v109] Stems aligned with the server's isQuestionTurn — voice dictation drops
+    // the "?", and the two sides drifting apart is how "What makes handrolls so high
+    // in calories" passed the client as a non-question. Same list on both sides now.
+    /^\s*(how\s+(come|do|does|is|are))\b/i,
+    /^\s*(is|are|was|were|does|do|did)\b/i,
+    /^\s*what('?s|\s+is|\s+are|\s+makes)\b/i,
+    /^\s*(when|where|who)\b/i,
+    /\bexplain\b/i,
     /^\s*should\s+i\b/i,
     /^\s*can\s+i\b/i,
     // [v88] "can/could/would/will YOU..." is a REQUEST to the coach (make me a plan,
@@ -1054,6 +1061,18 @@ context = { type: "meal_planning", request: trimmed };
 
 newActiveMealLog = null;
 setActiveMealLog(null);
+} else if (isQuestionForm(trimmed)) {
+// [v109] QUESTION ESCAPE — a question is NEVER a food-log continuation. Without this,
+// a question typed right after a log fell into the branch below, shipped to the server
+// as context.type="food_log" followup, and the server's food resolver built a card
+// from the question's food words — before any question guard ever ran. Route it
+// conversational instead: inside a Continue thread the server answers with the full
+// threadHistory (so "why are handrolls high in calories" knows about the log above),
+// and the v106/v106.1 guards catch any block reflex. Clearing the flag also closes
+// the weak-description loop — a question is an exit from "roughly how much?", not an answer to it.
+newActiveMealLog = null;
+setActiveMealLog(null);
+context = {};
 } else if (activeMealLog) {
 newActiveMealLog = {
 ...activeMealLog,
@@ -1101,6 +1120,17 @@ displayReply = cleanForDisplay(reply);
 if (mealCards && mealCards.length === 1) {
 displayReply = applyCodeOwnedTotals(displayReply, mealCards[0]);
 }
+}
+
+// [v109] ROOT CAUSE FIX — the log turn is COMPLETE the moment cards come back.
+// The card on screen (with its 4 buttons) holds the pending state now, not this flag.
+// Pre-v80 this flag was cleared by the auto-save block; the v80 card refactor removed
+// auto-save and the clear went with it, so the flag survived forever and swallowed the
+// NEXT message as a food-log continuation. The flag now stays set ONLY when the server
+// replied without cards — the "roughly how much?" clarifying loop, which is the one
+// case where the next message genuinely continues the log.
+if (context?.type === "food_log" && mealCards && mealCards.length > 0) {
+setActiveMealLog(null);
 }
 
 const assistantMessage = {
