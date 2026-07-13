@@ -2040,7 +2040,13 @@ export async function POST(req) {
     const { message, context, history = [], userId, localHour, localMinutes, localDate: clientDate, images, thread_id = null } = body;
     const image = images?.[0] || null; // backward compat for single image checks
 
-    const activeUserId = userId || "de52999b-7269-43bd-b205-c42dc381df5d";
+    // [v107] AUTH STEP 1 — the hardcoded fallback is DEAD. It meant any request
+    // without a userId silently became Henrik: anonymous visitors writing into
+    // his meals, his facts, his plans. No identity = no service, full stop.
+    if (!userId) {
+      return Response.json({ success: false, error: "Not signed in — please sign in and try again." }, { status: 401 });
+    }
+    const activeUserId = userId;
 
     // ═══ [v98] PLAN TAB GENERATION MODE ═══
     // Not a chat turn: no message, no history, nothing saved to ai_messages.
