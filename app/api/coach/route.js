@@ -3173,6 +3173,30 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
         .replace(/\n{3,}/g, "\n\n")
         .trim();
       if (beforeStrip !== reply) console.log("[v106] stripped MEAL_DATA from a question turn");
+
+      // [v106.1] The card the user saw came from the PROSE meal block, not
+      // MEAL_DATA — the client's legacy parseAllMeals card-ifies "- Foods: /
+      // - Calories:" text. If the model answered a question with a meal block,
+      // the reply is useless as an answer anyway: regenerate a real one. One
+      // small Haiku call, only on question turns the model botched.
+      const looksLikeMealBlock = /-\s*Foods\s*:/i.test(reply) && /-\s*Calories\s*:/i.test(reply);
+      if (looksLikeMealBlock) {
+        console.log("[v106.1] question answered with a prose meal block — regenerating a plain answer");
+        try {
+          const lastAi = [...(effectiveHistory || [])].reverse().find(h => h.role === "assistant");
+          const ctxSnippet = lastAi?.content ? String(lastAi.content).slice(0, 800) : "";
+          const fixResp = await anthropic.messages.create({
+            model: "claude-haiku-4-5-20251001", max_tokens: 500,
+            messages: [{ role: "user", content: `The user asked this question: "${message}"
+
+${ctxSnippet ? `For context, the previous coach message was:\n${ctxSnippet}\n\n` : ""}Answer the question directly and conversationally in 2-6 sentences of plain text. Do NOT use any meal block format — no "- Foods:", no "- Calories:" lines, no MEAL_DATA, no headers, no offer to log or save anything. Just explain the answer like a knowledgeable coach talking.` }],
+          });
+          const fixed = (fixResp.content || []).map(c => (c.type === "text" ? c.text : "")).join("").trim();
+          if (fixed && !/-\s*Foods\s*:/i.test(fixed)) reply = fixed;
+        } catch (e) {
+          console.log("[v106.1] regeneration failed, keeping stripped reply:", e?.message || e);
+        }
+      }
     }
 
     let aiMessageId = null;
