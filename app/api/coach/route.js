@@ -256,7 +256,7 @@ const COOKED_STAPLES = [
   { key:'oats',         match:['oats','oatmeal','porridge'], label:'Oatmeal (cooked)', per100:{calories:71,protein:2.5,carbs:12,fat:1.5}, gramsPerCup:234 },
   { key:'quinoa',       match:['quinoa'],          label:'Quinoa (cooked)',       per100:{calories:120,protein:4.4,carbs:21,fat:1.9}, gramsPerCup:185 },
   { key:'potato',       match:['potato','potatoes'], label:'Potato (cooked)',     per100:{calories:87,protein:1.9,carbs:20,fat:0.1}, gramsPerCup:156, gramsEach:170 },
-  { key:'sweet potato', match:['sweet potato'],    label:'Sweet potato (cooked)', per100:{calories:90,protein:2,carbs:21,fat:0.1}, gramsPerCup:200, gramsEach:130 },
+  { key:'sweet potato', match:['sweet potato','sweet potatoes'],    label:'Sweet potato (cooked)', per100:{calories:90,protein:2,carbs:21,fat:0.1}, gramsPerCup:200, gramsEach:130 },
   { key:'ground beef',  match:['ground beef','beef mince','hamburger'], label:'Ground beef (cooked)', per100:{calories:250,protein:26,carbs:0,fat:15}, gramsPerOz:28.35 },
   { key:'salmon',       match:['salmon'],          label:'Salmon (cooked)',       per100:{calories:206,protein:22,carbs:0,fat:12}, gramsPerOz:28.35 },
   { key:'lentils',      match:['lentils'],         label:'Lentils (cooked)',      per100:{calories:116,protein:9,carbs:20,fat:0.4}, gramsPerCup:198 },
@@ -2405,6 +2405,16 @@ export async function POST(req) {
       }
       if (labelSaves.length > 0) {
         displayText += `\n\n📋 Saved the label for ${labelSaves.join(", ")} — next time just say the name and I'll use these exact numbers.`;
+      }
+
+      // [DAY SUMMARY] Code-owned recap after every food log — NO AI (pure math, same
+      // values the dashboard uses). Shows where the day stands from SAVED data: eaten +
+      // planned vs goal, and what's left. NOTE: reflects committed state — the card above
+      // isn't counted here until the user taps Add to Eaten (save-gate). Qualitative
+      // "good/bad meal" coaching is deliberately NOT here (that needs an AI call — later).
+      if (goal.calories > 0) {
+        const dayPct = Math.round((committed.calories / goal.calories) * 100);
+        displayText += `\n\n📊 Today: ${Math.round(committed.calories)}/${goal.calories} cal (${dayPct}%) — ${Math.round(totals.calories)} eaten · ${Math.round(plannedTotals.calories)} planned · ${Math.round(remaining.calories)} left`;
       }
 
       // Option A persistence: the STORED response is the code-generated text plus one
