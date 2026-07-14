@@ -3096,7 +3096,7 @@ BLOCK RULES:
 - NO calories/protein/carbs/fat fields — the app ignores them and computes its own.
 - Do NOT restate the foods or amounts in prose — the card renders them.
 
-3. Size portions sensibly toward the REMAINING budget in the day-state numbers above. The app verifies the math — real, simple portions beat clever ones. Don't chase exactness.
+3. Fill the day properly. Include enough meals AND size portions so the plan reaches about 85-90% of the REMAINING budget in the day-state numbers above — and NEVER lands below 80%. Do not skip a main meal (breakfast/lunch/dinner) and leave the day short: if a main slot is open, fill it, and add a snack if you're still under. The app verifies the math — real, simple portions beat clever ones, so don't chase an exact number, but DO reach the target. If you are deliberately keeping the day a little lighter (e.g. leaving room after a game or a big meal out), that's fine — but your strategy lines at the top should say WHY, so it reads as intentional, not short.
 
 4. End with 2-3 short rules specific to the day. Be decisive — present ONE plan, never "Option A/Option B." Do NOT ask the user to reply "yes" or confirm in chat; the buttons on each card handle saving (eaten vs planned).
 
@@ -3345,7 +3345,13 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
             }
             return a;
           }, { calories: 0, protein: 0, carbs: 0, fat: 0 });
-          displayText += `\n\n📊 Total planned: ${Math.round(t.calories)}/${goal.calories} cal | ${Math.round(t.protein)}g protein | ${Math.round(t.carbs)}g carbs | ${Math.round(t.fat)}g fat`;
+          // [PLAN-%] Code owns this math (plan total ÷ daily goal — same as the dashboard).
+          // The AI is forbidden from writing numbers on this turn; the % is added here.
+          const pct = goal.calories > 0 ? Math.round((t.calories / goal.calories) * 100) : 0;
+          displayText += `\n\n📊 Total planned: ${Math.round(t.calories)}/${goal.calories} cal (${pct}% of your target) | ${Math.round(t.protein)}g protein | ${Math.round(t.carbs)}g carbs | ${Math.round(t.fat)}g fat`;
+          if (pct > 0 && pct < 85) {
+            displayText += `\n\nThat's about ${pct}% of your ${goal.calories}-cal target — a bit light. If that's intentional (leaving room for a post-game snack or a meal out), you're set; otherwise just say "fill it out" and I'll bump the portions.`;
+          }
         }
         if (allUnresolved.length > 0) {
           displayText += `\n\n(I couldn't price: ${allUnresolved.join(", ")} — the numbers above don't include ${allUnresolved.length > 1 ? "them" : "it"}.)`;
