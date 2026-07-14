@@ -3011,6 +3011,18 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
     }
 
     if (context?.type === "meal_planning") {
+      // [OVER-TARGET GATE] Enforce the 5% buffer in CODE. The "105% is fine" line in the
+      // prompt was only advisory, so the AI would still pile on food when the day was
+      // already over. committed = today's eaten + planned. If the user is planning TODAY
+      // and today is already past 105% of target, there is nothing to add — tell them and
+      // point them to clear planned meals rather than pushing further over. Planning
+      // tomorrow (an empty day) is unaffected, since committed reflects today only.
+      const planningTomorrow = events.some(e => e.isTomorrow) || /\btomorrow\b/i.test(message || "");
+      if (!planningTomorrow && goal.calories > 0 && committed.calories > goal.calories * 1.05) {
+        const pctOfTarget = Math.round((committed.calories / goal.calories) * 100);
+        const overMsg = `You're already fully planned for today — your eaten and planned meals add up to ${Math.round(committed.calories)} cal, which is over your ${goal.calories} cal target (${pctOfTarget}%). There's nothing for me to add without pushing you further over. If you'd like me to plan a fresh day, remove today's planned meals from the Dashboard first, then ask me again.`;
+        return Response.json({ reply: overMsg });
+      }
       // [v93] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
       // the UI: the parser deduplicates per meal type, so option 2's button silently
       // vanished and the user couldn't pick it. One suggestion, one set of buttons;
