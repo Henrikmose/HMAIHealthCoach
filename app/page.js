@@ -138,6 +138,23 @@ function isLogMessage(text, inThread = false) {
   return statesAFood(text, inThread);
 }
 
+// [PLAN-ROUTE FIX] Explicit day / rest-of-day / fueling plan requests must beat the
+// food-log grab. These are unambiguous planning phrasings a real food log never
+// contains, so they route to meal_planning even when the sentence ALSO trips the
+// food detector — e.g. "...I have a hockey game... plan my day" where "I have" is
+// wrongly read as an eating phrase. Narrow on purpose: food logs ("I had 2 eggs",
+// "3 oz chicken") match none of these, so logging is completely unaffected.
+function isExplicitDayPlan(text) {
+if (!text) return false;
+return [
+/\bplan\s+my\b/i,                                                   // plan my day / week / meals / eating
+/\bplan\s+(me\s+)?(a\s+|the\s+)?(full\s+|whole\s+|entire\s+)?day\b/i,// plan a full day / plan me a day
+/\bplan\b.*\b(today|tonight|tomorrow|day\s+after)\b/i,              // plan (for) today / tomorrow / the day after
+/rest\s+of\s+(the\s+day|my\s+day|today)/i,                          // suggestions for the rest of the day/today
+/fuel(ed)?\b.{0,25}(all\s+day|the\s+day|through(out)?\s+the\s+day)/i,// fuel me all day
+].some((re) => re.test(text));
+}
+
 function isMealPlanningRequest(text) {
 if (!text) return false;
 return [
@@ -1012,6 +1029,17 @@ if (imagesToSend.length === 0 && recentAiMsgs[0]?.goalCards?.length > 0 && /\b[1
 newActiveMealLog = null;
 setActiveMealLog(null);
 context = { type: "goal_followup" };
+} else if (isExplicitDayPlan(trimmed) && imagesToSend.length === 0) {
+// [PLAN-ROUTE FIX] Explicit "plan my day / rest of the day / fuel me all day" requests
+// route to the planning path BEFORE the food-log grab below. The server's meal_planning
+// mode builds the structured day (one SUGGESTION_DATA block per meal) that renders as
+// cards with plan/cancel/delete buttons — the behavior that worked before the food-log
+// detector started swallowing these. Checked ahead of the logger so a sentence that also
+// contains an eating phrase ("...I have a hockey game...") can't be misrouted. Nothing
+// else in the chain changes; genuine food logs still fall through to the logger.
+newActiveMealLog = null;
+setActiveMealLog(null);
+context = { type: "meal_planning", request: trimmed };
 } else if (isLogMessage(trimmed, !!activeThreadId) && imagesToSend.length === 0) {
 // [v80] ONE ENGINE: every food log goes to the server pipeline. The old client-side
 // lookup-foods shortcut is gone — it duplicated the resolver AND merged whole-day
