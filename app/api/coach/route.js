@@ -265,7 +265,13 @@ const COOKED_STAPLES = [
 ];
 
 // Generic portion grams when not a staple and DB/units can't resolve it.
-const GENERIC_GRAMS = { cup:150, tbsp:15, tsp:5, slice:30, piece:50, scoop:30, serving:100, oz:28.35, ounce:28.35, g:1, gram:1, kg:1000, lb:453.6, pound:453.6, ml:1, medium:120, small:90, large:150 };
+// [UNIT-VOCAB FIX] The parser's `units` regex accepts "tablespoon"/"teaspoon" (voice
+// dictation always says the full word, never "tbsp"), but this table only carried the
+// abbreviations. An unmatched key falls through to `serving` = 100g in convertToGrams,
+// so "1 tablespoon of peanut butter" was priced as 100g -> 632 cal instead of 95.
+// RULE: every unit the parser can emit must have a key here, singularised (callers strip
+// a trailing "s"). tablespoon/teaspoon were the only two missing.
+const GENERIC_GRAMS = { cup:150, tbsp:15, tablespoon:15, tsp:5, teaspoon:5, slice:30, piece:50, scoop:30, serving:100, oz:28.35, ounce:28.35, g:1, gram:1, kg:1000, lb:453.6, pound:453.6, ml:1, medium:120, small:90, large:150 };
 
 function matchCookedStaple(term) {
   const t = (term || '').toLowerCase().trim();
