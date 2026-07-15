@@ -3488,7 +3488,7 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
           const pct = goal.calories > 0 ? Math.round((t.calories / goal.calories) * 100) : 0;
           displayText += `\n\n📊 Total planned: ${Math.round(t.calories)}/${goal.calories} cal (${pct}% of your target) | ${Math.round(t.protein)}g protein | ${Math.round(t.carbs)}g carbs | ${Math.round(t.fat)}g fat`;
           if (pct > 0 && pct < 85) {
-            displayText += `\n\nThat's about ${pct}% of your ${goal.calories}-cal target — a bit light. If that's intentional (leaving room for a post-game snack or a meal out), you're set; otherwise just say "fill it out" and I'll bump the portions.`;
+            displayText += `\n\nThat's about ${pct}% of your ${goal.calories}-cal target — a bit light. If that's intentional (leaving room for a snack or a meal out later), you're set; otherwise just say "fill it out" and I'll bump the portions.`;
           }
         }
         if (allUnresolved.length > 0) {
