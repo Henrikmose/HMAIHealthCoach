@@ -415,12 +415,25 @@ async function lookupFood(foodName) {
 
 async function convertToGrams(amount, unit, foodId) {
   const unitLower = (unit||'serving').toLowerCase().replace(/s$/, '');
+  // Priority: hand override -> USDA's real per-food portion -> weight units -> generic guess.
   if (foodId) {
     const { data } = await supabase.from('food_specific_conversions').select('grams_per_unit').eq('food_id', foodId).ilike('unit_name', `%${unitLower}%`).limit(1);
     if (data?.[0]) return amount * data[0].grams_per_unit;
   }
-  const { data } = await supabase.from('unit_conversions').select('grams_per_unit, ml_per_unit').eq('unit_name', unitLower).limit(1);
-  if (data?.[0]) { if (data[0].grams_per_unit) return amount * data[0].grams_per_unit; if (data[0].ml_per_unit) return amount * data[0].ml_per_unit; }
+  // [PORTIONS] USDA's actual grams for THIS food in THIS unit (view joins foods.fdc_id
+  // -> sr_portion_norm). A cup of broccoli is 156g, a cup of rice is 158g — one number
+  // cannot serve both, which is exactly what the generic table was doing.
+  if (foodId) {
+    const { data } = await supabase.from('food_portion_lookup').select('grams_per_unit').eq('food_id', foodId).eq('unit', unitLower).limit(1);
+    if (data?.[0]?.grams_per_unit) return amount * data[0].grams_per_unit;
+  }
+  // WEIGHT units only (oz, lb). The ml_per_unit branch was REMOVED: it returned
+  // millilitres AS grams, so every cup of anything weighed 240g — the density of
+  // water. Broccoli read 54% high, and only COOKED_STAPLES' hardcoded gramsPerCup
+  // hid it. Volume->grams needs density we don't have; fall to the generic guess
+  // instead of silently pretending every food is water.
+  const { data } = await supabase.from('unit_conversions').select('grams_per_unit').eq('unit_name', unitLower).not('grams_per_unit', 'is', null).limit(1);
+  if (data?.[0]?.grams_per_unit) return amount * data[0].grams_per_unit;
   // generic fallback so we never drop a food
   return amount * (GENERIC_GRAMS[unitLower] || GENERIC_GRAMS.serving);
 }
