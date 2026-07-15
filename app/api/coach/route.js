@@ -350,7 +350,13 @@ async function lookupFood(foodName) {
   // same log resolved differently week to week as the table grew.
   const runStages = async (aiTier) => {
     const base = () => {
-      let q = supabase.from('foods').select(cols);
+      // [DATASET SWITCH] active=true is the ONLY gate on which dataset is live.
+      // Retiring Foundation / activating SR Legacy is then a SQL update, not a deploy:
+      //   update foods set active=false where dataset='foundation';
+      //   update foods set active=true  where dataset='sr_legacy';
+      // Every candidate stage below routes through base(), so this one filter covers
+      // all of them (starts / plural / fts / contains) in BOTH tiers.
+      let q = supabase.from('foods').select(cols).eq('active', true);
       // NULL-source rows (old imports) count as curated — a plain .neq() would
       // exclude them from BOTH tiers (SQL null semantics) and make them invisible.
       return aiTier ? q.eq('source', 'ai_estimate') : q.or('source.neq.ai_estimate,source.is.null');
