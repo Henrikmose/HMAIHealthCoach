@@ -2410,11 +2410,48 @@ export async function POST(req) {
       // [DAY SUMMARY] Code-owned recap after every food log — NO AI (pure math, same
       // values the dashboard uses). Shows where the day stands from SAVED data: eaten +
       // planned vs goal, and what's left. NOTE: reflects committed state — the card above
-      // isn't counted here until the user taps Add to Eaten (save-gate). Qualitative
-      // "good/bad meal" coaching is deliberately NOT here (that needs an AI call — later).
+      // isn't counted here until the user taps Add to Eaten (save-gate).
       if (goal.calories > 0) {
         const dayPct = Math.round((committed.calories / goal.calories) * 100);
         displayText += `\n\n📊 Today: ${Math.round(committed.calories)}/${goal.calories} cal (${dayPct}%) — ${Math.round(totals.calories)} eaten · ${Math.round(plannedTotals.calories)} planned · ${Math.round(remaining.calories)} left`;
+      }
+
+      // [LOG COACH] The qualitative half — the reaction people actually value — plus an
+      // answer to any question riding along with the log ("I ate tuna... is it OK to go
+      // over on protein?"). One cheap Haiku call. CODE still owns every number: the card
+      // and the 📊 line above are code-rendered and this prompt forbids numbers outright,
+      // so the "AI totals are always wrong" law holds. Additive and NON-BLOCKING — if the
+      // call fails, the log still returns perfectly.
+      try {
+        const loggedFoods = cards.flatMap(c => (c.items || []).map(i => i.food)).filter(Boolean).join(", ");
+        const coachPrompt = `You are ${userName}'s nutrition coach. They just logged food. Write 1-2 short sentences of real coaching.
+
+THEIR MESSAGE: "${message || ""}"
+JUST LOGGED (not yet saved): ${loggedFoods || "a meal"}
+
+DAY CONTEXT (the app ALREADY shows these numbers to them — never repeat them):
+- eaten so far: ${Math.round(totals.calories)} cal, ${Math.round(totals.protein)}g protein
+- also planned today: ${Math.round(plannedTotals.calories)} cal
+- remaining: ${Math.round(remaining.calories)} cal, ${Math.round(remaining.protein)}g protein (target ${goal.calories} cal / ${goal.protein}g protein)
+- their goal: ${goalType}; activity: ${activityLevel}${healthConditions ? `; health: ${healthConditions}` : ""}
+- local hour: ${hour}
+
+HARD RULES:
+1. NEVER write a number of any kind — no calories, grams, or percentages. The app displays every number already. Speak qualitatively ("solid protein hit", "you're light on carbs for tonight").
+2. NEVER say or imply you saved, logged, or added anything. They save it themselves by tapping a button.
+3. This food is THEIR CHOICE and they already ate it. Never lecture, guilt, warn, or push back on it — not even if they're over target. Going over is their decision, never yours to police. Be useful, not preachy.
+4. If their message asks a question, ANSWER IT directly and honestly first — that's the priority.
+5. 1-2 sentences. Warm and specific. No fluff, no emoji, no bullet points.`;
+
+        const coachResp = await anthropic.messages.create({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 200,
+          messages: [{ role: "user", content: coachPrompt }],
+        });
+        const note = (coachResp.content || []).map(c => (c.type === "text" ? c.text : "")).join("").trim();
+        if (note) displayText += `\n\n${note}`;
+      } catch (e) {
+        console.log("[log coach] skipped (non-fatal):", e?.message || e);
       }
 
       // Option A persistence: the STORED response is the code-generated text plus one
@@ -2430,7 +2467,7 @@ export async function POST(req) {
         logMessageId = inserted?.id || null;
       } catch (e) { console.log("Save error:", e); }
 
-      console.log(`=== FOOD LOG [v93] | ${cards.length} card(s) | conversational AI: skipped`);
+      console.log(`=== FOOD LOG [v93] | ${cards.length} card(s) | conversational AI: skipped | coach note: 1 Haiku call`);
       // [v110] GC pattern: the lifecycle sweep piggybacks on ~1 in 20 food logs —
       // no cron, no new infrastructure. Usually a no-op (one cheap indexed SELECT).
       if (Math.random() < 0.05) { await sweepStaleAIFoods(); }
