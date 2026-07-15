@@ -1271,6 +1271,36 @@ function stapleDietTags(stapleKey) {
   return [...base, "gluten_free", "fish_free"];   // chicken breast, ground beef — no halal/kosher claim for generic meat
 }
 
+// [DIET TEMPLATE] Build the user's hard dietary rules as a prompt block — PREVENTION.
+// The AI is told the constraints UP FRONT so it never proposes a violating food, instead
+// of proposing freely and having the code gate strip meals afterwards (which leaves empty
+// slots: "I removed a suggested breakfast — Eggs is not verified vegan"). The gate stays,
+// but as a safety net that should rarely fire. Extracted from the Plan-tab generator so
+// the chat planning path can use the identical, proven block.
+// Hard rules only (allergies / diet style / intolerances / exclusions). Soft preferences
+// (loves, dislikes, health conditions) are a separate concern — not handled here.
+async function buildDietHardRules(userId) {
+  try {
+    const { data: dpRow } = await supabase.from("user_dietary_preferences")
+      .select("dietary_style, allergens, intolerances, restrictions")
+      .eq("user_id", userId).eq("is_active", true).limit(1);
+    const d = dpRow?.[0];
+    if (!d) return "";
+    const arr = (a) => (Array.isArray(a) && a.length ? a.join(", ") : null);
+    const parts = [];
+    if (arr(d.allergens))     parts.push(`ALLERGIES (safety-critical): ${arr(d.allergens)}`);
+    if (arr(d.dietary_style)) parts.push(`Dietary style: ${arr(d.dietary_style)}`);
+    if (arr(d.intolerances))  parts.push(`Intolerances: ${arr(d.intolerances)}`);
+    if (arr(d.restrictions))  parts.push(`Excluded foods: ${arr(d.restrictions)}`);
+    if (!parts.length) return "";
+    return `ABSOLUTE CONSTRAINT #1 — READ BEFORE ANYTHING ELSE:
+${parts.join("\n")}
+EVERY item in EVERY meal must comply. A single violating item makes the entire response wrong. If unsure whether a food complies, choose a different food.
+
+`;
+  } catch { return ""; }
+}
+
 async function getDietRules(userId) {
   try {
     const { data } = await supabase.from("user_dietary_preferences")
@@ -1548,28 +1578,8 @@ async function handlePlanGeneration(activeUserId, planDate, mode = "variety") {
     // Position matters to small models — mid-prompt rules provably leaked
     // (vegan user got turkey). This raises compliance; CODE enforcement via
     // food_tags is the real fix and comes next.
-    let hardRules = "";
-    try {
-      const { data: dpRow } = await supabase.from("user_dietary_preferences")
-        .select("dietary_style, allergens, intolerances, restrictions")
-        .eq("user_id", activeUserId).eq("is_active", true).limit(1);
-      const d = dpRow?.[0];
-      const arr = (a) => (Array.isArray(a) && a.length ? a.join(", ") : null);
-      if (d) {
-        const parts = [];
-        if (arr(d.allergens)) parts.push(`ALLERGIES (safety-critical): ${arr(d.allergens)}`);
-        if (arr(d.dietary_style)) parts.push(`Dietary style: ${arr(d.dietary_style)}`);
-        if (arr(d.intolerances)) parts.push(`Intolerances: ${arr(d.intolerances)}`);
-        if (arr(d.restrictions)) parts.push(`Excluded foods: ${arr(d.restrictions)}`);
-        if (parts.length > 0) {
-          hardRules = `ABSOLUTE CONSTRAINT #1 — READ BEFORE ANYTHING ELSE:
-${parts.join("\n")}
-EVERY item in EVERY meal must comply. A single violating item makes the entire response wrong. If unsure whether a food complies, choose a different food.
-
-`;
-        }
-      }
-    } catch {}
+    // [DIET TEMPLATE] shared with the chat planning path — see buildDietHardRules().
+    const hardRules = await buildDietHardRules(activeUserId);
 
     const genPrompt = `${hardRules}You are CURA's meal plan generator. Build meal suggestions for ${planDate}.
 
@@ -3126,6 +3136,18 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
         const pctOfTarget = Math.round((committed.calories / goal.calories) * 100);
         const overMsg = `You're already fully planned for today — your eaten and planned meals add up to ${Math.round(committed.calories)} cal, which is over your ${goal.calories} cal target (${pctOfTarget}%). There's nothing for me to add without pushing you further over. If you'd like me to plan a fresh day, remove today's planned meals from the Dashboard first, then ask me again.`;
         return Response.json({ reply: overMsg });
+      }
+      // [DIET TEMPLATE] PREVENTION. Tell the AI the user's hard dietary rules BEFORE it
+      // proposes anything, using the identical block the Plan-tab generator already uses.
+      // Previously the chat path sent NO dietary rules at all — the AI proposed freely and
+      // the code gate stripped violating meals afterwards, leaving holes ("I removed a
+      // suggested breakfast — Eggs is not verified vegan. Ask me for a different option.").
+      // Prepended so it is the first thing the model reads ("READ BEFORE ANYTHING ELSE").
+      // The gate below still runs — it is now a safety net, not the front line.
+      const chatHardRules = await buildDietHardRules(activeUserId);
+      if (chatHardRules) {
+        systemMessage = chatHardRules + systemMessage;
+        systemMessage += `\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the very top. Verify EVERY food in EVERY meal complies. Replace any item that does not — do not omit the meal, substitute a compliant food.\n`;
       }
       // [v93] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
       // the UI: the parser deduplicates per meal type, so option 2's button silently
