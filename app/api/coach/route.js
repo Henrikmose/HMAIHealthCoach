@@ -332,6 +332,38 @@ async function lookupFood(foodName) {
     .replace(/\s+/g, " ")
     .trim();
   if (clean.length < 3) return null;
+  // ═══ [ALIAS] EXACT-MATCH PIN — checked BEFORE any scoring ════════════════════
+  // Scoring penalises qualifiers the user didn't ask for, which means USDA's most
+  // carefully-named row loses to a sloppier one: "broccoli" ranked "Broccoli raab,
+  // cooked" (2 qualifiers) above "Broccoli, cooked, boiled, drained, without salt"
+  // (5). Bare terms give too little signal to rank — so we pin them instead.
+  // Compound terms ("rice noodles", "cherry tomatoes") rank fine and are NOT pinned;
+  // an alias only fires on an EXACT term match, so they fall through to scoring.
+  // This is COOKED_STAPLES as data: add a row, no deploy.
+  try {
+    const cands = [...new Set([
+      clean,
+      clean.replace(/ies$/, "y"),   // berries -> berry
+      clean.replace(/es$/, ""),     // potatoes -> potato
+      clean.replace(/s$/, ""),      // eggs -> egg
+    ])].filter(t => t.length >= 3);
+    const { data: aliasHit } = await supabase
+      .from("food_alias").select("term, food_id").in("term", cands).limit(4);
+    if (aliasHit && aliasHit.length > 0) {
+      // Longest matching term wins ("sweet potato" beats a hypothetical "potato").
+      const best = aliasHit.sort((a, b) => b.term.length - a.term.length)[0];
+      const { data: pinned } = await supabase
+        .from("foods").select(cols).eq("id", best.food_id).eq("active", true).limit(1);
+      if (pinned && pinned[0]) {
+        console.log(`[alias] "${clean}" -> ${best.term} -> ${pinned[0].name}`);
+        return pinned[0];
+      }
+      // Pinned row inactive/deleted: fall through to scoring rather than fail the log.
+      console.log(`[alias] "${best.term}" -> food_id ${best.food_id} not active — falling through`);
+    }
+  } catch (e) {
+    console.log("[alias] lookup skipped (non-fatal):", e?.message || e);
+  }
   // COMPOSED DISH GUARD: "tacos with eggs, potato, tortilla", "burrito with rice beans chicken", etc.
   // A multi-ingredient dish must NOT fuzzy-match a single ingredient (e.g. logging just "potato").
   // Send it to the AI to estimate the whole dish as one item. Heuristic: contains "with", or is a
