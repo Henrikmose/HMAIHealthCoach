@@ -234,6 +234,22 @@ return [
 
 function isConfirmation(text) {
 if (!text) return false;
+// [CONFIRM-GUARD] A confirmation is a SHORT agreement ("yes", "do it", "add it to my plan").
+// The list below contains phrases that also appear INSIDE ordinary sentences and questions
+// — "go over", "correct", "right", "looks good", "great". Without these guards, a real
+// message like "I ate tuna... Is it OK for me to go over on protein?" matched on "go over",
+// hit the canned save-nudge, and RETURNED on the client — it never reached the server, so
+// the food was never logged and the question was never answered.
+// "can we do that" is the one legitimate question-form confirmation in the list → exempt.
+const t = String(text).trim();
+if (!/can we do that/i.test(t)) {
+  if (/\?/.test(t)) return false;                                    // explicit question
+  // Voice dictation usually drops the "?" — catch question-form openers too.
+  // NOTE: bare "do" is deliberately NOT an opener — "do it" / "do that one" are real
+  // confirmations. Question-form "Do I...?" is still caught by the "?" guard above.
+  if (/^(is|are|am|was|were|can|could|should|would|does|did|how|what|why|when|where|which|will|has|have)\b/i.test(t)) return false;
+  if (t.split(/\s+/).filter(Boolean).length > 8) return false;       // a confirmation is never a sentence
+}
 return /\b(yes|yeah|yep|yup|yew|yea|ya|ye|sure|perfect|great|sounds good|i like that|let'?s do|that one|i'?ll have|add it|can we do that|looks good|works for me|do that one|i want that|i'?ll take|love it|that works|go with that|do it|let'?s go with|as planned|as actual|for later|plan it|log it|save it|add (it |this )?(to my )?(plan|log)|confirm|correct|right|exactly|absolutely|i'?ll go|i will go|go over|i'?ll take that|i choose|going with|i'?ll have that|that one|the (protein|shake|fitzels|first|second|last|other) one)\b/i.test(text);
 }
 
