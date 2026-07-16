@@ -1288,10 +1288,23 @@ async function buildDietHardRules(userId) {
     if (!d) return "";
     const arr = (a) => (Array.isArray(a) && a.length ? a.join(", ") : null);
     const parts = [];
-    if (arr(d.allergens))     parts.push(`ALLERGIES (safety-critical): ${arr(d.allergens)}`);
-    if (arr(d.dietary_style)) parts.push(`Dietary style: ${arr(d.dietary_style)}`);
-    if (arr(d.intolerances))  parts.push(`Intolerances: ${arr(d.intolerances)}`);
-    if (arr(d.restrictions))  parts.push(`Excluded foods: ${arr(d.restrictions)}`);
+    // [CRITICAL] Only styles the gate ENFORCES belong in an ABSOLUTE CONSTRAINT.
+    // dietary_style mixes hard rules with free-text coaching: ["whole foods, 80/20
+    // flexible", "vegan"]. Dumping the raw array produced
+    //   "Dietary style: whole foods, 80/20 flexible, vegan"
+    // — which tells the model to be vegan AND "80/20 flexible" in the same breath. It
+    // resolved the contradiction by treating vegan as a preference and proposing eggs,
+    // chicken and turkey; the gate then stripped them, leaving holes. (The first element
+    // also contains a comma, so the join reads as three items with "vegan" trailing a
+    // list headed by "flexible".) getDietRules() already filters exactly this way —
+    // unmatched styles are coaching, not exclusion. Match it.
+    const styleKeys = Object.keys(STYLE_TAG_MAP);
+    const hardStyles = (Array.isArray(d.dietary_style) ? d.dietary_style : [])
+      .filter(v => styleKeys.some(k => String(v).toLowerCase().trim().includes(k)));
+    if (arr(d.allergens))    parts.push(`ALLERGIES (safety-critical): ${arr(d.allergens)}`);
+    if (hardStyles.length)   parts.push(`Dietary style: ${hardStyles.join(", ")}`);
+    if (arr(d.intolerances)) parts.push(`Intolerances: ${arr(d.intolerances)}`);
+    if (arr(d.restrictions)) parts.push(`Excluded foods: ${arr(d.restrictions)}`);
     if (!parts.length) return "";
     return `ABSOLUTE CONSTRAINT #1 — READ BEFORE ANYTHING ELSE:
 ${parts.join("\n")}
