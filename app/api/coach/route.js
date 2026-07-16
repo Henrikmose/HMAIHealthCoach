@@ -77,7 +77,12 @@ function parseFoodItems(text) {
     .replace(/\bfive\s+/g," 5 ").replace(/\bsix\s+/g," 6 ").replace(/\bseven\s+/g," 7 ")
     .replace(/\beight\s+/g," 8 ").replace(/\bnine\s+/g," 9 ").replace(/\bten\s+/g," 10 ")
     .replace(/\bsome\s+/g," 1 ").replace(/\bwhole\s+/g," 1 ");
-  s = s.replace(/\b(and|with|plus|also|of)\b/g, " ");
+  // [v111 B'] SEPARATORS ARE ITEM BOUNDARIES. Deleting "and/with" glued foods
+  // together ("mushrooms, eggs" -> "mushrooms eggs"). Commas, "and", "with",
+  // "plus", "also", "&" now split items BEFORE any food/amount pairing.
+  // "of" stays deleted — it lives INSIDE an item ("cup of rice").
+  s = s.replace(/\bof\b/g, " ");
+  s = s.replace(/[,;]|&/g, " | ").replace(/\b(and|with|plus|also)\b/g, " | ");
   // strip non-food filler verbs/pronouns so "I had chicken" doesn't log "i had" as a food
   s = s.replace(/\b(i|im|ive|id|he|she|we|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|drinking|drunk|got|get|getting|consumed|consume|the|my|me|mine|will|gonna|going|planning|plan|want|wanna|like|grab|grabbed|made|make|having|about|around|roughly|approximately|approx|maybe|nearly|almost|that|which|it|its|what|so|far|well|really|please|is|are|was|were)\b/g, " ");
   s = s.replace(/\b(for|at|after|before|then|during|today|yesterday|tomorrow|tonight|this|morning|afternoon|evening|lunch|dinner|breakfast|snack|right|now|just)\b/g, " ");
@@ -85,30 +90,58 @@ function parseFoodItems(text) {
   const units = "oz|ounces|ounce|lb|lbs|pounds|pound|g|grams|gram|kg|cup|cups|tbsp|tablespoons|tablespoon|tsp|teaspoons|teaspoon|ml|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
   const unitRe = new RegExp("^(?:"+units+")$","i");
   const isNum = t => /^\d*\.?\d+$/.test(t);
-  const tokens = s.split(/\s+/).filter(Boolean);
+  const cleanFood = (arr) => arr.join(" ").replace(/[^a-z\s-]/gi," ").replace(/\s+/g," ").trim();
   const items = [];
 
-  // leading food with no quantity: words before the first number
-  const firstNum = tokens.findIndex(isNum);
-  if (firstNum > 0) {
-    const lead = tokens.slice(0, firstNum).join(" ").replace(/[^a-z\s-]/gi,"").trim();
-    if (lead.length > 2) items.push({ food: lead, amount: 1, unit: "serving" });
-  } else if (firstNum === -1) {
-    const only = tokens.join(" ").replace(/[^a-z\s-]/gi,"").trim();
-    if (only.length > 2) items.push({ food: only, amount: 1, unit: "serving" });
-    return items;
-  }
+  // [v111 B'] PER-CHUNK PAIRING, amount on EITHER side of the food:
+  //   chunk starts with a QUANTITY -> pair forward  ("4 ounces chicken")
+  //   chunk starts with FOOD words -> first quantity binds BACKWARD to that food
+  //     ("chicken breast 4 ounces", "eggs 2"), remainder re-parsed by the same rule
+  //     ("chicken breast 4 ounces 0.5 cup mushrooms" -> mushrooms get the 0.5 cup)
+  //   quantity-only chunk ("chicken breast, 4 ounces") -> attach to the previous
+  //     item if it is still at the 1-serving default; otherwise drop.
+  const parseChunk = (tokens) => {
+    while (tokens.length > 0) {
+      const firstNum = tokens.findIndex(isNum);
+      if (firstNum === -1) {
+        const food = cleanFood(tokens);
+        if (food.length > 2) items.push({ food, amount: 1, unit: "serving" });
+        return;
+      }
+      if (firstNum === 0) {
+        // amount-first: num [unit] food-words-until-next-num
+        const amount = parseFloat(tokens[0]);
+        let i = 1;
+        let unit = "serving";
+        if (i < tokens.length && unitRe.test(tokens[i])) { unit = tokens[i].toLowerCase().replace(/s$/,''); i++; }
+        const fw = [];
+        while (i < tokens.length && !isNum(tokens[i])) { fw.push(tokens[i]); i++; }
+        const food = cleanFood(fw);
+        if (food.length > 2 && !isNaN(amount)) {
+          items.push({ food, amount, unit });
+        } else if (food.length <= 2 && !isNaN(amount)) {
+          // dangling quantity, no food after it: upgrade the previous default-serving item
+          const prev = items[items.length - 1];
+          if (prev && prev.unit === "serving" && prev.amount === 1) { prev.amount = amount; prev.unit = unit; }
+        }
+        tokens = tokens.slice(i);
+      } else {
+        // food-first: food-words, then num [unit] bind BACKWARD to that food
+        const food = cleanFood(tokens.slice(0, firstNum));
+        const amount = parseFloat(tokens[firstNum]);
+        let i = firstNum + 1;
+        let unit = "serving";
+        if (i < tokens.length && unitRe.test(tokens[i])) { unit = tokens[i].toLowerCase().replace(/s$/,''); i++; }
+        if (food.length > 2 && !isNaN(amount)) items.push({ food, amount, unit });
+        else if (food.length > 2) items.push({ food, amount: 1, unit: "serving" });
+        tokens = tokens.slice(i);
+      }
+    }
+  };
 
-  let i = firstNum < 0 ? tokens.length : firstNum;
-  while (i < tokens.length) {
-    if (!isNum(tokens[i])) { i++; continue; }
-    const amount = parseFloat(tokens[i]); i++;
-    let unit = "serving";
-    if (i < tokens.length && unitRe.test(tokens[i])) { unit = tokens[i].toLowerCase().replace(/s$/,''); i++; }
-    const fw = [];
-    while (i < tokens.length && !isNum(tokens[i])) { fw.push(tokens[i]); i++; }
-    const food = fw.join(" ").replace(/[^a-z\s-]/gi,"").trim();
-    if (food.length > 2 && !isNaN(amount)) items.push({ food, amount, unit });
+  for (const chunk of s.split("|")) {
+    const tokens = chunk.split(/\s+/).filter(Boolean);
+    if (tokens.length > 0) parseChunk(tokens);
   }
   return items;
 }
