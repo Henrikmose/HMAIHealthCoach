@@ -554,7 +554,16 @@ function segmentMeals(message, currentHour = 12) {
   } else {
     const ff = buildFoodFirst();
     const mf = buildMarkerFirst();
-    segments = ff.length > mf.length ? ff : mf;
+    // [v111] A quantity-only segment ("4 ounces") is not food — it must not let
+    // marker-first win the tie and discard the actual food ("chicken thighs for
+    // breakfast 4 ounces"). Compare MEANINGFUL segments; tie still -> marker-first.
+    const quantityOnly = (str) => {
+      const toks = (str || "").toLowerCase().replace(/[^a-z0-9.\s-]/g, " ").split(/\s+/).filter(Boolean);
+      if (toks.length === 0) return false;
+      return toks.every(t => /^\d*\.?\d+$/.test(t) || UNIT_WORDS_RE.test(t) || /^(of|a|an|about|around|roughly)$/.test(t));
+    };
+    const meaningful = (segs) => segs.filter(x => !quantityOnly(x.text)).length;
+    segments = meaningful(ff) > meaningful(mf) ? ff : mf;
   }
 
   // HARD FLOOR: never return zero segments for a message that reached this point.
