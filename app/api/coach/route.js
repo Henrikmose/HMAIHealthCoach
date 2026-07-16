@@ -563,7 +563,10 @@ function segmentMeals(message, currentHour = 12) {
       return toks.every(t => /^\d*\.?\d+$/.test(t) || UNIT_WORDS_RE.test(t) || /^(of|a|an|about|around|roughly)$/.test(t));
     };
     const meaningful = (segs) => segs.filter(x => !quantityOnly(x.text)).length;
-    segments = meaningful(ff) > meaningful(mf) ? ff : mf;
+    // [v111] Tie -> FOOD-FIRST. Rule 3 only runs when the lead is substantive, so a
+    // tie means real content on BOTH sides of the marker. Food-first keeps both
+    // (tail is appended); marker-first throws the lead away. Never discard food.
+    segments = meaningful(ff) >= meaningful(mf) ? ff : mf;
   }
 
   // HARD FLOOR: never return zero segments for a message that reached this point.
