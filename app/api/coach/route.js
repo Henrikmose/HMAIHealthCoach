@@ -195,7 +195,9 @@ function pickBest(rows, term, quals = []) {
       for (const c of commonPrefer) if (name.includes(c)) score += 25;
       for (const v of specialty) if (name.includes(v)) score -= 40;
     }
-    for (const v of oddVariants) if (name.includes(v) && !term_l.includes(v)) score -= 35;
+    // [v111] Word boundaries, both sides: "skinless" must not trip "skin" (row side),
+    // and a user saying "skinless" must not suppress the penalty on "with skin" rows (term side).
+    for (const v of oddVariants) if (new RegExp(`\\b${v}\\b`, "i").test(name) && !new RegExp(`\\b${v}\\b`, "i").test(term_l)) score -= 35;
     // [v110] QUALIFIER FIDELITY: user-stated modifier is a requirement, not a hint.
     // A row matching the STATED member is satisfied — USDA names often carry two
     // markers of the same family ("low fat, 2% milkfat"), and the stated match
