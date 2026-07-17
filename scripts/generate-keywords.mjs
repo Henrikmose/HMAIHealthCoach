@@ -1,29 +1,28 @@
-// scripts/generate-keywords.mjs
+// scripts/generate-keywords.mjs  (v2)
 // CURA keywords generator — Opus 4.8 via Anthropic Batch API (−50%)
 //
+// v2 changes: ROWS_PER_REQUEST 40, max_tokens 16000, preamble-proof JSON parsing,
+// bad-response dump files, hardened prompt (enhanced/raw ownership), and the new
+// `resolve` command — AI collision resolution for the ambiguity checker.
+//
 // USAGE (from project root, Node 18+):
-//   1. npm i @supabase/supabase-js          (already a dependency in CURA)
-//   2. Set env vars (see below), then:
 //   node scripts/generate-keywords.mjs submit --pilot     # pork/chicken/rice/eggs only
-//   node scripts/generate-keywords.mjs status <batch_id>  # check progress
-//   node scripts/generate-keywords.mjs apply  <batch_id>  # write keywords to Supabase
 //   node scripts/generate-keywords.mjs submit --full      # all remaining families
+//   node scripts/generate-keywords.mjs status <batch_id>
+//   node scripts/generate-keywords.mjs apply  <batch_id>  # write keywords to Supabase
+//   node scripts/generate-keywords.mjs resolve            # fix keyword collisions via AI
 //
-// ENV VARS REQUIRED (put in .env.local or export in the shell):
-//   SUPABASE_URL                — same as the app uses
-//   SUPABASE_SERVICE_ROLE_KEY   — Dashboard > Settings > API > service_role
-//                                 (NOT the anon key: the script must write)
-//   ANTHROPIC_API_KEY           — the app's existing key
+// ENV VARS REQUIRED (export in the same terminal session):
+//   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
 //
-// SCOPE: source in ('usda_db','usda'), skips rows already at KEYWORDS_VERSION.
 // ROLLBACK: update foods set keywords = null; (empty column = old behavior)
 
 import { createClient } from "@supabase/supabase-js";
-import { readFileSync, writeFileSync } from "fs";
+import { writeFileSync } from "fs";
 
 const KEYWORDS_VERSION = 1;
 const MODEL = "claude-opus-4-8";
-const ROWS_PER_REQUEST = 80; // one family per request where possible
+const ROWS_PER_REQUEST = 40; // one family per request where possible
 const PILOT_FAMILIES = ["pork", "chicken", "rice", "eggs", "egg"];
 
 const need = (k) => {
@@ -49,7 +48,10 @@ a phrase that another food could claim.
 VARIANT OWNERSHIP (raw/cooked, lean/lean+fat, salt/no-salt):
 When sibling rows differ ONLY in preparation state, exactly ONE of them owns the plain
 phrase — the one matching what a person means by default when they say they ATE it:
-  - COOKED owns the plain phrase. Raw rows get the "raw" phrase ("raw chicken breast") or nothing.
+  - COOKED owns the plain phrase. A RAW row must NEVER get the plain phrase — raw rows
+    get ONLY phrases containing the word "raw" ("raw chicken breast"), or nothing.
+  - "Enhanced", brine-injected, cured, or otherwise treated rows must NEVER get the
+    plain phrase — only phrases that say so ("enhanced pork tenderloin"), or nothing.
   - For red meat: "separable lean and fat" owns the plain phrase. "Separable lean only"
     rows get the "lean" phrase ("lean pork chop") or nothing.
   - For poultry: "meat only" owns the plain phrase. "Meat and skin" rows get the skin
@@ -78,20 +80,52 @@ Return ONLY a JSON array, one object per input, same order:
 FOODS:
 `;
 
+const RESOLVE_PROMPT = `Multiple USDA food rows are claiming the same keyword phrase. For each
+keyword below, pick EXACTLY ONE row id as the owner — the row a person most likely means when
+they say that phrase.
+
+OWNERSHIP RULES, in priority order:
+1. COOKED beats raw. A raw row may only own a phrase containing the word "raw".
+2. Plain beats enhanced/brine-injected/cured/frozen/breaded/processed.
+3. "Separable lean and fat" beats "separable lean only" (red meat, as-eaten).
+4. "Meat only" beats "meat and skin" (poultry) — unless the phrase itself says skin,
+   then the skin row owns it.
+5. If the rows describe essentially THE SAME food (duplicate imports, e.g.
+   "Chicken Thigh (Cooked)" vs "Chicken, broilers or fryers, thigh, meat only, cooked"),
+   prefer the simpler/generic-named row.
+6. A phrase containing "raw" must go to a raw row; "lean" to a lean-only row, etc. —
+   the phrase's own qualifiers bind.
+
+Return ONLY a JSON array, one object per keyword, same order:
+[{"keyword":"...","owner":123}]
+
+COLLISIONS:
+`;
+
 const familyOf = (name) =>
   (name || "").toLowerCase().split(",")[0].trim().split(/\s+/)[0].replace(/[^a-z]/g, "");
 
-async function fetchRows() {
+const parseModelJson = (raw) => {
+  const cleanRaw = raw.replace(/```json|```/g, "").trim();
+  const a = cleanRaw.indexOf("["), b = cleanRaw.lastIndexOf("]");
+  if (a !== -1 && b > a) return JSON.parse(cleanRaw.slice(a, b + 1));
+  // fallback: one JSON object per line (NDJSON)
+  return cleanRaw.split("\n").map(l => l.trim().replace(/,$/, "")).filter(l => l.startsWith("{")).map(l => JSON.parse(l));
+};
+
+async function fetchRows(needingKeywords = true) {
   const all = [];
   let from = 0;
   for (;;) {
-    const { data, error } = await supabase
+    let q = supabase
       .from("foods")
-      .select("id,name")
+      .select("id,name,keywords")
       .in("source", ["usda_db", "usda"])
-      .or(`keywords_version.is.null,keywords_version.lt.${KEYWORDS_VERSION}`)
       .order("id")
       .range(from, from + 999);
+    if (needingKeywords) q = q.or(`keywords_version.is.null,keywords_version.lt.${KEYWORDS_VERSION}`);
+    else q = q.not("keywords", "is", null);
+    const { data, error } = await q;
     if (error) throw error;
     all.push(...data);
     if (data.length < 1000) break;
@@ -119,7 +153,7 @@ function buildRequests(rows, pilot) {
         custom_id: `kw-${fam}-${n++}`,
         params: {
           model: MODEL,
-          max_tokens: 8000,
+          max_tokens: 16000,
           messages: [{ role: "user", content: PROMPT + foodsList }],
         },
       });
@@ -143,13 +177,12 @@ async function anthropic(path, opts = {}) {
 }
 
 async function submit(pilot) {
-  const rows = await fetchRows();
+  const rows = await fetchRows(true);
   console.log(`Rows needing keywords: ${rows.length}`);
   const requests = buildRequests(rows, pilot);
-  const total = requests.reduce((s, r) => s + 1, 0);
   const rowCount = requests.reduce(
     (s, r) => s + r.params.messages[0].content.split("\nFOODS:\n").pop().split("\n").length, 0);
-  console.log(`Submitting ${total} requests covering ~${rowCount} rows (pilot=${!!pilot})`);
+  console.log(`Submitting ${requests.length} requests covering ~${rowCount} rows (pilot=${!!pilot})`);
   const res = await anthropic("/v1/messages/batches", {
     method: "POST",
     body: JSON.stringify({ requests }),
@@ -178,9 +211,8 @@ async function apply(batchId) {
     const r = JSON.parse(line);
     if (r.result?.type !== "succeeded") { failed++; console.error(`FAILED: ${r.custom_id} (${r.result?.type})`); continue; }
     const raw = r.result.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
-    const clean = raw.replace(/```json|```/g, "").trim();
     let arr;
-    try { arr = JSON.parse(clean); } catch { failed++; console.error(`BAD JSON: ${r.custom_id}`); continue; }
+    try { arr = parseModelJson(raw); } catch { failed++; console.error(`BAD JSON: ${r.custom_id}`); writeFileSync(`bad-${r.custom_id}.txt`, raw); continue; }
     for (const item of arr) {
       if (!item.id || !Array.isArray(item.keywords)) continue;
       const kws = [...new Set(item.keywords.map((k) => String(k).toLowerCase().trim()).filter((k) => k.length > 1 && k.length < 60))];
@@ -198,12 +230,88 @@ async function apply(batchId) {
     if (++done % 200 === 0) console.log(`  ...${done}/${updates.length}`);
   }
   console.log(`Done: ${done} rows written with keywords_version=${KEYWORDS_VERSION}.`);
-  console.log(`\nNOW RUN THE AMBIGUITY CHECKER in Supabase:`);
-  console.log(`select unnest(keywords) kw, count(*), array_agg(id) ids from foods where keywords is not null group by kw having count(*) > 1 order by count(*) desc;`);
+  console.log(`Next: node scripts/generate-keywords.mjs resolve`);
+}
+
+function findCollisions(rows) {
+  const byKw = new Map();
+  for (const r of rows) {
+    for (const kw of r.keywords || []) {
+      if (!byKw.has(kw)) byKw.set(kw, []);
+      byKw.get(kw).push(r);
+    }
+  }
+  return [...byKw.entries()].filter(([, v]) => v.length > 1);
+}
+
+async function resolve() {
+  const rows = await fetchRows(false);
+  const collisions = findCollisions(rows);
+  console.log(`Rows with keywords: ${rows.length}. Colliding keywords: ${collisions.length}`);
+  if (collisions.length === 0) { console.log("Nothing to resolve — checker is clean."); return; }
+
+  const decisions = [];
+  const CHUNK = 60;
+  for (let i = 0; i < collisions.length; i += CHUNK) {
+    const chunk = collisions.slice(i, i + CHUNK);
+    const payload = chunk
+      .map(([kw, rs]) => JSON.stringify({ keyword: kw, rows: rs.map((r) => ({ id: r.id, name: r.name })) }))
+      .join("\n");
+    console.log(`Resolving ${i + 1}-${Math.min(i + CHUNK, collisions.length)} of ${collisions.length}...`);
+    const res = await anthropic("/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 8000,
+        messages: [{ role: "user", content: RESOLVE_PROMPT + payload }],
+      }),
+    });
+    const data = await res.json();
+    const raw = data.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+    let arr;
+    try { arr = parseModelJson(raw); } catch {
+      writeFileSync(`bad-resolve-${i}.txt`, raw);
+      console.error(`BAD JSON in resolve chunk at ${i} — saved to bad-resolve-${i}.txt`);
+      continue;
+    }
+    decisions.push(...arr);
+  }
+
+  // apply: strip each collided keyword from every non-owner row
+  const rowById = new Map(rows.map((r) => [String(r.id), r]));
+  const dirty = new Map();
+  let unresolved = 0;
+  for (const [kw, claimants] of collisions) {
+    const d = decisions.find((x) => x.keyword === kw);
+    if (!d || !d.owner) { unresolved++; console.error(`NO DECISION for "${kw}" — left as-is`); continue; }
+    for (const r of claimants) {
+      if (String(r.id) === String(d.owner)) continue;
+      const row = rowById.get(String(r.id));
+      row.keywords = (row.keywords || []).filter((k) => k !== kw);
+      dirty.set(String(row.id), row);
+    }
+  }
+  console.log(`Decisions applied: ${collisions.length - unresolved}, unresolved: ${unresolved}. Updating ${dirty.size} rows...`);
+  let done = 0;
+  for (const row of dirty.values()) {
+    const { error } = await supabase.from("foods").update({ keywords: row.keywords }).eq("id", row.id);
+    if (error) { console.error(`update ${row.id}: ${error.message}`); continue; }
+    if (++done % 100 === 0) console.log(`  ...${done}/${dirty.size}`);
+  }
+  console.log(`Done: ${done} rows updated.`);
+
+  // re-check
+  const after = await fetchRows(false);
+  const remaining = findCollisions(after);
+  console.log(`\nCHECKER RE-RUN: ${remaining.length} colliding keywords remain.`);
+  for (const [kw, rs] of remaining.slice(0, 20))
+    console.log(`  "${kw}" -> ${rs.map((r) => r.id).join(", ")}`);
+  if (remaining.length === 0) console.log("CLEAN — ready for the sibling suite.");
 }
 
 const [cmd, arg] = process.argv.slice(2);
 if (cmd === "submit") await submit(arg === "--pilot");
 else if (cmd === "status" && arg) await status(arg);
 else if (cmd === "apply" && arg) await apply(arg);
-else console.log("usage: submit [--pilot|--full] | status <batch_id> | apply <batch_id>");
+else if (cmd === "resolve") await resolve();
+else console.log("usage: submit [--pilot|--full] | status <batch_id> | apply <batch_id> | resolve");

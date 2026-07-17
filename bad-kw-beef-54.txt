@@ -1,0 +1,99 @@
+<think>
+Let me work through these. Many are raw variants (get "raw" phrases), cooked variants get plain phrases. Grades (all grades/choice/select) differentiate. Lean vs lean+fat.
+
+Let me be careful about ownership. For each cut, there are many grade/lean variants. Since "all grades" is a superset, and choice/select are specific grades, I'll give the plain cooked phrase to "all grades" cooked lean+fat, and grade-specific ones get the grade word.
+
+Let me go through.
+
+6816: Beef brisket whole, lean only, all grades, raw → "raw beef brisket" (lean). Actually lean only raw. → ["raw beef brisket", "lean beef brisket raw"]
+
+7650: brisket whole lean only cooked braised → "beef brisket", "brisket", "lean beef brisket"
+
+7850: Beef carcass lean and fat choice raw → "raw beef" choice? carcass is generic beef. But it's raw and choice. → ["choice beef raw", "raw beef carcass"]
+
+8106: carcass lean+fat select raw → ["select beef raw", "raw beef carcass"]
+
+1521: Beef chopped cured smoked → ["chopped cured beef", "smoked beef", "cured smoked beef"]
+
+Chuck eye Country-Style ribs boneless:
+lean+fat cooked braised all grades (5133): plain → ["beef country style ribs", "chuck eye country style ribs", "country style beef ribs"]
+7901: lean+fat raw all grades → ["raw country style beef ribs", "raw chuck eye ribs"]
+7337: lean+fat choice cooked → ["choice country style beef ribs"]
+4565: lean+fat choice raw → ["choice country style beef ribs raw"]
+6785: lean+fat select cooked → ["select country style beef ribs"]
+3564: lean+fat select raw → ["select country style beef ribs raw"]
+6738: lean only all grades cooked → ["lean country style beef ribs"]
+2946: lean only all grades raw → ["lean country style beef ribs raw"]
+5563: lean only choice cooked → ["lean choice country style beef ribs"]
+5226: lean only choice raw → ["lean choice country style beef ribs raw"]
+3080: lean only select cooked → ["lean select country style beef ribs"]
+3733: lean only select raw → ["lean select country style beef ribs raw"]
+
+Chuck eye roast boneless America's Beef Roast:
+3599: lean+fat all grades cooked roasted → plain → ["chuck eye roast", "beef chuck eye roast"]
+6787: lean+fat all grades raw → ["raw chuck eye roast"]
+4402: lean+fat choice cooked → ["choice chuck eye roast"]
+5894: lean+fat choice raw → ["choice chuck eye roast raw"]
+4639: lean+fat select cooked → ["select chuck eye roast"]
+4252: lean+fat select raw → ["select chuck eye roast raw"]
+8249: lean only all grades cooked → ["lean chuck eye roast"]
+1885: lean only all grades raw → ["lean chuck eye roast raw"]
+3112: lean only choice cooked → ["lean choice chuck eye roast"]
+8316: lean only choice raw → ["lean choice chuck eye roast raw"]
+1550: lean only select cooked → ["lean select chuck eye roast"]
+8090: lean only select raw → ["lean select chuck eye roast raw"]
+
+Chuck eye steak boneless:
+6639: lean+fat all grades cooked grilled → plain → ["chuck eye steak", "beef chuck eye steak"]
+1227: lean+fat all grades raw → ["raw chuck eye steak"]
+4517: lean+fat choice cooked → ["choice chuck eye steak"]
+995: lean+fat choice raw → ["choice chuck eye steak raw"]
+2911: lean+fat select cooked → ["select chuck eye steak"]
+2069: lean+fat select raw → ["select chuck eye steak raw"]
+7347: lean only all grades cooked → ["lean chuck eye steak"]
+7833: lean only all grades raw → ["lean chuck eye steak raw"]
+4168: lean only choice cooked → ["lean choice chuck eye steak"]
+1858: lean only choice raw → ["lean choice chuck eye steak raw"]
+4110: lean only select cooked → ["lean select chuck eye steak"]
+</think>
+
+[{"id":6816,"keywords":["raw beef brisket","lean beef brisket raw"]},
+{"id":7650,"keywords":["beef brisket","brisket","lean beef brisket"]},
+{"id":7850,"keywords":["choice beef raw","raw beef carcass"]},
+{"id":8106,"keywords":["select beef raw","raw beef carcass"]},
+{"id":1521,"keywords":["chopped cured beef","smoked beef","cured smoked beef"]},
+{"id":5133,"keywords":["beef country style ribs","chuck eye country style ribs","country style beef ribs"]},
+{"id":7901,"keywords":["raw country style beef ribs","raw chuck eye ribs"]},
+{"id":7337,"keywords":["choice country style beef ribs"]},
+{"id":4565,"keywords":["choice country style beef ribs raw"]},
+{"id":6785,"keywords":["select country style beef ribs"]},
+{"id":3564,"keywords":["select country style beef ribs raw"]},
+{"id":6738,"keywords":["lean country style beef ribs"]},
+{"id":2946,"keywords":["lean country style beef ribs raw"]},
+{"id":5563,"keywords":["lean choice country style beef ribs"]},
+{"id":5226,"keywords":["lean choice country style beef ribs raw"]},
+{"id":3080,"keywords":["lean select country style beef ribs"]},
+{"id":3733,"keywords":["lean select country style beef ribs raw"]},
+{"id":3599,"keywords":["chuck eye roast","beef chuck eye roast"]},
+{"id":6787,"keywords":["raw chuck eye roast"]},
+{"id":4402,"keywords":["choice chuck eye roast"]},
+{"id":5894,"keywords":["choice chuck eye roast raw"]},
+{"id":4639,"keywords":["select chuck eye roast"]},
+{"id":4252,"keywords":["select chuck eye roast raw"]},
+{"id":8249,"keywords":["lean chuck eye roast"]},
+{"id":1885,"keywords":["lean chuck eye roast raw"]},
+{"id":3112,"keywords":["lean choice chuck eye roast"]},
+{"id":8316,"keywords":["lean choice chuck eye roast raw"]},
+{"id":1550,"keywords":["lean select chuck eye roast"]},
+{"id":8090,"keywords":["lean select chuck eye roast raw"]},
+{"id":6639,"keywords":["chuck eye steak","beef chuck eye steak"]},
+{"id":1227,"keywords":["raw chuck eye steak"]},
+{"id":4517,"keywords":["choice chuck eye steak"]},
+{"id":995,"keywords":["choice chuck eye steak raw"]},
+{"id":2911,"keywords":["select chuck eye steak"]},
+{"id":2069,"keywords":["select chuck eye steak raw"]},
+{"id":7347,"keywords":["lean chuck eye steak"]},
+{"id":7833,"keywords":["lean chuck eye steak raw"]},
+{"id":4168,"keywords":["lean choice chuck eye steak"]},
+{"id":1858,"keywords":["lean choice chuck eye steak raw"]},
+{"id":4110,"keywords":["lean select chuck eye steak"]}]
