@@ -120,6 +120,7 @@ async function fetchRows(needingKeywords = true) {
     let q = supabase
       .from("foods")
       .select("id,name,keywords")
+      .eq("active", true)
       .in("source", ["usda_db", "usda"])
       .order("id")
       .range(from, from + 999);

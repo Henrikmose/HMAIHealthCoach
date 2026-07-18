@@ -420,11 +420,18 @@ async function lookupFood(foodName) {
     const kwCands = (quals && quals.length > 0)
       ? kwBases.map(b => `${quals.join(" ")} ${b}`)
       : kwBases;
-    const { data: kwHits } = await supabase
+    const { data: kwHits, error: kwErr } = await supabase
       .from("foods").select(cols + ", keywords")
       .overlaps("keywords", kwCands)
       .eq("active", true)
       .limit(5);
+    if (kwErr) {
+      // [v112.1] supabase-js does NOT throw on query errors — it returns { error }.
+      // Swallowing it made the stage invisible when PostgREST rejected the call.
+      console.log(`[keywords] QUERY ERROR for ${JSON.stringify(kwCands)}: ${kwErr.message}`);
+    } else if (!kwHits || kwHits.length === 0) {
+      console.log(`[keywords] miss for ${JSON.stringify(kwCands)}`);
+    }
     if (kwHits && kwHits.length > 0) {
       // Longest matching phrase wins ("sweet potato" beats a hypothetical "potato").
       const ranked = kwHits
