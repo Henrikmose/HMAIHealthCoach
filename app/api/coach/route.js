@@ -417,9 +417,13 @@ async function lookupFood(foodName) {
       clean.replace(/es$/, ""),     // potatoes -> potato
       clean.replace(/s$/, ""),      // eggs -> egg
     ])].filter(t => t.length >= 3);
-    const kwCands = (quals && quals.length > 0)
-      ? kwBases.map(b => `${quals.join(" ")} ${b}`)
-      : kwBases;
+    // [v112.2] Candidates are clean + singular variants, NOTHING else. The earlier
+    // quals-prefix was double-broken: extractQualifiers returns family OBJECTS
+    // (join() -> "[object Object] pork loin", poisoning every query), and it was
+    // redundant anyway — `clean` retains the user's qualifier words ("fried
+    // chicken" arrives whole), so exact-element matching already gates: "fried
+    // chicken" can only hit a row owning that full phrase, never plain "chicken".
+    const kwCands = kwBases;
     const { data: kwHits, error: kwErr } = await supabase
       .from("foods").select(cols + ", keywords")
       .overlaps("keywords", kwCands)
@@ -439,7 +443,7 @@ async function lookupFood(foodName) {
         .filter(x => x.len > 0)
         .sort((a, b) => b.len - a.len);
       if (ranked.length > 0) {
-        console.log(`[keywords] "${clean}"${quals && quals.length ? ` (quals: ${quals.join(",")})` : ""} -> ${ranked[0].r.name}`);
+        console.log(`[keywords] "${clean}" -> ${ranked[0].r.name}`);
         return ranked[0].r;
       }
     }
