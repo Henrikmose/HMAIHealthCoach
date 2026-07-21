@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+// [v114] Self-heal system (CURA-SPEC-self-heal-v3.1): Opus selector + gated
+// keyword writes on keyword miss. Flag: SELF_HEAL_ENABLED (Vercel env).
+import { runSelfHeal, recordMiss, kwCanon } from "./self-heal.js";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -439,6 +442,10 @@ async function lookupFood(foodName) {
   // phrase CONTAINING them may win here; bare matches fall through to the scorer,
   // which weighs qualifiers properly ("fried chicken" must not silently become the
   // plain composite). Rollback: update foods set keywords = null -> stage never fires.
+  // [v114] A keyword MISS (the logged branch below) arms the self-heal hook
+  // further down. Errors / skipped stage do NOT arm it — heal fires only on a
+  // genuine miss, never on infrastructure failures.
+  let kwMissed = false;
   try {
     const kwBases = [...new Set([
       clean,
@@ -464,6 +471,7 @@ async function lookupFood(foodName) {
       console.log(`[keywords] QUERY ERROR for ${JSON.stringify(kwCands)}: ${kwErr.message}`);
     } else if (!kwHits || kwHits.length === 0) {
       console.log(`[keywords] miss for ${JSON.stringify(kwCands)}`);
+      kwMissed = true; // [v114] arms the self-heal hook
     }
     if (kwHits && kwHits.length > 0) {
       // Longest matching phrase wins ("sweet potato" beats a hypothetical "potato").
@@ -475,6 +483,7 @@ async function lookupFood(foodName) {
         console.log(`[keywords] "${clean}" -> ${ranked[0].r.name}`);
         return ranked[0].r;
       }
+      kwMissed = true; // [v114] rows overlapped but no phrase actually matched = miss
     }
   } catch (e) {
     console.log("[keywords] stage skipped (non-fatal):", e?.message || e);
@@ -531,6 +540,48 @@ async function lookupFood(foodName) {
       return null;
     } catch (e) { console.log('Food lookup error:', e.message); return null; }
   };
+  // [v114] SELF-HEAL HOOK (spec §4 steps 5–8). Fires only on a genuine keyword
+  // miss with the flag on. Option A candidate pool: ALL four stages × BOTH
+  // tiers, brand-gated, deduped in stage order (curated tier first), top 10.
+  // The hit paths above are completely untouched — this code never runs for
+  // keyword/alias/staple hits.
+  const collectHealCandidates = async () => {
+    const mk = (aiTier) => {
+      let q = supabase.from('foods').select(cols).eq('active', true);
+      return aiTier ? q.eq('source', 'ai_estimate') : q.or('source.neq.ai_estimate,source.is.null');
+    };
+    const pool = [];
+    const push = (rows) => { for (const r of (rows || [])) if (!pool.some(p => p.id === r.id)) pool.push(r); };
+    for (const aiTier of [false, true]) {
+      try {
+        const { data: s } = await mk(aiTier).ilike('name', `${clean}%`).order('name').limit(20);
+        push(gateBranded(s, clean));
+        const { data: sp } = await mk(aiTier).ilike('name', `${clean}s%`).order('name').limit(20);
+        push(gateBranded(sp, clean));
+        const { data: f } = await mk(aiTier).textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' }).limit(20);
+        push(gateBranded(f, clean));
+        if (clean.length >= 5) {
+          const { data: c } = await mk(aiTier).ilike('name', `%${clean}%`).order('name').limit(20);
+          push(gateBranded(c, clean));
+        }
+      } catch (e) { console.log('[heal] candidate stage error:', e.message); }
+    }
+    return pool.slice(0, 10);
+  };
+  if (kwMissed && process.env.SELF_HEAL_ENABLED === 'true') {
+    const candidates = await collectHealCandidates();
+    const { row: healRow } = await runSelfHeal({ supabase, anthropic, term: clean, candidates });
+    // healRow -> serve it (write already handled + gated inside runSelfHeal).
+    // null -> spec §4 step 8: straight to the AI-estimate path in the caller —
+    // Opus judged that NO candidate is this food, so pickBest on the same pool
+    // would only serve a wrong row.
+    return healRow;
+  }
+  if (kwMissed) {
+    // [v114] Flag OFF: record the miss anyway (§3 amendment — telemetry shows
+    // demand even for terms that never heal). Behavior otherwise identical to v112.2.
+    await recordMiss(supabase, clean);
+  }
   return (await runStages(false)) || (await runStages(true));
 }
 
@@ -864,12 +915,48 @@ Values are for ONE standard serving of: ${food}.${isWeightUnit ? "" : ` One serv
 // Write the AI-found food to `foods` (source='ai_estimate', per-SERVING values in the
 // per-100g columns — the established write-back convention) and return the STORED row.
 // If a row with this name already exists (another user logged it meanwhile), use that one.
-async function writeBackAIFood(macros) {
+// [v114] sourceTerm: the user's logged term. When SELF_HEAL_ENABLED, the write-back
+// emits the singularized term as a keyword on the row (uniqueness-gated) and marks
+// keyword_misses healed_via='ai_estimate' — so "teriyaki chicken" is a keyword HIT
+// on every future log. One-phrase-one-row is enforced here exactly as everywhere.
+async function emitAIWritebackKeyword(rowId, sourceTerm) {
+  try {
+    if (!rowId || !sourceTerm) return;
+    // Mirror lookupFood's sanitizer so the phrase and keyword_misses.term line up.
+    const cleaned = sourceTerm.replace(/\b\d{1,2}\s*%|\b\d{1,2}\s+percent\b|\b(one|two)percent\b/gi, " ")
+      .trim().toLowerCase().replace(/[^a-z0-9\s-]/g, " ").replace(/(^|\s)-+/g, "$1").replace(/\s+/g, " ").trim();
+    const phrase = kwCanon(cleaned);
+    if (!phrase || phrase.length < 3) return;
+    const { data: owners, error: ownErr } = await supabase.from("foods")
+      .select("id").contains("keywords", [phrase]).eq("active", true).limit(1);
+    if (ownErr) { console.log(`[heal] ai-writeback keyword check error: ${ownErr.message}`); return; }
+    if (owners && owners.length > 0) {
+      console.log(`[heal] refused: already_owned — ai-writeback "${phrase}" owned by row ${owners[0].id}`);
+      return;
+    }
+    const { data: rowNow } = await supabase.from("foods").select("keywords").eq("id", rowId).maybeSingle();
+    const kws = [...new Set([...(rowNow?.keywords || []), phrase])];
+    const { error: kwErr } = await supabase.from("foods").update({ keywords: kws }).eq("id", rowId);
+    if (kwErr) { console.log(`[heal] ai-writeback keyword write error: ${kwErr.message}`); return; }
+    console.log(`[heal] wrote (ai_estimate): "${phrase}" -> row ${rowId}`);
+    await supabase.from("keyword_misses").update({
+      healed_food_id: rowId, healed_at: new Date().toISOString(),
+      healed_via: "ai_estimate", healed_metadata: { via: "writeback" },
+    }).eq("term", cleaned);
+  } catch (e) { console.log(`[heal] ai-writeback keyword exception: ${e.message}`); }
+}
+
+async function writeBackAIFood(macros, sourceTerm) {
   const cols = "id, name, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, grams_per_serving";
+  const healOn = process.env.SELF_HEAL_ENABLED === "true";
   try {
     const { data: existing } = await supabase.from("foods")
       .select(cols).ilike("name", macros.canonical_name).limit(1);
-    if (existing && existing[0]) return existing[0];
+    if (existing && existing[0]) {
+      // [v114] Row already cached but the term still keyword-missed — own it now.
+      if (healOn) await emitAIWritebackKeyword(existing[0].id, sourceTerm);
+      return existing[0];
+    }
     const { data: inserted, error } = await supabase.from("foods").insert([{
       name: macros.canonical_name,
       category: "ai",
@@ -890,6 +977,8 @@ async function writeBackAIFood(macros) {
     // [v105] tag the new food's diet compatibility in the same breath — the
     // untagged gap never grows again. Await is fine: first-contact foods only.
     try { await classifyFoodDietTags([{ id: inserted.id, name: inserted.name }], "ai_writeback"); } catch {}
+    // [v114] Own the phrase so this term is a keyword HIT from now on.
+    if (healOn) await emitAIWritebackKeyword(inserted.id, sourceTerm);
     return inserted; // this IS the read-back: the stored row, straight from the database
   } catch (e) { console.log("write-back error:", e.message); return null; }
 }
@@ -986,7 +1075,7 @@ async function resolveOneFood(item, opts = {}) {
     if (!macros) return null;
     aiGramsPerServing = macros.grams_per_serving || 0;
     // [v110] Advisory turns get the numbers for THIS reply only — nothing cached.
-    row = allowWriteBack ? await writeBackAIFood(macros) : null;
+    row = allowWriteBack ? await writeBackAIFood(macros, item.food) : null;
     if (!row) {
       // DB write failed (or write-back disallowed) — serve the user this once; nothing cached
       row = { name: macros.canonical_name, source: "ai_estimate",
