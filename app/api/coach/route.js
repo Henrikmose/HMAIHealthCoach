@@ -382,7 +382,13 @@ function gramsForStaple(st, amount, unit) {
   return amount * 150;
 }
 
-async function lookupFood(foodName) {
+// [v115] opts.heal: self-heal + miss telemetry fire ONLY when the caller is
+// the food-LOG path (spec: trigger = keyword miss AT LOG TIME). Advisory and
+// suggestion resolutions (AI-authored food names) must never burn Opus calls,
+// write keywords, or pollute demand telemetry. Default OFF — unlisted callers
+// fail safe.
+async function lookupFood(foodName, opts = {}) {
+  const allowHeal = opts.heal === true;
   if (!foodName) return null;
   const cols = 'id, fdc_id, name, category, source, calories_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, grams_per_serving, use_count';
   // [v110] Qualifiers are read from the RAW term (the sanitizer would eat "2%"),
@@ -568,7 +574,7 @@ async function lookupFood(foodName) {
     }
     return pool.slice(0, 10);
   };
-  if (kwMissed && process.env.SELF_HEAL_ENABLED === 'true') {
+  if (kwMissed && allowHeal && process.env.SELF_HEAL_ENABLED === 'true') {
     const candidates = await collectHealCandidates();
     const { row: healRow } = await runSelfHeal({ supabase, anthropic, term: clean, candidates });
     // healRow -> serve it (write already handled + gated inside runSelfHeal).
@@ -577,9 +583,10 @@ async function lookupFood(foodName) {
     // would only serve a wrong row.
     return healRow;
   }
-  if (kwMissed) {
+  if (kwMissed && allowHeal) {
     // [v114] Flag OFF: record the miss anyway (§3 amendment — telemetry shows
     // demand even for terms that never heal). Behavior otherwise identical to v112.2.
+    // [v115] Log-path only: advisory misses are AI-authored phrases, not demand.
     await recordMiss(supabase, clean);
   }
   return (await runStages(false)) || (await runStages(true));
@@ -1049,6 +1056,7 @@ const VOLUME_UNITS = new Set(["cup", "tbsp", "tablespoon", "tsp", "teaspoon", "m
 
 async function resolveOneFood(item, opts = {}) {
   const allowWriteBack = opts.writeBack !== false;
+  const allowHeal = opts.heal === true;   // [v115] log path only — default OFF
   // 1) cooked-staple path (code-owned table)
   const staple = matchCookedStaple(item.food);
   if (staple) {
@@ -1067,7 +1075,7 @@ async function resolveOneFood(item, opts = {}) {
     };
   }
   // 2) database path (custom/community/USDA — one foods table, source column decides math)
-  let row = await lookupFood(item.food);
+  let row = await lookupFood(item.food, { heal: allowHeal });
   let aiGramsPerServing = 0;
   // 3) unknown food → AI supplies macros ONCE → written to foods → stored row is used
   if (!row) {
@@ -1075,7 +1083,10 @@ async function resolveOneFood(item, opts = {}) {
     if (!macros) return null;
     aiGramsPerServing = macros.grams_per_serving || 0;
     // [v110] Advisory turns get the numbers for THIS reply only — nothing cached.
-    row = allowWriteBack ? await writeBackAIFood(macros, item.food) : null;
+    // [v115] Keyword emission only for USER-logged terms: passing null as the
+    // term makes emitAIWritebackKeyword a no-op (AI-authored suggestion names
+    // must never enter the keyword vocabulary).
+    row = allowWriteBack ? await writeBackAIFood(macros, allowHeal ? item.food : null) : null;
     if (!row) {
       // DB write failed (or write-back disallowed) — serve the user this once; nothing cached
       row = { name: macros.canonical_name, source: "ai_estimate",
@@ -1356,7 +1367,7 @@ async function resolveSegment(segText) {
   const items = [];
   const unresolved = [];
   for (const it of parsed.slice(0, 6)) {
-    const r = await resolveOneFood(it);
+    const r = await resolveOneFood(it, { heal: true });  // [v115] LOG path: the only heal-enabled caller
     // [v93] All-zero macros = a failed resolution wearing a card ("can you give,
     // 0 cal"). Reject unless the food is genuinely zero-calorie (water, black
     // coffee, diet soda...). Failed items go to unresolved, never onto a card.
