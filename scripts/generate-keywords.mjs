@@ -1,4 +1,4 @@
-// scripts/generate-keywords.mjs  (v2)
+// scripts/generate-keywords.mjs  (v3)
 // CURA keywords generator — Opus 4.8 via Anthropic Batch API (−50%)
 //
 // v2 changes: ROWS_PER_REQUEST 40, max_tokens 16000, preamble-proof JSON parsing,
@@ -107,10 +107,8 @@ const familyOf = (name) =>
 
 const parseModelJson = (raw) => {
   const cleanRaw = raw.replace(/```json|```/g, "").trim();
-  const a = cleanRaw.indexOf("["), b = cleanRaw.lastIndexOf("]");
-  if (a !== -1 && b > a) return JSON.parse(cleanRaw.slice(a, b + 1));
-  // fallback: one JSON object per line (NDJSON)
-  return cleanRaw.split("\n").map(l => l.trim().replace(/,$/, "")).filter(l => l.startsWith("{")).map(l => JSON.parse(l));
+  const clean = cleanRaw.slice(cleanRaw.indexOf("["), cleanRaw.lastIndexOf("]") + 1);
+  return JSON.parse(clean);
 };
 
 async function fetchRows(needingKeywords = true) {
@@ -120,7 +118,6 @@ async function fetchRows(needingKeywords = true) {
     let q = supabase
       .from("foods")
       .select("id,name,keywords")
-      .eq("active", true)
       .in("source", ["usda_db", "usda"])
       .order("id")
       .range(from, from + 999);
@@ -234,7 +231,13 @@ async function apply(batchId) {
   console.log(`Next: node scripts/generate-keywords.mjs resolve`);
 }
 
-function findCollisions(rows) {
+// [v3] PLURAL-AWARE COLLISION GROUPS. The matcher singularizes queries, so
+// "scrambled egg" and "scrambled eggs" are ONE contested phrase, not two keywords.
+// Group any claims sharing a singular/plural variant; resolve the group as one.
+const kwVariants = (k) => new Set([k, k.replace(/ies$/, "y"), k.replace(/es$/, ""), k.replace(/s$/, "")].filter((x) => x.length > 1));
+const kwCanon = (k) => { const a = k.replace(/ies$/, "y"); return a !== k ? a : k.replace(/s$/, ""); };
+
+function findCollisionGroups(rows) {
   const byKw = new Map();
   for (const r of rows) {
     for (const kw of r.keywords || []) {
@@ -242,13 +245,30 @@ function findCollisions(rows) {
       byKw.get(kw).push(r);
     }
   }
-  return [...byKw.entries()].filter(([, v]) => v.length > 1);
+  const formToGroup = new Map();
+  const groups = [];
+  for (const [kw, claimants] of byKw) {
+    let g = null;
+    for (const f of kwVariants(kw)) if (formToGroup.has(f)) { g = formToGroup.get(f); break; }
+    if (!g) { g = { kws: new Map() }; groups.push(g); }
+    g.kws.set(kw, claimants);
+    for (const f of kwVariants(kw)) formToGroup.set(f, g);
+  }
+  return groups
+    .map((g) => {
+      const claimed = [...g.kws.keys()];
+      const rep = claimed.map(kwCanon).sort((a, b) => a.length - b.length)[0];
+      const rowsById = new Map();
+      for (const rs of g.kws.values()) for (const r of rs) rowsById.set(String(r.id), r);
+      return { rep, claimed, rows: [...rowsById.values()] };
+    })
+    .filter((g) => g.rows.length > 1);
 }
 
 async function resolve() {
   const rows = await fetchRows(false);
-  const collisions = findCollisions(rows);
-  console.log(`Rows with keywords: ${rows.length}. Colliding keywords: ${collisions.length}`);
+  const collisions = findCollisionGroups(rows);
+  console.log(`Rows with keywords: ${rows.length}. Colliding phrase groups: ${collisions.length}`);
   if (collisions.length === 0) { console.log("Nothing to resolve — checker is clean."); return; }
 
   const decisions = [];
@@ -256,7 +276,7 @@ async function resolve() {
   for (let i = 0; i < collisions.length; i += CHUNK) {
     const chunk = collisions.slice(i, i + CHUNK);
     const payload = chunk
-      .map(([kw, rs]) => JSON.stringify({ keyword: kw, rows: rs.map((r) => ({ id: r.id, name: r.name })) }))
+      .map((g) => JSON.stringify({ keyword: g.rep, rows: g.rows.map((r) => ({ id: r.id, name: r.name })) }))
       .join("\n");
     console.log(`Resolving ${i + 1}-${Math.min(i + CHUNK, collisions.length)} of ${collisions.length}...`);
     const res = await anthropic("/v1/messages", {
@@ -278,17 +298,25 @@ async function resolve() {
     decisions.push(...arr);
   }
 
-  // apply: strip each collided keyword from every non-owner row
+  // apply: losers lose every claimed variant; the owner is normalized to the
+  // singular rep (matcher singularizes queries but never pluralizes — a
+  // plural-only keyword would be unreachable for singular queries).
   const rowById = new Map(rows.map((r) => [String(r.id), r]));
   const dirty = new Map();
   let unresolved = 0;
-  for (const [kw, claimants] of collisions) {
-    const d = decisions.find((x) => x.keyword === kw);
-    if (!d || !d.owner) { unresolved++; console.error(`NO DECISION for "${kw}" — left as-is`); continue; }
-    for (const r of claimants) {
-      if (String(r.id) === String(d.owner)) continue;
+  for (const g of collisions) {
+    const d = decisions.find((x) => x.keyword === g.rep);
+    if (!d || !d.owner) { unresolved++; console.error(`NO DECISION for "${g.rep}" — left as-is`); continue; }
+    for (const r of g.rows) {
       const row = rowById.get(String(r.id));
-      row.keywords = (row.keywords || []).filter((k) => k !== kw);
+      if (!row) continue;
+      if (String(r.id) === String(d.owner)) {
+        const next = (row.keywords || []).filter((k) => !g.claimed.includes(k));
+        if (!next.includes(g.rep)) next.push(g.rep);
+        row.keywords = next;
+      } else {
+        row.keywords = (row.keywords || []).filter((k) => !g.claimed.includes(k));
+      }
       dirty.set(String(row.id), row);
     }
   }
@@ -303,10 +331,10 @@ async function resolve() {
 
   // re-check
   const after = await fetchRows(false);
-  const remaining = findCollisions(after);
-  console.log(`\nCHECKER RE-RUN: ${remaining.length} colliding keywords remain.`);
-  for (const [kw, rs] of remaining.slice(0, 20))
-    console.log(`  "${kw}" -> ${rs.map((r) => r.id).join(", ")}`);
+  const remaining = findCollisionGroups(after);
+  console.log(`\nCHECKER RE-RUN: ${remaining.length} colliding phrase groups remain.`);
+  for (const g of remaining.slice(0, 20))
+    console.log(`  "${g.rep}" (${g.claimed.join(" + ")}) -> ${g.rows.map((r) => r.id).join(", ")}`);
   if (remaining.length === 0) console.log("CLEAN — ready for the sibling suite.");
 }
 

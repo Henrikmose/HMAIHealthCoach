@@ -198,6 +198,35 @@ const DISH_WORDS = ["handroll","roll","sushi","wrap","sandwich","burger","bowl",
   "shake","burrito","taco","quesadilla","pizza","soup","stew","casserole","salad","curry",
   "parfait","platter","combo","plate","omelet","omelette","set"];
 
+// [v113] BRANDED-ROW GATE: branded/restaurant rows must NEVER win a query that
+// doesn't name the brand. Live damage: "teriyaki chicken" -> SUBWAY sub;
+// "french fries" -> WENDY'S. Detection: any run of 3+ consecutive CAPITALS in
+// the row name (SUBWAY, WENDY, DONALD, KFC...) minus non-brand acronyms. If a
+// row carries brand tokens and the user's term contains NONE of them, the row
+// is excluded BEFORE scoring. Also upgrades the SR "Restaurant, ..." family
+// from the old -35 soft penalty to a hard exclusion. Applied to every stage
+// batch in runStages, so pickBest AND any future candidate collection (self-
+// heal pool) inherit clean rows. Generic category-21 rows ("Fast foods, potato,
+// french fried...") have no caps runs and pass through — they are legitimate
+// answers for generic queries.
+const BRAND_TOKEN_WHITELIST = new Set(['USDA', 'BBQ']);
+function gateBranded(rows, term) {
+  if (!rows || rows.length === 0) return rows;
+  const term_l = (term || '').toLowerCase();
+  const kept = rows.filter(r => {
+    const name = r.name || '';
+    // Restaurant-family hard gate ("Restaurant, Chinese, ...")
+    if (/\brestaurant\b/i.test(name) && !/\brestaurant\b/.test(term_l)) return false;
+    const tokens = (name.match(/[A-Z]{3,}/g) || []).filter(t => !BRAND_TOKEN_WHITELIST.has(t));
+    if (tokens.length === 0) return true; // not branded
+    return tokens.some(t => term_l.includes(t.toLowerCase()));
+  });
+  if (kept.length < rows.length) {
+    console.log(`[brand-gate] excluded ${rows.length - kept.length} row(s) for "${term}"`);
+  }
+  return kept;
+}
+
 function pickBest(rows, term, quals = []) {
   const oddVariants = ['wing','skin','rind','bone','neck','giblet','liver','gizzard','heart','feet','tail',
     'overripe','underripe','unripe','dried','dehydrated','candied','sweetened','juice','powder','flour','baby food','restaurant','glutinous'];
@@ -480,18 +509,24 @@ async function lookupFood(foodName) {
       return aiTier ? q.eq('source', 'ai_estimate') : q.or('source.neq.ai_estimate,source.is.null');
     };
     try {
+      // [v113] Every batch passes through gateBranded BEFORE pickBest: a branded
+      // row the user didn't name can never be scored at all.
       const { data: starts } = await base().ilike('name', `${clean}%`).order('name').limit(20);
-      if (starts && starts.length > 0) { const p = pickBest(starts, clean, quals); if (p) return p; }
+      const gStarts = gateBranded(starts, clean);
+      if (gStarts && gStarts.length > 0) { const p = pickBest(gStarts, clean, quals); if (p) return p; }
       const { data: startsPlural } = await base().ilike('name', `${clean}s%`).order('name').limit(20);
-      if (startsPlural && startsPlural.length > 0) { const p = pickBest(startsPlural, clean, quals); if (p) return p; }
+      const gStartsPlural = gateBranded(startsPlural, clean);
+      if (gStartsPlural && gStartsPlural.length > 0) { const p = pickBest(gStartsPlural, clean, quals); if (p) return p; }
       const { data: fts } = await base().textSearch('name', clean.split(' ').join(' & '), { type: 'websearch' }).limit(20);
-      if (fts && fts.length > 0) { const p = pickBest(fts, clean, quals); if (p) return p; }
+      const gFts = gateBranded(fts, clean);
+      if (gFts && gFts.length > 0) { const p = pickBest(gFts, clean, quals); if (p) return p; }
       // SUBSTRING GUARD: the %contains% stage is a shotgun — short terms match inside
       // unrelated words ("cal" -> "Squid (CALamari)", "fat" -> "Buttermilk, low FAT").
       // Only allow it for terms long enough to be a real food name.
       if (clean.length >= 5) {
         const { data: contains } = await base().ilike('name', `%${clean}%`).order('name').limit(20);
-        if (contains && contains.length > 0) { const p = pickBest(contains, clean, quals); if (p) return p; }
+        const gContains = gateBranded(contains, clean);
+        if (gContains && gContains.length > 0) { const p = pickBest(gContains, clean, quals); if (p) return p; }
       }
       return null;
     } catch (e) { console.log('Food lookup error:', e.message); return null; }
