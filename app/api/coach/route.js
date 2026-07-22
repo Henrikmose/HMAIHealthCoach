@@ -1484,6 +1484,20 @@ function isQuestionTurn(t) {
 
 const STYLE_TAG_MAP = { vegan: "vegan", vegetarian: "vegetarian", pescatarian: "pescatarian",
   keto: "keto_friendly", paleo: "paleo", mediterranean: "mediterranean", halal: "halal", kosher: "kosher" };
+// [v116 — vegan fix] Style NAMES are too weak for the planning model: with
+// "Dietary style: vegan" verified in the sent prompt (2026-07-22 controlled
+// test, mediterranean removed from the row), it still proposed chicken breast
+// and ground turkey. Explicit exclusion lists leave nothing to interpret.
+const STYLE_EXCLUSIONS = {
+  vegan: "ZERO animal products — no meat, no poultry, no fish, no seafood, no dairy, no yogurt, no cheese, no eggs, no honey. Protein comes from tofu, tempeh, seitan, lentils, beans, chickpeas, nuts, seeds, plant protein powder.",
+  vegetarian: "no meat, no poultry, no fish, no seafood (dairy and eggs are allowed)",
+  pescatarian: "no meat, no poultry (fish, seafood, dairy and eggs are allowed)",
+  halal: "no pork, no alcohol; meat must be halal",
+  kosher: "no pork, no shellfish; never mix meat and dairy in one meal",
+  keto: "very low carb — no sugar, no bread, no pasta, no rice, no potatoes, no fruit juice",
+  paleo: "no grains, no legumes, no dairy, no refined sugar, no processed foods",
+  mediterranean: "emphasize vegetables, legumes, whole grains, olive oil and fish; minimal red meat and processed food",
+};
 const SENSITIVITY_TAG_MAP = { lactose: "dairy_free", dairy: "dairy_free", milk: "dairy_free",
   gluten: "gluten_free", wheat: "gluten_free", fodmap: "low_fodmap",
   "tree nut": "nut_free", peanut: "nut_free", nut: "nut_free",
@@ -1534,8 +1548,22 @@ async function buildDietHardRules(userId) {
     const styleKeys = Object.keys(STYLE_TAG_MAP);
     const hardStyles = (Array.isArray(d.dietary_style) ? d.dietary_style : [])
       .filter(v => styleKeys.some(k => String(v).toLowerCase().trim().includes(k)));
+    // [v116] Map matched style strings to their canonical keys (deduped), then
+    // render each as an explicit exclusion line — never a bare style name. For
+    // multiple styles the semantics are AND / stricter-wins, stated outright:
+    // "vegan, mediterranean" as a flat list read as a blended cuisine and the
+    // model went mediterranean (salmon, greek yogurt). Never join style names.
+    const hardKeys = [...new Set(hardStyles.map(
+      v => styleKeys.find(k => String(v).toLowerCase().trim().includes(k))
+    ).filter(Boolean))];
     if (arr(d.allergens))    parts.push(`ALLERGIES (safety-critical): ${arr(d.allergens)}`);
-    if (hardStyles.length)   parts.push(`Dietary style: ${hardStyles.join(", ")}`);
+    if (hardKeys.length) {
+      const header = hardKeys.length > 1
+        ? "Dietary rules — ALL of the following apply simultaneously; when they conflict, the STRICTER rule wins:"
+        : "Dietary rules:";
+      const lines = hardKeys.map(k => `- ${k.toUpperCase()}: ${STYLE_EXCLUSIONS[k]}`);
+      parts.push(`${header}\n${lines.join("\n")}`);
+    }
     if (arr(d.intolerances)) parts.push(`Intolerances: ${arr(d.intolerances)}`);
     if (arr(d.restrictions)) parts.push(`Excluded foods: ${arr(d.restrictions)}`);
     if (!parts.length) return "";
@@ -3391,7 +3419,7 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
       // Prepended so it is the first thing the model reads ("READ BEFORE ANYTHING ELSE").
       // The gate below still runs — it is now a safety net, not the front line.
       const chatHardRules = await buildDietHardRules(activeUserId);
-      console.log("[DIET RULES SENT]:", JSON.stringify(chatHardRules));   // TEMPORARY — CURA-ISSUE-vegan-restrictions.md diagnostic; remove after diagnosis
+      console.log("[DIET RULES SENT]:", JSON.stringify(chatHardRules));   // TEMPORARY — CURA-ISSUE-vegan-restrictions.md diagnostic; remove after close-out
       if (chatHardRules) {
         systemMessage = chatHardRules + systemMessage;
         systemMessage += `\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the very top. Verify EVERY food in EVERY meal complies. Replace any item that does not — do not omit the meal, substitute a compliant food.\n`;
