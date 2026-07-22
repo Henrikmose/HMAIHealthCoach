@@ -3398,6 +3398,7 @@ RULES — READ CAREFULLY:
 THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to emit it means the user cannot save what they ate.`;
     }
 
+    let planDietReminder = "";  // [v116-A2] set in the meal_planning branch; appended to the final user message
     if (context?.type === "meal_planning") {
       // [OVER-TARGET GATE] Enforce the 5% buffer in CODE. The "105% is fine" line in the
       // prompt was only advisory, so the AI would still pile on food when the day was
@@ -3423,6 +3424,13 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
       if (chatHardRules) {
         systemMessage = chatHardRules + systemMessage;
         systemMessage += `\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the very top. Verify EVERY food in EVERY meal complies. Replace any item that does not — do not omit the meal, substitute a compliant food.\n`;
+        // [v116-A2] SECOND INJECTION, at the END of the final user message (recency
+        // beats history imitation). The last-12-messages history can be full of the
+        // model's OWN pre-restriction plans (chicken, salmon...) and it copies its
+        // own precedent over a system rule — reproduced 2026-07-22 with "ZERO animal
+        // products" verified in the system prompt and chicken still proposed. This
+        // reminder sits at the generation point and explicitly forbids the copying.
+        planDietReminder = `\n\n[DIETARY RULES — THESE OVERRIDE ANY MEALS SHOWN EARLIER IN THIS CONVERSATION]\nEarlier suggestions in this conversation may violate the user's CURRENT dietary rules. Do NOT copy or adapt them.\n${chatHardRules}`;
       }
       // [v93] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
       // the UI: the parser deduplicates per meal type, so option 2's button silently
@@ -3645,10 +3653,10 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
           detail: "high",
         },
       }));
-      if (message) contentParts.push({ type: "text", text: message });
+      if (message || planDietReminder) contentParts.push({ type: "text", text: (message || "") + planDietReminder });
       conversationMessages.push({ role: "user", content: contentParts });
     } else {
-      conversationMessages.push({ role: "user", content: message || "" });
+      conversationMessages.push({ role: "user", content: (message || "") + planDietReminder });
     }
 
     const provider = process.env.AI_PROVIDER || "openai";
