@@ -3442,7 +3442,6 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
       // Prepended so it is the first thing the model reads ("READ BEFORE ANYTHING ELSE").
       // The gate below still runs — it is now a safety net, not the front line.
       const chatHardRules = await buildDietHardRules(activeUserId);
-      console.log("[DIET RULES SENT]:", JSON.stringify(chatHardRules));   // TEMPORARY — CURA-ISSUE-vegan-restrictions.md diagnostic; remove after close-out
       if (chatHardRules) {
         systemMessage = chatHardRules + systemMessage;
         systemMessage += `\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the very top. Verify EVERY food in EVERY meal complies. Replace any item that does not — do not omit the meal, substitute a compliant food.\nThe user's LOGGED meals are recorded history and are NONE of your business to police: never question them, never ask whether the user is changing diets, never delay or withhold the plan because logged food conflicts with the dietary rules. At most one brief neutral sentence acknowledging the difference, then plan ALL future meals per the rules and produce the FULL plan in this same response.\n`;
