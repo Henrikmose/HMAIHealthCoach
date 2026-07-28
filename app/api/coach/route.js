@@ -465,7 +465,29 @@ async function lookupFood(foodName, opts = {}) {
     // redundant anyway — `clean` retains the user's qualifier words ("fried
     // chicken" arrives whole), so exact-element matching already gates: "fried
     // chicken" can only hit a row owning that full phrase, never plain "chicken".
-    const kwCands = kwBases;
+    // [v117] PREP-STRIP VARIANTS: AI-authored suggestion names append preparation
+    // words that break exact matching — "brown rice cooked" missed the owned
+    // keyword "brown rice", fell to full-text fallback, and matched "PORK SAUSAGE
+    // rice links, BROWN and serve, COOKED" (the 2026-07-28 vegan gate trip; the
+    // retry then re-resolved to the same pork row deterministically). Strip ONLY
+    // preparation/state words from the edges, never food nouns: "chicken salad"
+    // can never become "chicken". Longest-phrase-wins ranking below already
+    // prefers a full exact match over a stripped one.
+    // Words that CHANGE macros materially (fried, breaded, canned, dried,
+    // mashed) are deliberately NOT in this list — "fried chicken" must never
+    // resolve to the plain roasted row; the fallback stages handle those better.
+    const PREP_WORDS = /^(cooked|steamed|baked|boiled|grilled|roasted|broiled|sauteed|raw|fresh|frozen|prepared|plain|firm|extra firm|soft|drained|unsalted|salted|chopped|sliced|diced|shredded|whole)$/;
+    const stripPrep = (t) => {
+      let words = t.split(" ");
+      while (words.length > 1 && PREP_WORDS.test(words[words.length - 1])) words = words.slice(0, -1);
+      while (words.length > 1 && PREP_WORDS.test(words[0])) words = words.slice(1);
+      return words.join(" ");
+    };
+    const kwCands = [...new Set([
+      ...kwBases,
+      ...kwBases.map(stripPrep),
+      ...kwBases.map(t => [stripPrep(t)].map(s => [...new Set([s, s.replace(/ies$/, "y"), s.replace(/es$/, ""), s.replace(/s$/, "")])]).flat()).flat(),
+    ])].filter(t => t.length >= 3);
     const { data: kwHits, error: kwErr } = await supabase
       .from("foods").select(cols + ", keywords")
       .overlaps("keywords", kwCands)
