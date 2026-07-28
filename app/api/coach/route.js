@@ -3423,14 +3423,14 @@ THIS IS NOT OPTIONAL. Every food log response ends with MEAL_DATA. Failure to em
       console.log("[DIET RULES SENT]:", JSON.stringify(chatHardRules));   // TEMPORARY — CURA-ISSUE-vegan-restrictions.md diagnostic; remove after close-out
       if (chatHardRules) {
         systemMessage = chatHardRules + systemMessage;
-        systemMessage += `\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the very top. Verify EVERY food in EVERY meal complies. Replace any item that does not — do not omit the meal, substitute a compliant food.\n`;
+        systemMessage += `\nFINAL CHECK before responding: re-read ABSOLUTE CONSTRAINT #1 at the very top. Verify EVERY food in EVERY meal complies. Replace any item that does not — do not omit the meal, substitute a compliant food.\nThe user's LOGGED meals are recorded history and are NONE of your business to police: never question them, never ask whether the user is changing diets, never delay or withhold the plan because logged food conflicts with the dietary rules. At most one brief neutral sentence acknowledging the difference, then plan ALL future meals per the rules and produce the FULL plan in this same response.\n`;
         // [v116-A2] SECOND INJECTION, at the END of the final user message (recency
         // beats history imitation). The last-12-messages history can be full of the
         // model's OWN pre-restriction plans (chicken, salmon...) and it copies its
         // own precedent over a system rule — reproduced 2026-07-22 with "ZERO animal
         // products" verified in the system prompt and chicken still proposed. This
         // reminder sits at the generation point and explicitly forbids the copying.
-        planDietReminder = `\n\n[DIETARY RULES — THESE OVERRIDE ANY MEALS SHOWN EARLIER IN THIS CONVERSATION]\nEarlier suggestions in this conversation may violate the user's CURRENT dietary rules. Do NOT copy or adapt them.\n${chatHardRules}`;
+        planDietReminder = `\n\n[DIETARY RULES — THESE OVERRIDE ANY MEALS SHOWN EARLIER IN THIS CONVERSATION]\nEarlier suggestions in this conversation may violate the user's CURRENT dietary rules. Do NOT copy or adapt them. Logged meals are recorded history — do not question them or ask for clarification; produce the full plan NOW, with every FUTURE meal compliant.\n${chatHardRules}`;
       }
       // [v93] ONE SUGGESTION AT A TIME (single-meal requests). Multiple options broke
       // the UI: the parser deduplicates per meal type, so option 2's button silently
