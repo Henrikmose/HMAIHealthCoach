@@ -3743,11 +3743,64 @@ THIS IS NOT OPTIONAL for single-label responses. Every nutrition-label photo res
         const chatDietRules = await getDietRules(activeUserId);
         const chatGate = await enforceDietGate(resolvedBlocks.map(x => x.card).filter(Boolean), chatDietRules, "ai_ondemand");
         const chatRejected = new Map(chatGate.rejected.map(x => [x.card, x.reason]));
+        // [v116-B] ONE RETRY (ported from the Plan-tab gate): before showing any
+        // "(I removed...)" note, re-ask the model ONCE with explicit feedback about
+        // what violated and why, gate the replacements, and swap them in silently.
+        // The note is now the LAST resort (retry failed too), not the first response.
+        // This also covers resolver mis-matches (AI proposes vegan "veggie sausage",
+        // fallback lookup lands on a pork row): the feedback names the resolved
+        // offender, and the retry proposes something that resolves cleanly.
+        const retryReplacements = new Map(); // meal_type -> gate-passed replacement card
+        if (chatRejected.size > 0) {
+          try {
+            const retryHardRules = await buildDietHardRules(activeUserId);
+            const rejectedList = [...chatRejected.entries()];
+            const retryTypes = [...new Set(rejectedList.map(([c]) => c.meal_type))];
+            const feedback = rejectedList.map(([c, r]) => `${c.meal_type}: ${r}`).join("; ");
+            const budgetHint = rejectedList.reduce((s, [c]) => s + c.items.reduce((x, i) => x + (Number(i.calories) || 0), 0), 0);
+            const retryPrompt = `${retryHardRules}Your previous meal proposal was REJECTED by the app's dietary verification — ${feedback}.
+
+Propose REPLACEMENT meals for ONLY these meal types: ${retryTypes.join(", ")}. Choose clearly compliant, common whole foods with unambiguous names (e.g. "lentils (cooked)", "tofu, firm", "chickpeas (cooked)"). Aim for roughly ${Math.max(200, Math.round(budgetHint))} cal across the replacements.
+
+Respond with ONLY SUGGESTION_DATA blocks, one per meal, nothing else:
+<<<SUGGESTION_DATA>>>
+{"meal_type":"dinner","timing":"evening","items":[{"food":"lentils (cooked)","amount":1,"unit":"cup"},{"food":"brown rice (cooked)","amount":0.75,"unit":"cup"},{"food":"avocado","amount":0.5,"unit":"piece"}]}
+<<<END_SUGGESTION_DATA>>>
+Rules: 2-4 substantial items per meal, numeric amount + common unit (oz, g, cup, tbsp, piece, serving). NO macro numbers.`;
+            const retryResp = await anthropic.messages.create({
+              model: "claude-haiku-4-5-20251001", max_tokens: 1500,
+              messages: [{ role: "user", content: retryPrompt }],
+            });
+            const retryText = (retryResp.content || []).map(c => (c.type === "text" ? c.text : "")).join("");
+            const retryCards = [];
+            for (const b of parseSuggestionBlocks(retryText)) {
+              if (!b.data) continue;
+              const mt = String(b.data.meal_type || "").toLowerCase();
+              if (!retryTypes.includes(mt)) continue;
+              const card = await resolveSuggestionBlock(b.data, planDate);
+              if (card) { allUnresolved.push(...card.unresolved); delete card.unresolved; retryCards.push(card); }
+            }
+            // Second gate pass — NO further retry; still-failing types keep the note.
+            const gate2 = await enforceDietGate(retryCards, chatDietRules, "ai_ondemand");
+            for (const c of gate2.passed) {
+              if (!retryReplacements.has(c.meal_type)) retryReplacements.set(c.meal_type, c);
+            }
+            if (retryReplacements.size > 0) console.log(`[v116-B] chat retry replaced: ${[...retryReplacements.keys()].join(", ")}`);
+            if (gate2.rejected.length > 0) console.log(`[v116-B] chat retry still violated — note shown: ${gate2.rejected.map(x => x.reason).join(" | ")}`);
+          } catch (e) {
+            console.log("[v116-B] chat retry failed:", e?.message || e);
+          }
+        }
         for (const rb of resolvedBlocks) {
           let replacement = "";
           if (rb.card && !chatRejected.has(rb.card)) {
             cards.push(rb.card);
             replacement = renderCardText(rb.card);
+          } else if (rb.card && retryReplacements.has(rb.card.meal_type)) {
+            const swap = retryReplacements.get(rb.card.meal_type);
+            retryReplacements.delete(rb.card.meal_type); // one swap per type
+            cards.push(swap);
+            replacement = renderCardText(swap);
           } else if (rb.card) {
             replacement = `(I removed a suggested ${rb.card.meal_type} — ${chatRejected.get(rb.card)}. Ask me for a different option.)`;
           }
