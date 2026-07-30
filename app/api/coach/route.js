@@ -2,6 +2,9 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+// [v118] QUANTITY INTEGRITY: a stated amount must reach the DB unchanged. Six fixes
+//        in parseFoodItems — see the [v118] blocks below. Corpus-tested against 77 real
+//        logged messages before deploy.
 // [v114] Self-heal system (CURA-SPEC-self-heal-v3.1): Opus selector + gated
 // keyword writes on keyword miss. Flag: SELF_HEAL_ENABLED (Vercel env).
 import { runSelfHeal, recordMiss, kwCanon } from "./self-heal.js";
@@ -51,11 +54,19 @@ function isVeryActive(activityLevel) {
 
 // Parse food items and quantities from a message
 // Returns array of { food, amount, unit }
-// ── UNIFIED FOOD ENGINE (shared logic — same as lookup-foods resolver) ──
-// One engine for the whole app: fraction parsing, cooked-default staples, explicit-wins ranking.
+// ── UNIFIED FOOD ENGINE — THE ONLY COPY ──
+// [v118] The old header claimed parity with app/api/lookup-foods. That route was a
+// fossil of the pre-v110 engine (no active gate, no keyword stage, ml_per_unit still
+// pricing every cup as water) with NO caller. Deleted Jul 30. This is now the single
+// definition; if a second copy ever appears, that is the bug.
 function parseFoodItems(text) {
   if (!text) return [];
   let s = " " + text.toLowerCase() + " ";
+  // [v118] CONTRACTIONS. The filler list below already carries "im"/"ive"/"id"/
+  // "its" — apostrophe-less forms — so it always assumed this strip existed. It
+  // did not. "I'm having 8 oz of cod" left a stray "m" that the quantity bound
+  // backward to and died with: the log read "cod, 1 serving" (105 cal, not 240).
+  s = s.replace(/['\u2019\u02BC]/g, "");
   // [v110.1] QUALIFIER PRESERVATION: fat-percent modifiers must survive parsing.
   // The food-name cleanup below strips all digits and symbols, so "2% cottage
   // cheese" arrived at lookup as plain "cottage cheese" — and the dictated form
@@ -68,8 +79,13 @@ function parseFoodItems(text) {
     .replace(/\b(?:2|two)\s*%|\b(?:2|two)\s+percent\b/g, " twopercent ")
     .replace(/\b(?:1|one)\s*%|\b(?:1|one)\s+percent\b/g, " onepercent ")
     .replace(/\b0\s*%/g, " nonfat ");
-  s = s.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g, (m,w,n,d)=>{const dd=+d;return dd?String(+w+(+n)/dd):m;});
-  s = s.replace(/(\d+)\s*\/\s*(\d+)/g, (m,n,d)=>{const dd=+d;return dd?String((+n)/dd):m;});
+  // [v118] PROPER FRACTIONS ONLY. Converting every n/d turned "93/7 ground beef" into
+  // 13.29 servings (~3,300 cal). Spoken fractions are always proper (1/2, 2/3, 3/4);
+  // meat lean/fat ratios are improper or equal (93/7, 85/15, 80/20, 50/50). n < d is
+  // the whole discriminator — no list to maintain, and it protects "1/2 apple", which
+  // a "no unit follows" rule would have wrongly demoted to 1 serving.
+  s = s.replace(/(\d+)\s+(\d+)\s*\/\s*(\d+)/g, (m,w,n,d)=>{const dd=+d;return (dd && +n < dd)?String(+w+(+n)/dd):m;});
+  s = s.replace(/(\d+)\s*\/\s*(\d+)/g, (m,n,d)=>{const dd=+d;return (dd && +n < dd)?String((+n)/dd):m;});
   s = s.replace(/¼/g,"0.25").replace(/½/g,"0.5").replace(/¾/g,"0.75").replace(/⅓/g,"0.333").replace(/⅔/g,"0.667");
   s = s.replace(/(\d)([a-z])/gi, "$1 $2");
   s = s
@@ -79,7 +95,13 @@ function parseFoodItems(text) {
     .replace(/\btwo\s+/g," 2 ").replace(/\bthree\s+/g," 3 ").replace(/\bfour\s+/g," 4 ")
     .replace(/\bfive\s+/g," 5 ").replace(/\bsix\s+/g," 6 ").replace(/\bseven\s+/g," 7 ")
     .replace(/\beight\s+/g," 8 ").replace(/\bnine\s+/g," 9 ").replace(/\bten\s+/g," 10 ")
-    .replace(/\bsome\s+/g," 1 ").replace(/\bwhole\s+/g," 1 ");
+    .replace(/\bsome\s+/g," 1 ");
+  // [v118] "whole" is NOT a quantity word. The old .replace(/\bwhole\s+/g," 1 ")
+  // injected a bare 1 mid-phrase: "2 cups of whole grain pasta" -> "2 cup 1 grain
+  // pasta" -> the 2 cups orphaned and the food logged as 1 serving. It also broke
+  // the v110 fullfat qualifier (line ~170 needs /whole\s+milk/ INTACT) and split
+  // "whole wheat"/"whole egg". Its only intended case, "a whole chicken breast",
+  // already gets its 1 from the article. Removed.
   // [v111 B'] SEPARATORS ARE ITEM BOUNDARIES. Deleting "and/with" glued foods
   // together ("mushrooms, eggs" -> "mushrooms eggs"). Commas, "and", "with",
   // "plus", "also", "&" now split items BEFORE any food/amount pairing.
@@ -87,11 +109,17 @@ function parseFoodItems(text) {
   s = s.replace(/\bof\b/g, " ");
   s = s.replace(/[,;]|&/g, " | ").replace(/\b(and|with|plus|also)\b/g, " | ");
   // strip non-food filler verbs/pronouns so "I had chicken" doesn't log "i had" as a food
-  s = s.replace(/\b(i|im|ive|id|he|she|we|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|drinking|drunk|got|get|getting|consumed|consume|the|my|me|mine|will|gonna|going|planning|plan|want|wanna|like|grab|grabbed|made|make|having|about|around|roughly|approximately|approx|maybe|nearly|almost|that|which|it|its|what|so|far|well|really|please|is|are|was|were)\b/g, " ");
+  s = s.replace(/\b(i|im|ive|id|he|she|we|they|had|have|having|has|ate|eat|eaten|eating|drank|drink|drinking|drunk|got|get|getting|consumed|consume|the|my|me|mine|will|gonna|going|planning|plan|want|wanna|like|grab|grabbed|made|make|having|about|around|roughly|approximately|approx|maybe|nearly|almost|that|which|it|its|what|so|far|well|really|please|is|are|was|were|am|itll|thatll|theyll|youll|ill|itd|theres|thats|whats|heres|youre|theyre|weve|youve|theyve|dont|doesnt|didnt|wont|cant|couldnt|wouldnt|shouldnt|lets)\b/g, " ");
   s = s.replace(/\b(for|at|after|before|then|during|today|yesterday|tomorrow|tonight|this|morning|afternoon|evening|lunch|dinner|breakfast|snack|right|now|just)\b/g, " ");
 
   const units = "oz|ounces|ounce|lb|lbs|pounds|pound|g|grams|gram|kg|cup|cups|tbsp|tablespoons|tablespoon|tsp|teaspoons|teaspoon|ml|piece|pieces|slice|slices|scoop|scoops|serving|servings|medium|small|large";
   const unitRe = new RegExp("^(?:"+units+")$","i");
+  // [v118] STRAY-ARTICLE COLLAPSE. "2/3 of a cup" -> the a->1 rule fires on the
+  // article and yields "0.667 1 cup": the fraction is orphaned and the log reads
+  // 1 cup (50% high). Rather than resequence the rewrite chain — which has bitten
+  // before — collapse "<number> 1 <unit>" to "<number> <unit>" once, after every
+  // rewrite has run. Order-independent by construction.
+  s = s.replace(new RegExp("(\\d*\\.?\\d+)\\s+1\\s+(" + units + ")\\b", "gi"), "$1 $2");
   const isNum = t => /^\d*\.?\d+$/.test(t);
   const cleanFood = (arr) => arr.join(" ").replace(/[^a-z\s-]/gi," ").replace(/\s+/g," ").trim();
   const items = [];
@@ -135,9 +163,17 @@ function parseFoodItems(text) {
         let i = firstNum + 1;
         let unit = "serving";
         if (i < tokens.length && unitRe.test(tokens[i])) { unit = tokens[i].toLowerCase().replace(/s$/,''); i++; }
-        if (food.length > 2 && !isNaN(amount)) items.push({ food, amount, unit });
-        else if (food.length > 2) items.push({ food, amount: 1, unit: "serving" });
-        tokens = tokens.slice(i);
+        if (food.length > 2 && !isNaN(amount)) { items.push({ food, amount, unit }); tokens = tokens.slice(i); }
+        else if (food.length > 2) { items.push({ food, amount: 1, unit: "serving" }); tokens = tokens.slice(i); }
+        // [v118] JUNK LEAD-IN — THE STRUCTURAL FIX. The backward-bound "food" was not a
+        // food: a stray token left by a contraction or a filler word nobody listed yet.
+        // The old code dropped it AND slid past i, destroying the amount and unit with
+        // it; the real food downstream then defaulted to 1 serving = 100g. Re-enter at
+        // the NUMBER instead and let the amount-first branch pair it forward. firstNum
+        // is >= 1 in this branch, so the slice strictly advances — no loop. This is the
+        // fix that holds when English produces a stray token we have not seen; the
+        // blocklist additions above are belt-and-braces, not the mechanism.
+        else { tokens = tokens.slice(firstNum); }
       }
     }
   };
@@ -357,8 +393,11 @@ function matchCookedStaple(term) {
       // require the staple keyword to be present AND the term to be "close" to it
       // (the term is essentially just the staple, not staple+extra-food like "salmon sashimi")
       if (new RegExp('\\b'+m.replace(/\s+/g,'\\s+')+'\\b').test(t)) {
-        const extra = t.replace(new RegExp('\\b'+m.replace(/\s+/g,'\\s+')+'\\b'), '').replace(/\b(cooked|fresh|grilled|baked|boiled|steamed|plain|white)\b/g,'').trim();
-        // allow only trivial leftover words (qualifiers we accept); if a whole other food-word remains, skip
+        const extra = t.replace(new RegExp('\\b'+m.replace(/\s+/g,'\\s+')+'\\b'), '').replace(/\b(cooked|fresh|grilled|baked|boiled|steamed|plain|white|whole)\b/g,'').trim();
+        // allow only trivial leftover words (qualifiers we accept); if another whole
+        // food-word remains, skip. [v118] 'whole' joined this list: now that the
+        // parser no longer eats it, "a whole chicken breast" must still reach the
+        // cooked staple. "whole grain pasta" still falls through (grain remains).
         if (extra.split(/\s+/).filter(Boolean).length === 0) return st;
       }
     }
